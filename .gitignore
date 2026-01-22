@@ -1,0 +1,49 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.ipynb_checkpoints
+
+# --- Secretos y Configuración (¡MUY IMPORTANTE!) ---
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# --- Datos y Almacenamiento (ETL) ---
+# Ignoramos los logs generados para no ensuciar el repo
+storage/*.json
+storage/*.ocel
+# Pero permitimos que la carpeta exista con un .gitkeep si fuera necesario
+!storage/.gitkeep
+
+# Esquemas descargados (se descargan en runtime)
+schema/*.json
+
+# --- IDEs y Editores ---
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+.history/
+
+# PyCharm / IntelliJ
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# --- Sistema Operativo ---
+.DS_Store
+Thumbs.db.env
+.env
+storage/*.json
+__pycache__/
