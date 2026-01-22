@@ -2,8 +2,10 @@ import os
 from dotenv import load_dotenv
 
 from transform.builder import OCELBuilder
-from transform.mappers import process_workflow_run
+from transform.mappers import process_workflow_run, process_issue_node
 from extractor.rest import fetch_workflow_runs
+from extractor.graphql import fetch_github_data
+
 
 # Config
 OUTPUT_FILE = "github.ocel_v1.json"
@@ -21,6 +23,14 @@ def main():
     builder = OCELBuilder()
     repo_id = f"repo_{REPO_OWNER}_{REPO_NAME}"
     builder.add_object(repo_id, "Repository", {"name": REPO_NAME})
+
+    # REST
+    try:
+        nodes = fetch_github_data(REPO_OWNER, REPO_NAME, TOKEN)
+        for node in nodes:
+            process_issue_node(node, builder, repo_id)
+    except Exception as e:
+        print(f"Error in GraphQL Phase: {e}")
 
     # REST
     try:
