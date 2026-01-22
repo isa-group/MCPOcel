@@ -1,6 +1,8 @@
-from transform.builder import OCELBuilder
+from .builder import OCELBuilder
+
 
 def process_issue_node(issue, builder: OCELBuilder, repo_id):
+
     issue_num = issue["number"]
     issue_id = f"issue_{issue_num}"
 
@@ -19,45 +21,32 @@ def process_issue_node(issue, builder: OCELBuilder, repo_id):
         builder.add_object(user_id, "User", {"login": user_login})
 
     # Event: IssueOpened
-    related = [issue_id, repo_id]
-    if user_id: related.append(user_id)
-    builder.add_event("IssueOpened", issue["createdAt"], related)
+    builder.add_event("IssueOpened", issue["createdAt"], [issue_id, repo_id])
 
-    # Special logic for Pull Requests
-    if issue.get("type") == "PullRequest":
+    # Pull Request with Reviews
+    if issue.get("type") == "PullRequest" or "merged" in issue:
         pr_id = f"pr_{issue_num}"
         builder.add_object(pr_id, "PullRequest", {"number": issue_num})
 
+        # New in Commit 4: Iterate through Reviews
+        if "reviews" in issue:
+            for review in issue["reviews"].get("nodes", []):
+                # We only log submitted reviews (not pending)
+                if review["state"] != "PENDING":
+                    rev_author = review["author"]["login"] if review["author"] else "ghost"
+                    rev_user_id = f"user_{rev_author}"
+
+                    # Ensure the Reviewer exists as a User object
+                    builder.add_object(rev_user_id, "User", {"login": rev_author})
+
+                    # Event: PRReviewSubmitted
+                    # Linked to PR, Repository, and the Reviewer
+                    builder.add_event(
+                        activity="PRReviewSubmitted",
+                        timestamp=review["submittedAt"],
+                        related_objects=[pr_id, repo_id, rev_user_id],
+                        attributes={"state": review["state"]}
+                    )
+
         if issue.get("mergedAt"):
             builder.add_event("PRMerged", issue["mergedAt"], [pr_id, issue_id, repo_id])
-
-
-def process_workflow_run(run, builder: OCELBuilder, repo_id):
-
-    run_id = f"workflow_{run['id']}"
-    commit_id = f"commit_{run['head_sha']}"
-    branch_id = f"branch_{run['head_branch']}"
-
-    # Objets
-    builder.add_object(run_id, "WorkflowRun", {
-        "run_id": str(run["id"]),
-        "conclusion": run["conclusion"] or "in_progress",
-        "name": run["name"]
-        }
-    )
-
-    builder.add_object(commit_id, "Commit", {"sha": run["head_sha"]})
-
-    if run["head_branch"]:
-        builder.add_object(branch_id, "Branch", {"name": run["head_branch"]})
-        related_objects = [run_id, repo_id, commit_id]
-        if run["head_branch"]:
-            related_objects.append(branch_id)
-    builder.add_event(
-        "WorkflowRunCompleted",
-        run["updated_at"],
-        related_objects,
-        {"conclusion": run["conclusion"]}
-    )
-    
-    
