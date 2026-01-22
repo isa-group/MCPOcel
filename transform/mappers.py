@@ -1,4 +1,50 @@
 from .builder import OCELBuilder
+from datetime import datetime
+
+
+def parse_time(iso_str):
+
+    if not iso_str: return None
+    try:
+        return datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
+    except:
+        return None
+
+
+def process_workflow_run(run, builder: OCELBuilder, repo_id):
+
+    run_id = f"workflow_{run['id']}"
+    commit_id = f"commit_{run['head_sha']}"
+
+    # Create Object
+    builder.add_object(run_id, "WorkflowRun", {
+        "run_id": str(run["id"]),
+        "name": run["name"]
+    })
+
+    related_objects = [run_id, repo_id, commit_id]
+
+    # Event: Run Started
+    if run.get("run_started_at"):
+        builder.add_event("WorkflowRunStarted", run["run_started_at"], related_objects)
+
+    # Event: Run Completed + Duration Calculation
+    start = parse_time(run.get("run_started_at"))
+    end = parse_time(run.get("updated_at"))
+
+    # KPI: Calculate duration in seconds
+    duration = (end - start).total_seconds() if start and end else 0
+
+    builder.add_event(
+        activity="WorkflowRunCompleted",
+        timestamp=run["updated_at"],
+        related_objects=related_objects,
+        attributes={
+            "conclusion": run["conclusion"],
+            "duration_seconds": duration
+        }
+    )
+
 
 def process_issue_node(issue, builder: OCELBuilder, repo_id):
 
