@@ -8,7 +8,7 @@ class OCELBuilder:
             "ocel:version": "2.0",
             "ocel:ordering": "timestamp",
             "ocel:attribute-names": [
-                "additions", "deletions", "state", "conclusion", "duration_seconds"
+                "additions", "deletions", "state", "conclusion", "duration_seconds", "color"
             ],
             "ocel:object-types": [],
             "ocel:event-types": [],
@@ -18,8 +18,7 @@ class OCELBuilder:
         self._init_types()
 
     def _init_types(self):
-        # Explicit definition of the domain model objects
-        types = ["Repository", "Issue", "PullRequest", "Commit", "WorkflowRun", "User", "Branch", "File"]
+        types = ["Repository", "Issue", "PullRequest", "Commit", "WorkflowRun", "User", "Branch", "File", "Label"]
         for t in types:
             self.ocel["ocel:object-types"].append({"ocel:type": t, "ocel:attributes": []})
 
@@ -35,7 +34,7 @@ class OCELBuilder:
         self.ocel["ocel:events"][event_id] = {
             "ocel:activity": activity,
             "ocel:timestamp": timestamp,
-            "ocel:omap": list(set(related_objects)), # Ensure unique references
+            "ocel:omap": related_objects,
             "ocel:vmap": attributes or {}
         }
 
