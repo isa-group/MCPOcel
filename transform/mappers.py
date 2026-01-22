@@ -1,6 +1,5 @@
 from .builder import OCELBuilder
 
-
 def process_issue_node(issue, builder: OCELBuilder, repo_id):
 
     issue_num = issue["number"]
@@ -50,3 +49,50 @@ def process_issue_node(issue, builder: OCELBuilder, repo_id):
 
         if issue.get("mergedAt"):
             builder.add_event("PRMerged", issue["mergedAt"], [pr_id, issue_id, repo_id])
+
+
+def process_commit_rest(commit, builder: OCELBuilder, repo_id):
+    sha = commit["sha"]
+    commit_id = f"commit_{sha}"
+
+    # Author
+    author_login = commit["author"]["login"] if commit["author"] else "unknown"
+    user_id = f"user_{author_login}"
+
+    # Object Commit
+    builder.add_object(commit_id, "Commit", {
+        "sha": sha,
+        "message": commit["commit"]["message"]
+    })
+
+    # User Object
+    builder.add_object(user_id, "User", {"login": author_login})
+
+    # Start the list of related objects
+    related_objects = [commit_id, repo_id, user_id]
+
+    # Process Files
+    files_touched = 0
+    for file in commit.get("files", []):
+        file_path = file["filename"]
+        file_id = f"file_{file_path}"
+
+        # Create File Object
+        builder.add_object(file_id, "File", {"path": file_path})
+
+        # Link this file to the commit event
+        related_objects.append(file_id)
+        files_touched += 1
+
+    # Commit event
+    stats = commit.get("stats", {})
+    builder.add_event(
+        activity="CommitCreated",
+        timestamp=commit["commit"]["author"]["date"],
+        related_objects=related_objects,
+        attributes={
+            "additions": stats.get("additions", 0),
+            "deletions": stats.get("deletions", 0),
+            "files_changed": files_touched
+        }
+    )

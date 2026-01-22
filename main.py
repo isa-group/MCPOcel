@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from transform.builder import OCELBuilder
 from transform.mappers import process_workflow_run, process_issue_node
-from extractor.rest import fetch_workflow_runs
+from extractor.rest import fetch_workflow_runs, fetch_commits_rest, process_commit_rest
 from extractor.graphql import fetch_github_data
 from validate.validate_ocel import validate_ocel
 
@@ -40,6 +40,13 @@ def main():
     except Exception as e:
         print(f"Error during execution: {e}")
 
+    try:
+        commits = fetch_commits_rest(REPO_OWNER, REPO_NAME, TOKEN, pages=1)
+        for commit in commits:
+            process_commit_rest(commit, builder, repo_id)
+    except Exception as e:
+        print(f"Error in REST Commits Phase: {e}")
+
     # Export
     builder.export_json(OUTPUT_FILE)
     print(f"Success! File generated: {OUTPUT_FILE}")
@@ -52,4 +59,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
