@@ -1,11 +1,10 @@
 import os
 from dotenv import load_dotenv
-
 from transform.builder import OCELBuilder
 from transform.mappers import process_workflow_run, process_issue_node
 from extractor.rest import fetch_workflow_runs
 from extractor.graphql import fetch_github_data
-
+from validate.validate_ocel import validate_ocel
 
 # Config
 OUTPUT_FILE = "github.ocel_v1.json"
@@ -45,5 +44,12 @@ def main():
     builder.export_json(OUTPUT_FILE)
     print(f"Success! File generated: {OUTPUT_FILE}")
 
+    # Validation
+    if validate_ocel(OUTPUT_FILE):
+        print("Process completed: Data is ready for analysis.")
+    else:
+        print("Process finished with validation errors.")
+
 if __name__ == "__main__":
     main()
+
