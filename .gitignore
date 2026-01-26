@@ -25,7 +25,9 @@ storage/*.ocel
 !storage/.gitkeep
 
 # Esquemas descargados (se descargan en runtime)
-schema/*.json
+schemas/*.json
+
+logs/*.log
 
 # --- IDEs y Editores ---
 # VS Code

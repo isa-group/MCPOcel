@@ -1,10 +1,12 @@
 import requests
 import time
+from config.logging_config import get_logger
 
+logger = get_logger(__name__)
 
 def fetch_github_data(owner, repo, token):
     """
-    Trae Issues, PRs y REVIEWS.
+    Fetch Issues, PRs y REVIEWS.
     """
     query = """
     query($owner: String!, $repo: String!, $cursor: String) {
@@ -46,22 +48,24 @@ def fetch_github_data(owner, repo, token):
     cursor = None
     has_next = True
 
-    print("Starting GraphQL...")
+    logger.info("Starting GraphQL data extraction...")
     while has_next:
         variables = {"owner": owner, "repo": repo, "cursor": cursor}
         try:
             resp = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
             if resp.status_code != 200:
-                print(f"Error HTTP {resp.status_code}")
+                logger.error(f"HTTP Error {resp.status_code} at GraphQL endpoint")
                 break
 
             payload = resp.json()
             if "errors" in payload:
-                print(f"Error GraphQL: {payload['errors'][0]['message']}")
+                logger.error(f"Error GraphQL: {payload['errors'][0]['message']}")
                 break
 
             data = payload.get("data", {}).get("repository", {})
-            if not data: break
+            if not data:
+                logger.warning("No data found in repository response")
+                break
 
             page_issues = data.get("issues", {})
             page_prs = data.get("pullRequests", {})
@@ -77,11 +81,13 @@ def fetch_github_data(owner, repo, token):
             has_next = page_issues.get("pageInfo", {}).get("hasNextPage") or page_prs.get("pageInfo", {}).get(
                 "hasNextPage")
 
-            print(f"   -> {len(all_items)} accumulated items...")
-            if len(all_items) > 1000: break
+            logger.info(f"   -> {len(all_items)} accumulated items...")
+            if len(all_items) > 1000:
+                logger.warning("Reached 1000 items limit, stopping pagination")
+                break
 
         except Exception as e:
-            print(f"Excepción en GraphQL: {e}")
+            logger.exception("Unexpected exception during GraphQL request")
             break
 
     return all_items

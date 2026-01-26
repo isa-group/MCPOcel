@@ -1,18 +1,24 @@
 from .builder import OCELBuilder
 from datetime import datetime
+from config.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 def parse_time(iso_str):
     """Parses ISO 8601 strings to datetime objects, handling 'Z' suffix."""
     if not iso_str: return None
     try:
         return datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
-    except:
+    except Exception:
+        logger.debug(f"Failed to parse timestamp: {iso_str}")
         return None
 
 def process_issue_node(issue, builder: OCELBuilder, repo_id):
     """Processes GraphQL nodes containing Issues and Pull Requests."""
     issue_num = issue["number"]
     issue_id = f"issue_{issue_num}"
+
+    logger.debug(f"Mapping Issue/PR #{issue_num}")
 
     # Create Issue Object
     builder.add_object(issue_id, "Issue", {
@@ -28,7 +34,6 @@ def process_issue_node(issue, builder: OCELBuilder, repo_id):
         user_login = issue["author"]["login"]
         user_id = f"user_{user_login}"
         builder.add_object(user_id, "User", {"login": user_login})
-
 
     # Labels Objects
     label_ids = []
@@ -49,7 +54,7 @@ def process_issue_node(issue, builder: OCELBuilder, repo_id):
 
     builder.add_event("IssueOpened", issue["createdAt"], related_opened)
 
-     # Event: IssueClosed
+    # Event: IssueClosed
     if issue["closedAt"]:
         builder.add_event("IssueClosed", issue["closedAt"], [issue_id, repo_id])
 
@@ -85,12 +90,13 @@ def process_workflow_run(run, builder: OCELBuilder, repo_id):
     run_id = f"workflow_{run['id']}"
     commit_id = f"commit_{run['head_sha']}"
 
+    logger.debug(f"Mapping Workflow Run: {run['id']}")
+
     # Create Objects
     builder.add_object(run_id, "WorkflowRun", {
         "run_id": str(run["id"]),
         "conclusion": run["conclusion"] or "in_progress",
         "name": run["name"]
-
     })
 
     if commit_id not in builder.ocel["ocel:objects"]:
@@ -112,7 +118,12 @@ def process_workflow_run(run, builder: OCELBuilder, repo_id):
 
     start = parse_time(run.get("run_started_at"))
     end = parse_time(run.get("updated_at"))
-    duration = (end - start).total_seconds() if start and end else 0
+
+    if start and end:
+        duration = (end - start).total_seconds()
+    else:
+        duration = 0
+        logger.warning(f"Could not calculate duration for workflow {run['id']}")
 
     builder.add_event(
         "WorkflowRunCompleted",
@@ -121,11 +132,13 @@ def process_workflow_run(run, builder: OCELBuilder, repo_id):
         {"conclusion": run["conclusion"], "duration_seconds": duration}
     )
 
-
 def process_commit_rest(commit, builder: OCELBuilder, repo_id):
     """Processes detailed Commits including file-level granularity."""
     sha = commit["sha"]
     commit_id = f"commit_{sha}"
+
+    logger.debug(f"Mapping detailed Commit: {sha[:7]}")
+
     author_login = commit["author"]["login"] if commit["author"] else "unknown"
     user_id = f"user_{author_login}"
 

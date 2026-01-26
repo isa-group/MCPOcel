@@ -2,55 +2,69 @@ import json
 import os
 import requests
 from jsonschema import validate, ValidationError
+from config.logging_config import get_logger
 
-# URL oficial del esquema OCEL 2.0 JSON
+# Official OCEL 2.0 JSON schema URL
 SCHEMA_URL = "https://raw.githubusercontent.com/ocel-standard/ocel-standard/main/schemas/ocel_2_0.json"
 
-def validate_ocel(ocel_path, schema_path="schemas/ocel_2_0.json"):
-    print("\n Validating...")
+logger = get_logger(__name__)
 
-# Official Schema Download
+def validate_ocel(ocel_path, schema_path="schemas/ocel_2_0.json"):
+
+    logger.info("Starting OCEL validation...")
+
+    # Official Schema Download
     if not os.path.exists(schema_path) or os.path.getsize(schema_path) == 0:
         os.makedirs(os.path.dirname(schema_path), exist_ok=True)
-        print("Downloading official OCEL 2.0 Schema...")
+        logger.info("Downloading official OCEL 2.0 Schema from GitHub...")
         try:
-            resp = requests.get(SCHEMA_URL)
+            resp = requests.get(SCHEMA_URL, timeout=10)
             resp.raise_for_status()
 
             schema_data = resp.json()
 
             with open(schema_path, "w") as f:
                 json.dump(schema_data, f, indent=2)
-            print("Schema downloaded successfully.")
-        except Exception as e:
-            print(f"Error downloading schema: {e}")
+            logger.info("Schema downloaded and saved successfully.")
+        except Exception:
+            logger.exception("Failed to download the OCEL schema")
             return False
 
-    # Validate Syntax
-    with open(ocel_path) as f:
-        ocel = json.load(f)
-    with open(schema_path) as f:
-        schema = json.load(f)
+    # Load files for validation
+    try:
+        with open(ocel_path, "r", encoding="utf-8") as f:
+            ocel = json.load(f)
+        with open(schema_path, "r", encoding="utf-8") as f:
+            schema = json.load(f)
+    except Exception:
+        logger.exception("Error reading OCEL or Schema files")
+        return False
 
+    # Validate Syntax against JSON Schema
     try:
         validate(instance=ocel, schema=schema)
-        print("Syntax validation successful")
+        logger.info("OCEL Syntax validation: PASSED")
     except ValidationError as e:
-        print(f"Syntax errors : {e.message}")
+        logger.error(f"OCEL Syntax validation: FAILED - {e.message}")
         return False
 
-    # Validate Semantics
-    defined_objs = set(ocel["ocel:objects"].keys())
+    # Validate Semantics (Object-Event relationships)
+    logger.info("Starting semantic integrity check...")
+    defined_objs = set(ocel.get("ocel:objects", {}).keys())
     errors = []
-    for eid, event in ocel["ocel:events"].items():
-        for obj_id in event["ocel:omap"]:
+
+    events = ocel.get("ocel:events", {})
+    for eid, event in events.items():
+        for obj_id in event.get("ocel:omap", []):
             if obj_id not in defined_objs:
-                errors.append(f"Event {eid} reference object does not exist {obj_id}")
+                errors.append(f"Event {eid} references non-existent object: {obj_id}")
 
     if errors:
-        print(f"Semantic errors  ({len(errors)}):")
-        print(errors[0])  # Mostramos el primero
+        logger.error(f"Semantic validation: FAILED ({len(errors)} errors found)")
+        # Log only the first error to avoid flooding but indicate there are more
+        logger.error(f"First error detail: {errors[0]}")
         return False
     else:
-        print("Complete validation successful.")
+        logger.info("OCEL Semantic validation: PASSED")
+        logger.info("Validation process: COMPLETED SUCCESSFULLY")
         return True
