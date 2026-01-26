@@ -2,7 +2,7 @@ import json
 import os
 import requests
 from jsonschema import validate, ValidationError
-from config.logging_config import get_logger
+from utils.logging_config import get_logger
 
 # Official OCEL 2.0 JSON schema URL
 SCHEMA_URL = "https://raw.githubusercontent.com/ocel-standard/ocel-standard/main/schemas/ocel_2_0.json"
