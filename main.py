@@ -1,14 +1,16 @@
 import os
 from dotenv import load_dotenv
 
+from config.settings import APIConfig, LoggingConfig
+from utils.logging_config import setup_logging, get_logger
+
 from transform.builder import OCELBuilder
 from transform.mappers import process_workflow_run, process_issue_node, process_commit_rest
 from extractor.rest import fetch_workflow_runs, fetch_commits_rest
 from extractor.graphql import fetch_github_data
 from validate.validate_ocel import validate_ocel
 
-import logging
-from config.logging_config import setup_logging, get_logger
+from utils.logging_config import setup_logging, get_logger
 
 # Config
 OUTPUT_FILE = "./storage/github.ocel_v1.json"
@@ -19,7 +21,10 @@ logger = get_logger(__name__)
 
 def main():
     load_dotenv()
-    setup_logging()
+    log_config = LoggingConfig.from_env()
+    setup_logging(log_config)
+
+    api_config  = APIConfig.from_env()
 
     logger.info("--- Starting GitHub OCEL Extraction Process ---")
 
@@ -35,7 +40,7 @@ def main():
     # GraphQL
     try:
         logger.info("Fetching data from GitHub GraphQL API...")
-        nodes = fetch_github_data(REPO_OWNER, REPO_NAME, TOKEN)
+        nodes = fetch_github_data(REPO_OWNER, REPO_NAME, TOKEN, api_config)
         for node in nodes:
             process_issue_node(node, builder, repo_id)
 
@@ -46,7 +51,7 @@ def main():
     # REST Workflows
     try:
         logger.info("Fetching workflow runs from REST API...")
-        runs = fetch_workflow_runs(REPO_OWNER, REPO_NAME, TOKEN, pages=2)
+        runs = fetch_workflow_runs(REPO_OWNER, REPO_NAME, TOKEN, api_config,pages=2)
 
         completed_count = 0
         for run in runs:
@@ -61,7 +66,7 @@ def main():
     # REST Commits
     try:
         logger.info("Fetching commits from REST API...")
-        commits = fetch_commits_rest(REPO_OWNER, REPO_NAME, TOKEN, pages=1) # Only 1 page
+        commits = fetch_commits_rest(REPO_OWNER, REPO_NAME, TOKEN, api_config, pages=1) # Only 1 page
         for commit in commits:
             process_commit_rest(commit, builder, repo_id)
 

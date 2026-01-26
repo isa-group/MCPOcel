@@ -1,93 +1,243 @@
-import requests
+import logging
 import time
-from config.logging_config import get_logger
+import requests
+from typing import List, Dict, Any, Optional
 
-logger = get_logger(__name__)
+from config.settings import APIConfig
 
-def fetch_github_data(owner, repo, token):
-    """
-    Fetch Issues, PRs y REVIEWS.
-    """
-    query = """
-    query($owner: String!, $repo: String!, $cursor: String) {
-      repository(owner: $owner, name: $repo) {
-        issues(first: 50, after: $cursor, orderBy: {field: UPDATED_AT, direction: ASC}) {
-          pageInfo { hasNextPage endCursor }
-          nodes {
-            number title state createdAt closedAt
-            author { login }
-            labels(first: 5) {
-              nodes { name color }
-            }
-          }
+logger = logging.getLogger(__name__)
+
+ISSUES_QUERY = """
+query($owner: String!, $repo: String!, $cursor: String, $pageSize: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issues(
+      first: $pageSize,
+      after: $cursor,
+      orderBy: {field: CREATED_AT, direction: ASC}
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        title
+        state
+        createdAt
+        closedAt
+        author { login }
+        labels(first: 20) {
+          nodes { name color }
         }
-        pullRequests(first: 50, after: $cursor, orderBy: {field: UPDATED_AT, direction: ASC}) {
-            pageInfo { hasNextPage endCursor }
-            nodes {
-                number title state createdAt closedAt merged mergedAt baseRefName headRefName
-                author { login }
-                labels(first: 5) {
-                  nodes { name color }
-                }
-                reviews(first: 10) {
-                    nodes {
-                        state
-                        submittedAt
-                        author { login }
-                    }
-                }
-            }
+        comments(first: 20) {
+          nodes {
+            createdAt
+            author { login }
+          }
         }
       }
     }
-    """
+  }
+}
+"""
 
-    url = "https://api.github.com/graphql"
-    headers = {"Authorization": f"Bearer {token}"}
-    all_items = []
-    cursor = None
-    has_next = True
+PRS_QUERY = """
+query($owner: String!, $repo: String!, $cursor: String, $pageSize: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequests(
+      first: $pageSize,
+      after: $cursor,
+      orderBy: {field: CREATED_AT, direction: ASC}
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        title
+        state
+        createdAt
+        closedAt
+        merged
+        mergedAt
+        author { login }
+        labels(first: 20) {
+          nodes { name color }
+        }
+        reviews(first: 20) {
+          nodes {
+            state
+            submittedAt
+            author { login }
+          }
+        }
+        comments(first: 20) {
+          nodes {
+            createdAt
+            author { login }
+          }
+        }
+      }
+    }
+  }
+}
+"""
 
-    logger.info("Starting GraphQL data extraction...")
-    while has_next:
-        variables = {"owner": owner, "repo": repo, "cursor": cursor}
+class RateLimitExceeded(Exception):
+    pass
+
+def _run_graphql_query(
+        query: str,
+        variables: Dict[str, Any],
+        token: str,
+        api_config: APIConfig,
+) -> Dict[str, Any]:
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    attempt = 0
+    while attempt < api_config.max_retries:
         try:
-            resp = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
-            if resp.status_code != 200:
-                logger.error(f"HTTP Error {resp.status_code} at GraphQL endpoint")
-                break
+            response = requests.post(
+                api_config.graphql_url,
+                json={"query": query, "variables": variables},
+                headers=headers,
+                timeout=api_config.timeout,
+            )
 
-            payload = resp.json()
+            if response.status_code == 403: # Explicit Handling of HTTP 403 (REST API Rate Limit/General)
+                remaining = response.headers.get("x-ratelimit-remaining") # GitHub standard header
+                if remaining == "0":
+                    reset_time = response.headers.get("x-ratelimit-reset", "Unknown")
+                    logger.error(f"GitHub API Rate Limit Hit! Reset at epoch: {reset_time}")
+                    raise RateLimitExceeded("HTTP 403: Rate Limit Exceeded")
+
+            response.raise_for_status()
+
+            # Error Handling within the GraphQL Body
+            payload = response.json()
             if "errors" in payload:
-                logger.error(f"Error GraphQL: {payload['errors'][0]['message']}")
-                break
+                error_msg = payload["errors"][0].get("message", "Unknown GraphQL error")
 
-            data = payload.get("data", {}).get("repository", {})
-            if not data:
-                logger.warning("No data found in repository response")
-                break
+                # Detect Secondary Rate Limits (common in complex GraphQL)
+                if "rate limit" in error_msg.lower():
+                    logger.error("GraphQL Secondary Rate Limit Hit")
+                    raise RateLimitExceeded(f"GraphQL Error: {error_msg}")
+                raise RuntimeError(f"GraphQL API Error: {error_msg}")
 
-            page_issues = data.get("issues", {})
-            page_prs = data.get("pullRequests", {})
+            return payload.get("data", {})
 
-            # Label the original to facilitate mapping
-            for i in page_issues.get("nodes", []): i["type"] = "Issue"
-            for p in page_prs.get("nodes", []): p["type"] = "PullRequest"
+        except (requests.RequestException, RuntimeError) as e:
+            # Help with secondary limits.
+            attempt += 1
+            if attempt >= api_config.max_retries:
+                logger.error(f"Failed after {attempt} attempts. Last error: {e}")
+                raise e
 
-            nodes = page_issues.get("nodes", []) + page_prs.get("nodes", [])
-            all_items.extend(nodes)
+            sleep_time = min(
+                api_config.retry_backoff_max,
+                api_config.retry_backoff_min * (2 ** (attempt - 1))
+            )
+            logger.warning(f"Attempt {attempt} failed ({e}). Retrying in {sleep_time}s...")
+            time.sleep(sleep_time)
 
-            cursor = page_issues.get("pageInfo", {}).get("endCursor")
-            has_next = page_issues.get("pageInfo", {}).get("hasNextPage") or page_prs.get("pageInfo", {}).get(
-                "hasNextPage")
+    return {}
 
-            logger.info(f"   -> {len(all_items)} accumulated items...")
-            if len(all_items) > 1000:
-                logger.warning("Reached 1000 items limit, stopping pagination")
-                break
 
-        except Exception as e:
-            logger.exception("Unexpected exception during GraphQL request")
+def _paginate_graphql(
+        query: str,
+        node_type: str,
+        owner: str,
+        repo: str,
+        token: str,
+        pages: int,
+        page_size: int,
+        api_config: APIConfig,
+) -> List[Dict[str, Any]]:
+    all_nodes: List[Dict[str, Any]] = []
+    cursor: Optional[str] = None
+    current_page = 1
+
+    logger.info(f"Fetching {node_type} (Max pages: {pages})...")
+
+    while True:
+        if pages is not None and current_page > pages:
             break
 
-    return all_items
+        variables = {
+            "owner": owner,
+            "repo": repo,
+            "cursor": cursor,
+            "pageSize": page_size
+        }
+
+        # Catch exceptions here
+        data = _run_graphql_query(query, variables, token, api_config)
+
+        repo_data = data.get("repository", {})
+        if not repo_data:
+            logger.warning(f"Repository data not found/accessible for {owner}/{repo}")
+            break
+
+        container = repo_data.get(node_type, {})
+        nodes = container.get("nodes", [])
+
+        # Filter null values
+        valid_nodes = [n for n in nodes if n is not None]
+        all_nodes.extend(valid_nodes)
+
+        page_info = container.get("pageInfo", {})
+        if not page_info.get("hasNextPage"):
+            break
+
+        cursor = page_info.get("endCursor")
+        current_page += 1
+
+    logger.info(f"Fetched {len(all_nodes)} {node_type}.")
+    return all_nodes
+
+# PUBLIC API
+def fetch_github_data(
+        owner: str,
+        repo: str,
+        token: str,
+        api_config: APIConfig,
+        pages: int = 3,
+        per_page: int = 50,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch Issues and Pull Requests via GitHub GraphQL API.
+    Returns a unified list of raw nodes.
+    """
+    if pages < 1:
+        logger.warning("Configuration requested 0 pages via GraphQL. Skipping.")
+        return []
+
+    issues = _paginate_graphql(
+        query=ISSUES_QUERY,
+        node_type="issues",
+        owner=owner,
+        repo=repo,
+        token=token,
+        pages=pages,
+        page_size=per_page,
+        api_config=api_config
+    )
+
+    prs = _paginate_graphql(
+        query=PRS_QUERY,
+        node_type="pullRequests",
+        owner=owner,
+        repo=repo,
+        token=token,
+        pages=pages,
+        page_size=per_page,
+        api_config=api_config
+    )
+
+    # Prevents subtle bugs from shared references
+    tagged_issues = [{"__type": "Issue", **i} for i in issues]
+    tagged_prs = [{"__type": "PullRequest", **p} for p in prs]
+
+    total_nodes = tagged_issues + tagged_prs
+    logger.info(f"Total GraphQL nodes extracted: {len(total_nodes)}")
+
+    return total_nodes
