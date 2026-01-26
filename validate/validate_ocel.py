@@ -5,7 +5,7 @@ from jsonschema import validate, ValidationError
 from utils.logging_config import get_logger
 
 # Official OCEL 2.0 JSON schema URL
-SCHEMA_URL = "https://raw.githubusercontent.com/ocel-standard/ocel-standard/main/schemas/ocel_2_0.json"
+SCHEMA_URL = "https://www.ocel-standard.org/2.0/ocel20-schema-json.json"
 
 logger = get_logger(__name__)
 
