@@ -15,13 +15,17 @@ def _calculate_sleep_time(response: requests.Response) -> float:
     # 1. Retry-After (Estándar HTTP / GitHub Secondary Limits)
     retry_after = response.headers.get("Retry-After")
     if retry_after:
-        return float(retry_after)
+        try:
+            return float(retry_after)
+        except ValueError:
+            return 0.0
 
     # 2. X-RateLimit-Reset (GitHub Primary Limits)
     remaining = response.headers.get("X-RateLimit-Remaining")
     if remaining == "0":
         reset_timestamp = int(response.headers.get("X-RateLimit-Reset", 0))
         now = int(time.time())
+        # We add 1s margin to ensure the limit has actually reset
         return max(0.0, float(reset_timestamp - now + 1))
 
     return 0.0
@@ -55,41 +59,48 @@ def _rest_get(
                     params=params,
                     timeout=api_config.timeout,
                 )
+                # Success case
+                if 200 <= response.status_code < 300:
+                    return response
 
+                # Rate Limit Case (403/429)
                 if response.status_code in (403, 429):
                     sleep_seconds = _calculate_sleep_time(response)
                     if sleep_seconds > 0:
                         if sleep_seconds > MAX_SLEEP_ALLOWED:
-                            logger.error(f"Rate limit reset in {sleep_seconds}s. Too long. Aborting.")
+                            logger.error(f"Rate limit reset is too far ({sleep_seconds}s). Aborting.")
                             response.raise_for_status()
+
                         logger.warning(f"Rate limit hit. Sleeping for {sleep_seconds}s...")
                         time.sleep(sleep_seconds)
-                        continue  # Retry request (same attempt)
-                break # If it is not rate limited
+                        continue # Retry after sleeping
+                    else:
+                        logger.error("Rate limit hit but no reset time provided by GitHub.")
+                        response.raise_for_status()
 
-            response.raise_for_status()
-            return response
+                # Other Case (401, 404, etc.))
+                response.raise_for_status()
 
         except requests.RequestException as e:
-            is_last_attempt = attempt == api_config.max_retries
-            if is_last_attempt:
-                logger.error(f"REST Request failed permanently: {url}")
-                raise  # <--- Keep original traceback
+            if attempt == api_config.max_retries:
+                logger.error(f"REST Request failed permanently after {attempt} attempts: {url}")
+                raise
 
-            # Backoff for connection errors
-            sleep_time = min(
+            # Exponential Backoff
+            wait = min(
                 api_config.retry_backoff_max,
                 api_config.retry_backoff_min * (2 ** (attempt - 1))
             )
+
             logger.warning(
-                f"Request failed (Attempt {attempt}/{api_config.max_retries}). "
-                f"Retrying in {sleep_time}s... Error: {e}"
+                f"Connection error (Attempt {attempt}/{api_config.max_retries}). "
+                f"Retrying in {wait}s... Error: {e}"
             )
-            time.sleep(sleep_time)
+            time.sleep(wait)
 
     raise RuntimeError("Unreachable REST client state")
 
-# EXTRACTORS
+# Extractors
 def fetch_workflow_runs(
         owner: str,
         repo: str,
@@ -155,7 +166,7 @@ def fetch_commits_rest(
     all_commits: List[Dict[str, Any]] = []
     detailed_fetched = 0
 
-    # 1. Fetch Summary List
+    # Fetch Summary List
     for page in range(1, pages + 1):
         if detailed_fetched >= max_detailed_total:
             break
@@ -172,7 +183,7 @@ def fetch_commits_rest(
             if not commits_summary:
                 break
 
-            # 2. Fetch Details (N+1)
+            # Fetch Details (N+1)
             for summary in commits_summary:
                 if detailed_fetched >= max_detailed_total:
                     break

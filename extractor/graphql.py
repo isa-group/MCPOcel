@@ -78,7 +78,7 @@ query($owner: String!, $repo: String!, $cursor: String, $pageSize: Int!) {
 }
 """
 
-class RateLimitExceeded(Exception):
+class RateLimitExceeded(RuntimeError):
     pass
 
 def _run_graphql_query(
@@ -125,7 +125,7 @@ def _run_graphql_query(
 
             return payload.get("data", {})
 
-        except (requests.RequestException, RuntimeError) as e:
+        except (requests.RequestException, RuntimeError, RateLimitExceeded) as e:
             # Help with secondary limits.
             attempt += 1
             if attempt >= api_config.max_retries:

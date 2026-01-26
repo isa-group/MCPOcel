@@ -1,5 +1,4 @@
 import os
-import logging
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,6 +6,7 @@ from pathlib import Path
 # LOGGING CONFIG
 @dataclass
 class LoggingConfig:
+    level: str = "INFO"
     """Logging configuration"""
 
     level: str = "INFO"
@@ -17,11 +17,13 @@ class LoggingConfig:
 
     @classmethod
     def from_env(cls) -> "LoggingConfig":
+        raw_level = os.getenv("LOG_LEVEL", "INFO").upper()
+        allowed_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        level = raw_level if raw_level in allowed_levels else "INFO"
+
         return cls(
-            level=os.getenv("LOG_LEVEL", "INFO").upper(),
-            log_file=Path(
-                os.getenv("LOG_FILE", "logs/github_extractor.log")
-            ),
+            level=level,
+            log_file=Path(os.getenv("LOG_FILE", "logs/github_extractor.log"))
         )
 
 # API CONFIG
