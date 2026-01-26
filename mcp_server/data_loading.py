@@ -1,0 +1,241 @@
+"""Smart OCEL loader with adaptive strategy.
+Automatically selects: PM4PY (< 100MB), ijson (100MB-1GB), DuckDB (> 1GB).
+"""
+
+import os
+import json
+from typing import Any, Dict, Generator, Optional, Union
+from pathlib import Path
+
+import pm4py
+
+from . import constants
+from . import logger
+
+
+class SmartOCELLoader:
+    """Smart loader that adapts strategy based on file size."""
+    
+    def __init__(self, ocel_path: str):
+        """
+        Initializes the loader.
+        
+        Args:
+            ocel_path: Path to OCEL file.
+            
+        Raises:
+            FileNotFoundError: If file does not exist.
+        """
+        if not os.path.exists(ocel_path):
+            raise FileNotFoundError(f"OCEL file not found: {ocel_path}")
+        
+        self.ocel_path = ocel_path
+        self.file_size_mb = os.path.getsize(ocel_path) / (1024 ** 2)
+        self.strategy = self._select_strategy()
+        
+        logger.info(
+            f"OCEL loader initialized: {self.file_size_mb:.2f}MB "
+            f"(strategy: {self.strategy.value})"
+        )
+    
+    def _select_strategy(self) -> constants.LoadStrategy:
+        """Selects strategy based on file size."""
+        if self.file_size_mb < constants.FILE_SIZE_SMALL:
+            return constants.LoadStrategy.PM4PY
+        elif self.file_size_mb < constants.FILE_SIZE_MEDIUM:
+            return constants.LoadStrategy.IJSON
+        else:
+            return constants.LoadStrategy.DUCKDB
+    
+    def load(self) -> Any:
+        """
+        Loads OCEL using selected strategy.
+        
+        Returns:
+            - If PM4PY: pm4py.OCEL (native object)
+            - If ijson: dict with events and objects
+            - If DuckDB: DuckDB connection
+            
+        Raises:
+            Exception: If loading fails.
+        """
+        logger.debug(f"Loading OCEL with strategy: {self.strategy.value}")
+        
+        if self.strategy == constants.LoadStrategy.PM4PY:
+            return self._load_pm4py()
+        elif self.strategy == constants.LoadStrategy.IJSON:
+            return self._load_ijson()
+        else:  # DuckDB
+            return self._load_duckdb()
+    
+    def _load_pm4py(self) -> Any:
+        """Loads OCEL using PM4PY (for small files)."""
+        try:
+            logger.info(f"Loading OCEL with PM4PY from: {self.ocel_path}")
+            ocel = pm4py.read_ocel(self.ocel_path)
+            logger.info(
+                f"OCEL loaded: {len(ocel.events)} events, "
+                f"{len(ocel.objects)} objects"
+            )
+            return ocel
+        except Exception as e:
+            logger.error(f"Error loading OCEL with PM4PY: {e}")
+            raise
+    
+    def _load_ijson(self) -> Dict[str, Any]:
+        """
+        Loads OCEL with ijson in streaming mode (for medium files).
+        
+        Returns:
+            Dict with OCEL structure (lazy loading).
+        """
+        try:
+            import ijson
+            
+            logger.info(f"Loading OCEL with ijson (streaming) from: {self.ocel_path}")
+            
+            with open(self.ocel_path, "rb") as f:
+                data = {
+                    "ocel:version": None,
+                    "ocel:attribute-names": None,
+                    "ocel:object-types": None,
+                    "ocel:event-types": None,
+                    "ocel:objects": {},
+                    "ocel:events": [],
+                }
+                
+                f.seek(0)
+                parser = ijson.kvitems(f, "")
+                for key, value in parser:
+                    if key in ["ocel:version", "ocel:attribute-names", 
+                              "ocel:object-types", "ocel:event-types"]:
+                        data[key] = value
+                    elif key == "ocel:objects":
+                        data["ocel:objects"] = value
+                        break
+
+            with open(self.ocel_path, "rb") as f:
+                parser = ijson.items(f, "ocel:events.item")
+                events = []
+                for i, event in enumerate(parser):
+                    events.append(event)
+                    # Emits progress every DEFAULT_CHUNK_SIZE to see advancement in large files
+                    if (i + 1) % constants.DEFAULT_CHUNK_SIZE == 0:
+                        logger.debug(f"Loaded {i + 1} events...")
+                data["ocel:events"] = events
+            
+            logger.info(
+                f"OCEL loaded (ijson): {len(events)} events, "
+                f"{len(data['ocel:objects'])} objects"
+            )
+            return data
+        
+        except ImportError:
+            logger.warning("ijson not installed, falling back to PM4PY")
+            return self._load_pm4py()
+        except Exception as e:
+            logger.error(f"Error loading OCEL with ijson: {e}")
+            raise
+    
+    def _load_duckdb(self) -> Any:
+        """
+        Loads OCEL with DuckDB for SQL analysis (for large files).
+        
+        Returns:
+            DuckDB connection with OCEL data loaded.
+        """
+        try:
+            import duckdb
+            
+            logger.info(f"Loading OCEL with DuckDB from: {self.ocel_path}")
+            
+            conn = duckdb.connect(":memory:")
+            
+            conn.execute(f"""
+                CREATE TABLE ocel_raw AS
+                SELECT * FROM read_json_auto('{self.ocel_path}')
+            """)
+            
+            logger.info("DuckDB connection established for SQL analysis")
+            return conn
+        
+        except ImportError:
+            logger.warning("DuckDB not installed, falling back to ijson")
+            return self._load_ijson()
+        except Exception as e:
+            logger.error(f"Error loading OCEL with DuckDB: {e}")
+            raise
+    
+    def stream_events(
+        self, chunk_size: int = constants.DEFAULT_CHUNK_SIZE
+    ) -> Generator[list, None, None]:
+        """
+        Generates events in chunks for memory-efficient processing.
+        
+        Args:
+            chunk_size: Number of events per chunk.
+            
+        Yields:
+            List of events (dict).
+        """
+        if self.strategy == constants.LoadStrategy.PM4PY:
+            ocel = self._load_pm4py()
+            chunk = []
+            for event_id, event in ocel.events.items():
+                chunk.append(event)
+                if len(chunk) >= chunk_size:
+                    yield chunk
+                    chunk = []
+            if chunk:
+                yield chunk
+        
+        elif self.strategy == constants.LoadStrategy.IJSON:
+            try:
+                import ijson
+                
+                with open(self.ocel_path, "rb") as f:
+                    chunk = []
+                    for i, event in enumerate(ijson.items(f, "ocel:events.item")):
+                        chunk.append(event)
+                        if len(chunk) >= chunk_size:
+                            yield chunk
+                            chunk = []
+                            logger.debug(f"Generated chunk with {chunk_size} events")
+                    if chunk:
+                        yield chunk
+            except ImportError:
+                logger.warning("ijson not installed for streaming")
+                raise
+        
+        else:
+            import duckdb
+            
+            conn = self._load_duckdb()
+            offset = 0
+            while True:
+                result = conn.execute(f"""
+                    SELECT * FROM ocel_raw
+                    WHERE COLUMN = 'ocel:events'
+                    LIMIT {chunk_size} OFFSET {offset}
+                """).fetchall()
+                
+                if not result:
+                    break
+                
+                yield result
+                offset += chunk_size
+                logger.debug(f"Generated chunk (DuckDB) from offset {offset}")
+
+
+def load_ocel(ocel_path: str) -> Any:
+    """
+    Convenience loader: automatically loads OCEL.
+    
+    Args:
+        ocel_path: Path to OCEL file.
+        
+    Returns:
+        Loaded OCEL (type depends on strategy).
+    """
+    loader = SmartOCELLoader(ocel_path)
+    return loader.load()
