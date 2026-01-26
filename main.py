@@ -31,6 +31,8 @@ def main():
     setup_logging(log_config)
     api_config = APIConfig.from_env()
 
+    errors_occurred = False
+
     logger.info(f"--- Starting OCEL Pipeline for {REPO_OWNER}/{REPO_NAME} ---")
 
     TOKEN = os.getenv("GITHUB_TOKEN")
@@ -49,6 +51,7 @@ def main():
             process_issue_node(node, builder, repo_id)
     except Exception:
         logger.exception("Error in GraphQL extraction phase")
+        errors_occurred = True
 
     # REST Releases
     try:
@@ -74,6 +77,10 @@ def main():
                 process_workflow_run(run, builder, repo_id)
     except Exception:
         logger.exception("Error in Workflow extraction phase")
+
+    if errors_occurred:
+        logger.error("Data extraction encountered errors. Skipping export to protect data integrity.")
+        return
 
     # Export & Validation
     try:

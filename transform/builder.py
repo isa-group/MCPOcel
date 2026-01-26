@@ -5,17 +5,17 @@ from typing import Dict, List, Optional, Any, Set, Union, Tuple, Sequence
 from datetime import datetime
 from pathlib import Path
 
-# Logger local
+# Local logger
 logger = logging.getLogger(__name__)
 
-# Schema Keys
+# SCHEMA KEYS (Matching your JSON Schema)
 ATTR_TYPES = "attributeNames"
 EVT_TYPES = "eventTypes"
 OBJ_TYPES_KEY = "objectTypes"
 OBJECTS = "objects"
 EVENTS = "events"
 
-# Schema Constants
+# SCHEMA DEFINITIONS
 OBJECT_SCHEMA_DEFS: Dict[str, List[str]] = {
     "Repository": ["name", "full_name", "visibility"],
     "Issue": ["number", "state", "title", "created_at", "closed_at"],
@@ -29,9 +29,12 @@ OBJECT_SCHEMA_DEFS: Dict[str, List[str]] = {
     "Release": ["tag_name", "name", "prerelease"]
 }
 
-# Attribute Type Hints
-TYPE_MAP = {str: "string", int: "string", float: "string", bool: "string", datetime: "string"}
-
+# Type validation hints
+ATTRIBUTE_TYPE_HINTS: Dict[str, Union[type, Tuple[type, ...]]] = {
+    "number": int, "merged": bool, "duration_seconds": (int, float),
+    "additions": int, "deletions": int, "files_changed": int,
+    "state": str, "conclusion": str, "color": str, "name": str
+}
 class OCELBuilder:
     def __init__(self):
         self.data = {
@@ -47,26 +50,42 @@ class OCELBuilder:
         return TYPE_MAP.get(type(value), "string")
 
     def _init_object_types(self) -> None:
-        # Object Types Initialization
+        """Initialize static object types based on definitions."""
         for obj_type, attrs in sorted(OBJECT_SCHEMA_DEFS.items()):
             self.data[OBJ_TYPES_KEY].append({
                 "name": obj_type,
                 "attributes": [{"name": a, "type": "string"} for a in sorted(attrs)]
             })
 
+    def _validate_attribute_types(self, attributes: Dict[str, Any]) -> None:
+        """Log warnings if attribute types do not match expectations (Copilot fix)."""
+        for key, value in attributes.items():
+            if key in ATTRIBUTE_TYPE_HINTS:
+                expected = ATTRIBUTE_TYPE_HINTS[key]
+                if not isinstance(value, expected):
+                    # Improved error message for tuples as suggested by Copilot
+                    if isinstance(expected, tuple):
+                        expected_name = ", ".join(t.__name__ for t in expected)
+                    else:
+                        expected_name = getattr(expected, "__name__", str(expected))
+
+                    logger.warning(
+                        "Type mismatch for '%s': expected %s, got %s (Value: %s)",
+                        key, expected_name, type(value).__name__, value
+                    )
+
     def add_object(self, obj_id: str, obj_type: str, attributes: Dict[str, Any]) -> None:
         if obj_id in self.data[OBJECTS]:
             return
 
+        self._validate_attribute_types(attributes)
+
         # Atributes Formatting
         now_iso = datetime.now().isoformat() + "Z"
-        formatted_attrs = []
-        for k, v in attributes.items():
-            formatted_attrs.append({
-                "name": k,
-                "value": str(v),
-                "time": now_iso
-            })
+        formatted_attrs = [
+            {"name": k, "value": str(v), "time": now_iso}
+            for k, v in attributes.items()
+        ]
 
         self.data[OBJECTS][obj_id] = {
             "id": obj_id,
@@ -76,31 +95,33 @@ class OCELBuilder:
         }
 
     def _register_event_type(self, activity: str, attributes: Dict[str, Any]) -> None:
-        # EVT_TYPES Registration
+        """Dynamically registers event attributes in eventTypes."""
         target = next((et for et in self.data[EVT_TYPES] if et["name"] == activity), None)
         if not target:
             target = {"name": activity, "attributes": []}
             self.data[EVT_TYPES].append(target)
 
         existing_attrs = {a["name"] for a in target["attributes"]}
-        for k, v in attributes.items():
+        for k in attributes.keys():
             if k not in existing_attrs:
                 target["attributes"].append({"name": k, "type": "string"})
 
     def add_event(self, activity: str, timestamp: str, related_objects: Sequence[str], 
                   attributes: Optional[Dict[str, Any]] = None) -> str:
-        # Generate unique event ID
+        """Adds an event to the log. Enforces list type for relationships (Copilot fix)."""
         event_id = str(uuid.uuid4())
         event_attrs = attributes or {}
 
-        # Event Type Registration
+        self._validate_attribute_types(event_attrs)
         self._register_event_type(activity, event_attrs)
 
-        # Event Formatting
         formatted_attrs = [{"name": k, "value": str(v)} for k, v in event_attrs.items()]
-
-        # Relationships Formatting
-        relationships = [{"objectId": oid, "qualifier": "related"} for oid in related_objects]
+        
+        # Ensure relationships are a list (Copilot compliance)
+        relationships = [
+            {"objectId": str(oid), "qualifier": "related"} 
+            for oid in list(related_objects)
+        ]
 
         self.data[EVENTS].append({
             "id": event_id,
@@ -112,6 +133,24 @@ class OCELBuilder:
         return event_id
 
     def export_json(self, filename: Union[str, Path], pretty: bool = True) -> None:
+        """Finalizes and writes the JSON file following schema requirements."""
+        final_output = {
+            EVT_TYPES: self.data[EVT_TYPES],
+            OBJ_TYPES_KEY: self.data[OBJ_TYPES_KEY],
+            EVENTS: self.data[EVENTS],
+            OBJECTS: list(self.data[OBJECTS].values())
+        }
+
+        # Deterministic sort by time
+        final_output[EVENTS].sort(key=lambda x: (x["time"], x["id"]))
+
+        output_path = Path(filename)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(final_output, f, indent=2 if pretty else None, ensure_ascii=False)
+
+        logger.info(f"Export complete with {len(final_output[EVENTS])} events: {output_path}")
         # Export OCEL JSON
         final_output = {
             "eventTypes": self.data[EVT_TYPES],
