@@ -1,15 +1,18 @@
 import json
 import sys
 from pathlib import Path
+from typing import Union
 from jsonschema import validate, ValidationError
 
 # Add parent directory to path for shared module access
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from shared.logger.logging_config import get_logger
 
+from typing import Union
+
 logger = get_logger(__name__)
 
-def validate_ocel(ocel_path, schema_path=Path("schemas/ocel_2_0.json")):
+def validate_ocel(ocel_path: Union[str, Path], schema_path: Union[str, Path] = Path("schemas/ocel_2_0.json")) -> bool:
     if schema_path.is_file() is False:
         raise ValueError("Schema path must be a file")
 

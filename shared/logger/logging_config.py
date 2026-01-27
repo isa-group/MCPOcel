@@ -80,4 +80,5 @@ def setup_logging(config: Optional[LoggingConfig] = None) -> logging.Logger:
 
 
 def get_logger(name: str) -> logging.Logger:
+    """Get a logger instance for the specified module name."""
     return logging.getLogger(name)

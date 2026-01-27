@@ -164,26 +164,6 @@ def _process_common_relations(node: Dict[str, Any], builder: OCELBuilder, repo_i
     return related
 
 
-def _map_comments(
-        node: Dict[str, Any],
-        builder: OCELBuilder,
-        repo_id: str,
-        related_base: List[str],
-        activity_name: str
-) -> None:
-    """Helper to map comments for both Issues and PRs."""
-    comments = node.get("comments", {}).get("nodes", [])
-    for comment in comments:
-        commenter_login = comment.get("author", {}).get("login")
-        if not commenter_login:
-            continue
-
-        commenter_id = ensure_user(builder, commenter_login)
-        # Link the base object (Issue/PR), the repo, and the author of the comment
-        related = related_base + [commenter_id] if commenter_id else related_base
-
-        builder.add_event(activity_name, comment["createdAt"], related)
-
 def _map_issue(issue: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     issue_id = ensure_issue_object(builder, repo_id, issue)
     related = [issue_id, repo_id] + _process_common_relations(issue, builder, repo_id)
