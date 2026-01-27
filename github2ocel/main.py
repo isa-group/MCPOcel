@@ -28,7 +28,7 @@ STORAGE_DIR = Path("./storage")
 REPO_OWNER = "statuscompliance"
 REPO_NAME = "status-backend"
 
-def main():
+def main() -> None:
     load_dotenv()
     # Setup Logging & API Config
     log_config = LoggingConfig.from_env()
@@ -64,6 +64,7 @@ def main():
             process_release(rel, builder, repo_id)
     except Exception:
         logger.exception("Error in Releases extraction phase")
+        errors_occurred = True
 
     # REST Commits (With Conventional Commits)
     try:
@@ -72,6 +73,7 @@ def main():
             process_commit_rest(commit, builder, repo_id)
     except Exception:
         logger.exception("Error in Commits extraction phase")
+        errors_occurred = True
 
     # REST Workflows
     try:
@@ -81,6 +83,7 @@ def main():
                 process_workflow_run(run, builder, repo_id)
     except Exception:
         logger.exception("Error in Workflow extraction phase")
+        errors_occurred = True
 
     if errors_occurred:
         logger.error("Data extraction encountered errors. Skipping export to protect data integrity.")

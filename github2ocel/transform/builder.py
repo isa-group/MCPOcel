@@ -9,7 +9,6 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # SCHEMA KEYS (Matching your JSON Schema)
-ATTR_TYPES = "attributeNames"
 EVT_TYPES = "eventTypes"
 OBJ_TYPES_KEY = "objectTypes"
 OBJECTS = "objects"
@@ -82,7 +81,14 @@ class OCELBuilder:
 
         self._validate_attribute_types(attributes)
 
+        # Note: Object attributes use current timestamp as OCEL 2.0 requires a time field
+        # for all object attributes. This represents when the attribute was recorded in the
+        # OCEL log, not necessarily when the object was created in the source system.
         now_iso = datetime.now().isoformat() + "Z"
+        
+        # Note: All attribute values are converted to strings for OCEL 2.0 compliance.
+        # While this loses type information at the storage level, the schema defines
+        # expected types and validation warnings are logged for type mismatches.
         formatted_attrs = [
             {"name": k, "value": str(v), "time": now_iso}
             for k, v in attributes.items()
@@ -116,6 +122,7 @@ class OCELBuilder:
         self._validate_attribute_types(event_attrs)
         self._register_event_type(activity, event_attrs)
 
+        # Note: Event attribute values are converted to strings for OCEL 2.0 compliance
         formatted_attrs = [{"name": k, "value": str(v)} for k, v in event_attrs.items()]
         
         # Ensure relationships follow the (objectId, qualifier) schema
@@ -124,6 +131,9 @@ class OCELBuilder:
             for oid in list(related_objects)
         ]
 
+        # Note: Ensure timestamps are in ISO 8601 format with 'Z' suffix.
+        # If a timestamp lacks 'Z', we append it assuming it represents UTC time.
+        # This is a simplification that works for GitHub API timestamps which are UTC.
         self.data[EVENTS].append({
             "id": event_id,
             "type": activity,

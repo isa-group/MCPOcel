@@ -156,6 +156,14 @@ def fetch_commits_rest(
 ) -> List[Dict[str, Any]]:
     """
     Fetch commits list and then fetch DETAILS for each commit.
+    
+    Note: This function uses an N+1 query pattern (one API call per commit for details).
+    While not optimal, it's acceptable given:
+    - The max_detailed_total limit prevents excessive API calls
+    - Micro-throttling (0.1s) prevents rate limit issues
+    - GitHub's REST API doesn't provide a batch endpoint for commit details
+    For better performance at scale, consider using GraphQL to fetch commits with 
+    details in fewer requests.
     """
     logger.info("Fetching commits via REST API...")
 
