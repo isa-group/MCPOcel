@@ -17,7 +17,6 @@ try:
 except ImportError:
     pm4py = None
 
-
 class VisualizationEngine:
     """Visualization generator for processes and logs."""
     
