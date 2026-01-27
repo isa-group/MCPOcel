@@ -1,5 +1,7 @@
 import os
 from dotenv import load_dotenv
+from datetime import datetime
+from pathlib import Path
 
 # Configs & Utils
 from config.settings import APIConfig, LoggingConfig
@@ -20,7 +22,7 @@ from validate.validate_ocel import validate_ocel
 logger = get_logger(__name__)
 
 # Config Repositoory & Output
-OUTPUT_FILE = "./storage/github.ocel_v2.json"
+STORAGE_DIR = Path("./storage")
 REPO_OWNER = "statuscompliance"
 REPO_NAME = "status-backend"
 
@@ -83,9 +85,18 @@ def main():
         return
 
     # Export & Validation
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"github_ocel_{timestamp}.json"
+    output_path = STORAGE_DIR / filename
+
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"--- Starting OCEL Pipeline for {REPO_OWNER}/{REPO_NAME} ---")
+    logger.info(f"Target file: {output_path}")
+
     try:
-        builder.export_json(OUTPUT_FILE)
-        if validate_ocel(OUTPUT_FILE):
+        builder.export_json(output_path)
+        if validate_ocel(output_path):
             logger.info("Pipeline finished: OCEL 2.0 file is valid and ready for analysis.")
     except Exception:
         logger.exception("Error during export/validation")
