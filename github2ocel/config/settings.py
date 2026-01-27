@@ -10,7 +10,7 @@ class LoggingConfig:
     """Logging configuration"""
 
     level: str = "INFO"
-    log_file: Path = Path("logs/github_extractor.log")
+    log_file: Path = Path(__file__).resolve().parent.parent.parent / "logs" / "extractor.log"
     format: str = (
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )

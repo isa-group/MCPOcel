@@ -2,7 +2,8 @@ import json
 import os
 import requests
 from jsonschema import validate, ValidationError
-from utils.logging_config import get_logger
+from shared.logger.logging_config import get_logger
+from pathlib import Path
 
 # Official OCEL 2.0 JSON schema URL
 SCHEMA_URL = "https://www.ocel-standard.org/2.0/ocel20-schema-json.json"
@@ -10,6 +11,13 @@ SCHEMA_URL = "https://www.ocel-standard.org/2.0/ocel20-schema-json.json"
 logger = get_logger(__name__)
 
 def validate_ocel(ocel_path, schema_path="schemas/ocel_2_0.json"):
+
+    if schema_path is None:
+        # Subimos 3 niveles: validate -> github2ocel -> raíz del proyecto
+        base_dir = Path(__file__).resolve().parent.parent.parent
+        schema_path = base_dir / "schemas" / "ocel_2_0.json"
+    else:
+        schema_path = Path(schema_path)
 
     logger.info("Starting OCEL validation...")
 
