@@ -32,9 +32,9 @@ class Activities:
 # Conventional Commit Parser
 CC_PATTERN = re.compile(
     r"^(?P<type>\w+)"  # Type (feat, fix...)
-    r"(?:\((?P<scope>[^)]+)\))?"  # Scope opcional
+    r"(?:\((?P<scope>[^)]+)\))?"  # Optional scope
     r"(?P<breaking>!)?"  # Breaking change flag
-    r":\s+(?P<desc>.+)$"  # Descripción
+    r":\s+(?P<desc>.+)$"  # Description
 )
 
 
@@ -284,7 +284,7 @@ def process_commit_rest(commit: Dict[str, Any], builder: OCELBuilder, repo_id: s
 
 def process_release(release: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     """Map a GitHub release."""
-    # Nota: Ensure that 'Release' is in OBJECT_TYPES in builder.py
+    # Note: Ensure that 'Release' is in OBJECT_TYPES in builder.py
     rel_id = make_id(repo_id, "release", release["id"])
 
     builder.add_object(

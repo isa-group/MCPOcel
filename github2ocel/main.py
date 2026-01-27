@@ -23,7 +23,7 @@ from validate.validate_ocel import validate_ocel
 
 logger = get_logger(__name__)
 
-# Config Repositoory & Output
+# Config Repository & Output
 STORAGE_DIR = Path("./storage")
 REPO_OWNER = "statuscompliance"
 REPO_NAME = "status-backend"
@@ -93,7 +93,7 @@ def main():
 
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"--- Starting OCEL Pipeline for {REPO_OWNER}/{REPO_NAME} ---")
+    logger.info(f"--- QUERIES FINISHED ---")
     logger.info(f"Target file: {output_path}")
 
     try:

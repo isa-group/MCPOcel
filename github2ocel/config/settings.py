@@ -6,7 +6,6 @@ from pathlib import Path
 # LOGGING CONFIG
 @dataclass
 class LoggingConfig:
-    level: str = "INFO"
     """Logging configuration"""
 
     level: str = "INFO"
