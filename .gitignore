@@ -19,13 +19,10 @@ pip-delete-this-directory.txt
 
 # --- Datos y Almacenamiento (ETL) ---
 # Ignoramos los logs generados para no ensuciar el repo
-storage/*.json
-storage/*.ocel
+github2ocel/storage/*.json
+github2ocel/storage/*.ocel
 # Pero permitimos que la carpeta exista con un .gitkeep si fuera necesario
-!storage/.gitkeep
-
-# Esquemas descargados (se descargan en runtime)
-schemas/*.json
+github2ocel/!storage/.gitkeep
 
 logs/*.log
 
@@ -48,5 +45,4 @@ personal/*
 .DS_Store
 Thumbs.db.env
 .env
-storage/*.json
 __pycache__/
