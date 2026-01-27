@@ -35,7 +35,12 @@ ATTRIBUTE_TYPE_HINTS: Dict[str, Union[type, Tuple[type, ...]]] = {
     "additions": int, "deletions": int, "files_changed": int,
     "state": str, "conclusion": str, "color": str, "name": str
 }
+
 class OCELBuilder:
+    """
+    OCEL Builder aligned with custom JSON Schema.
+    Ensures type safety, referential integrity, and deterministic export.
+    """
     def __init__(self):
         self.data = {
             EVT_TYPES: [],
@@ -43,11 +48,7 @@ class OCELBuilder:
             OBJECTS: {},
             EVENTS: []
         }
-        self._global_attributes: Set[str] = set()
         self._init_object_types()
-
-    def _get_type_name(self, value: Any) -> str:
-        return TYPE_MAP.get(type(value), "string")
 
     def _init_object_types(self) -> None:
         """Initialize static object types based on definitions."""
@@ -58,12 +59,12 @@ class OCELBuilder:
             })
 
     def _validate_attribute_types(self, attributes: Dict[str, Any]) -> None:
-        """Log warnings if attribute types do not match expectations (Copilot fix)."""
+        """Log warnings if attribute types do not match expectations."""
         for key, value in attributes.items():
             if key in ATTRIBUTE_TYPE_HINTS:
                 expected = ATTRIBUTE_TYPE_HINTS[key]
                 if not isinstance(value, expected):
-                    # Improved error message for tuples as suggested by Copilot
+                    # Format expected type name for clarity
                     if isinstance(expected, tuple):
                         expected_name = ", ".join(t.__name__ for t in expected)
                     else:
@@ -75,12 +76,12 @@ class OCELBuilder:
                     )
 
     def add_object(self, obj_id: str, obj_type: str, attributes: Dict[str, Any]) -> None:
+        """Adds a unique object to the log."""
         if obj_id in self.data[OBJECTS]:
             return
 
         self._validate_attribute_types(attributes)
 
-        # Atributes Formatting
         now_iso = datetime.now().isoformat() + "Z"
         formatted_attrs = [
             {"name": k, "value": str(v), "time": now_iso}
@@ -91,11 +92,11 @@ class OCELBuilder:
             "id": obj_id,
             "type": obj_type,
             "attributes": formatted_attrs,
-            "relationships": [] # Opcional
+            "relationships": []
         }
 
     def _register_event_type(self, activity: str, attributes: Dict[str, Any]) -> None:
-        """Dynamically registers event attributes in eventTypes."""
+        """Registers event attributes dynamically in the schema header."""
         target = next((et for et in self.data[EVT_TYPES] if et["name"] == activity), None)
         if not target:
             target = {"name": activity, "attributes": []}
@@ -108,7 +109,7 @@ class OCELBuilder:
 
     def add_event(self, activity: str, timestamp: str, related_objects: Sequence[str], 
                   attributes: Optional[Dict[str, Any]] = None) -> str:
-        """Adds an event to the log. Enforces list type for relationships (Copilot fix)."""
+        """Adds an event and links it to objects. Returns the event UUID."""
         event_id = str(uuid.uuid4())
         event_attrs = attributes or {}
 
@@ -117,7 +118,7 @@ class OCELBuilder:
 
         formatted_attrs = [{"name": k, "value": str(v)} for k, v in event_attrs.items()]
         
-        # Ensure relationships are a list (Copilot compliance)
+        # Ensure relationships follow the (objectId, qualifier) schema
         relationships = [
             {"objectId": str(oid), "qualifier": "related"} 
             for oid in list(related_objects)
@@ -133,7 +134,9 @@ class OCELBuilder:
         return event_id
 
     def export_json(self, filename: Union[str, Path], pretty: bool = True) -> None:
-        """Finalizes and writes the JSON file following schema requirements."""
+        """Finalizes the OCEL structure and writes it to a JSON file."""
+        
+        # Build final dictionary using defined constants
         final_output = {
             EVT_TYPES: self.data[EVT_TYPES],
             OBJ_TYPES_KEY: self.data[OBJ_TYPES_KEY],
@@ -141,7 +144,7 @@ class OCELBuilder:
             OBJECTS: list(self.data[OBJECTS].values())
         }
 
-        # Deterministic sort by time
+        # Deterministic sort: Primary by time, Secondary by ID to break ties
         final_output[EVENTS].sort(key=lambda x: (x["time"], x["id"]))
 
         output_path = Path(filename)
@@ -150,22 +153,4 @@ class OCELBuilder:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(final_output, f, indent=2 if pretty else None, ensure_ascii=False)
 
-        logger.info(f"Export complete with {len(final_output[EVENTS])} events: {output_path}")
-        # Export OCEL JSON
-        final_output = {
-            "eventTypes": self.data[EVT_TYPES],
-            "objectTypes": self.data[OBJ_TYPES_KEY],
-            "events": self.data[EVENTS],
-            "objects": list(self.data[OBJECTS].values())
-        }
-
-        # Order events by timestamp
-        final_output["events"].sort(key=lambda x: x["time"])
-
-        output_path = Path(filename)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(final_output, f, indent=2 if pretty else None, ensure_ascii=False)
-
-        logger.info(f"Export complete: {output_path}")
+        logger.info(f"Export successful. {len(final_output[EVENTS])} events saved to: {output_path}")
