@@ -29,6 +29,7 @@ schemas/*.json
 
 logs/*.log
 
+personal/*
 # --- IDEs y Editores ---
 # VS Code
 .vscode/*

@@ -148,10 +148,11 @@ def _paginate_graphql(
         owner: str,
         repo: str,
         token: str,
-        pages: int,
+        pages: Optional[int],
         page_size: int,
         api_config: APIConfig,
 ) -> List[Dict[str, Any]]:
+
     all_nodes: List[Dict[str, Any]] = []
     cursor: Optional[str] = None
     current_page = 1
@@ -186,11 +187,12 @@ def _paginate_graphql(
 
         page_info = container.get("pageInfo", {})
         if not page_info.get("hasNextPage"):
+            logger.info(f"Reached last page of {node_type}.")
             break
 
         cursor = page_info.get("endCursor")
         current_page += 1
-
+        logger.info(f"Fetched page {current_page} of {node_type}...")
     logger.info(f"Fetched {len(all_nodes)} {node_type}.")
     return all_nodes
 
@@ -207,7 +209,7 @@ def fetch_github_data(
     Fetch Issues and Pull Requests via GitHub GraphQL API.
     Returns a unified list of raw nodes.
     """
-    if pages < 1:
+    if pages is not None and pages < 1:
         logger.warning("Configuration requested 0 pages via GraphQL. Skipping.")
         return []
 
