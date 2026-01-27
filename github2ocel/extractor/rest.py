@@ -209,7 +209,7 @@ def fetch_commits_rest(
             logger.info(f"Fetched {detailed_fetched} detailed commits so far (Page {current_page - 1})...")
 
         except Exception:
-            logger.error(f"Failed to fetch commits list page {page}")
+            logger.error(f"Failed to fetch commits list page {current_page}")
             raise
 
     logger.info("Fetched %d detailed commits", len(all_commits))

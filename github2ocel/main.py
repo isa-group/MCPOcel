@@ -5,7 +5,7 @@ from pathlib import Path
 
 # Configs & Utils
 from config.settings import APIConfig, LoggingConfig
-from utils.logging_config import setup_logging, get_logger
+from shared.logger.logging_config import setup_logging, get_logger
 
 
 from transform.builder import OCELBuilder
