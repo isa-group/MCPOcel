@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 from logging.handlers import RotatingFileHandler
 
-from config.settings import LoggingConfig
+from github2ocel.config.settings import LoggingConfig
 
 
 def setup_logging(config: Optional[LoggingConfig] = None) -> logging.Logger:
