@@ -2,10 +2,12 @@ import json
 import sys
 from pathlib import Path
 from jsonschema import validate, ValidationError
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 SCHEMA_PATH = REPO_ROOT / "shared" / "schemas" / "ocel_2_0.json"
+
 from shared.logger.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -13,6 +15,13 @@ logger = get_logger(__name__)
 def validate_ocel(ocel_path, schema_path=Path(SCHEMA_PATH)) -> bool:
     if schema_path.is_file() is False:
         raise ValueError("Schema path must be a file")
+
+    if schema_path is None:
+        # Subimos 3 niveles: validate -> github2ocel -> raíz del proyecto
+        base_dir = Path(__file__).resolve().parent.parent.parent
+        schema_path = base_dir / "schemas" / "ocel_2_0.json"
+    else:
+        schema_path = Path(schema_path)
 
     logger.info("Starting OCEL validation...")
 
