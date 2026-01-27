@@ -48,7 +48,7 @@ def main():
 
     # GraphQL (Issues & PRs)
     try:
-        nodes = fetch_github_data(REPO_OWNER, REPO_NAME, TOKEN, api_config)
+        nodes = fetch_github_data(REPO_OWNER, REPO_NAME, TOKEN, api_config, pages=None)
         for node in nodes:
             process_issue_node(node, builder, repo_id)
     except Exception:
@@ -65,7 +65,7 @@ def main():
 
     # REST Commits (With Conventional Commits)
     try:
-        commits = fetch_commits_rest(REPO_OWNER, REPO_NAME, TOKEN, api_config, pages=2, max_detailed_total=50)
+        commits = fetch_commits_rest(REPO_OWNER, REPO_NAME, TOKEN, api_config, pages=None, max_detailed_total=50)
         for commit in commits:
             process_commit_rest(commit, builder, repo_id)
     except Exception:
@@ -73,7 +73,7 @@ def main():
 
     # REST Workflows
     try:
-        runs = fetch_workflow_runs(REPO_OWNER, REPO_NAME, TOKEN, api_config, pages=2)
+        runs = fetch_workflow_runs(REPO_OWNER, REPO_NAME, TOKEN, api_config, pages=None)
         for run in runs:
             if run.get("status") == "completed":
                 process_workflow_run(run, builder, repo_id)

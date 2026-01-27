@@ -106,7 +106,7 @@ def fetch_workflow_runs(
         repo: str,
         token: str,
         api_config: APIConfig,
-        pages: int = 3,
+        pages: Optional[int] = None,
         per_page: int = 50,
 ) -> List[Dict[str, Any]]:
     """
@@ -118,33 +118,30 @@ def fetch_workflow_runs(
     endpoint = f"/repos/{owner}/{repo}/actions/runs"
     all_runs: List[Dict[str, Any]] = []
 
-    for page in range(1, pages + 1):
-        try:
-            response = _rest_get(
-                endpoint,
-                token,
-                api_config,
-                params={"per_page": per_page, "page": page},
-            )
+    target_pages = pages if pages is not None else api_config.max_pages
+    page = 1
 
-            data = response.json()
-            runs = data.get("workflow_runs", [])
+    while True:
+        if target_pages is not None and page > target_pages:
+            logger.info(f"Reached pagination limit of {target_pages} pages.")
+            break
 
-            if not runs:
-                break
-            all_runs.extend(runs)
-            # Debug log to avoid overloading the console, but useful if you are looking for a trace.
-            logger.debug(f"Fetched page {page}: {len(runs)} runs.")
+        response = _rest_get(
+            endpoint,
+            token,
+            api_config,
+            params={"per_page": per_page, "page": page},
+        )
 
-        except Exception:
-            logger.error(f"Failed to fetch workflow page {page}. Aborting remaining pages.")
-            raise  # Hard fail to preserve integrity
+        data = response.json()
+        runs = data.get("workflow_runs", [])
 
-    logger.info(
-        "Fetched %d workflow runs across %d pages",
-        len(all_runs),
-        len(all_runs) // per_page + (1 if len(all_runs) % per_page else 0) if all_runs else 0
-    )
+        if not runs:
+            break
+
+        all_runs.extend(runs)
+        logger.info(f"Fetched {len(all_runs)} workflow runs (Page {page})...")
+        page += 1
     return all_runs
 
 
@@ -153,7 +150,7 @@ def fetch_commits_rest(
         repo: str,
         token: str,
         api_config: APIConfig,
-        pages: int = 3,
+        pages: Optional[int] = None,
         per_page: int = 30,
         max_detailed_total: int = 20,
 ) -> List[Dict[str, Any]]:
@@ -165,9 +162,15 @@ def fetch_commits_rest(
     endpoint_list = f"/repos/{owner}/{repo}/commits"
     all_commits: List[Dict[str, Any]] = []
     detailed_fetched = 0
+    target_pages = pages if pages is not None else api_config.max_pages
 
+    current_page = 1 # Usamos un contador manual
+
+    while True:
+        if target_pages is not None and current_page > target_pages:
+            logger.info(f"Reached pagination limit of {target_pages} pages.")
+            break
     # Fetch Summary List
-    for page in range(1, pages + 1):
         if detailed_fetched >= max_detailed_total:
             break
 
@@ -176,7 +179,7 @@ def fetch_commits_rest(
                 endpoint_list,
                 token,
                 api_config,
-                params={"per_page": per_page, "page": page},
+                params={"per_page": per_page, "page": current_page},
             )
             commits_summary = response.json()
 
@@ -202,6 +205,8 @@ def fetch_commits_rest(
                 except Exception as e:
                     logger.warning(f"Skipping commit {sha} due to error: {e}")
                     continue
+            current_page += 1
+            logger.info(f"Fetched {detailed_fetched} detailed commits so far (Page {current_page - 1})...")
 
         except Exception:
             logger.error(f"Failed to fetch commits list page {page}")

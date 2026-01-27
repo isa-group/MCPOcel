@@ -1,5 +1,5 @@
 import os
-
+from typing import Optional
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,10 +38,15 @@ class APIConfig:
     max_retries: int = 3
     retry_backoff_min: float = 4.0
     retry_backoff_max: float = 30.0
+    max_pages: Optional[int] = None
 
     @classmethod
     def from_env(cls) -> "APIConfig":
+        raw_pages = int(os.getenv("GITHUB_MAX_PAGES", 0))
+        max_pages = raw_pages if raw_pages > 0 else None
+
         return cls(
+            max_pages=max_pages,
             graphql_url=os.getenv(
                 "GITHUB_GRAPHQL_URL",
                 "https://api.github.com/graphql",
