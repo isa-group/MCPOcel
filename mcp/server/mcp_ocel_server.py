@@ -278,8 +278,198 @@ class OCELMCPServer:
             },
         }
 
+    def get_ocel_info(self) -> Dict[str, Any]:
+        """
+        Returns metadata about the loaded OCEL file.
 
-def run_mcp_server(ocel_path: Optional[str] = None, debug: bool = False) -> None:
+        Returns:
+            Dict with object_types, event_types, counts, and time range.
+        """
+        logger.info("Returning OCEL info")
+        
+        # Get counts
+        if hasattr(self.ocel_data, "events"):
+            total_events = len(self.ocel_data.events)
+            total_objects = len(self.ocel_data.objects)
+            # Extract timestamps from pm4py OCEL
+            try:
+                timestamps = sorted(self.ocel_data.events["ocel:timestamp"].tolist())
+                start_date = str(timestamps[0])[:19] if timestamps else "N/A"
+                end_date = str(timestamps[-1])[:19] if timestamps else "N/A"
+            except Exception:
+                start_date = "N/A"
+                end_date = "N/A"
+        else:
+            events = self.ocel_data.get("ocel:events", [])
+            objects = self.ocel_data.get("ocel:objects", {})
+            total_events = len(events) if isinstance(events, list) else len(events)
+            total_objects = len(objects)
+            # Extract timestamps
+            try:
+                if isinstance(events, list):
+                    timestamps = sorted([e.get("ocel:timestamp", "") for e in events if e.get("ocel:timestamp")])
+                else:
+                    timestamps = sorted([e.get("ocel:timestamp", "") for e in events.values() if e.get("ocel:timestamp")])
+                start_date = str(timestamps[0])[:19] if timestamps else "N/A"
+                end_date = str(timestamps[-1])[:19] if timestamps else "N/A"
+            except Exception:
+                start_date = "N/A"
+                end_date = "N/A"
+        
+        return {
+            "ocel_path": self.ocel_path,
+            "object_types": self.config.object_types,
+            "event_types": self.config.event_types,
+            "total_objects": total_objects,
+            "total_events": total_events,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+
+    def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle a single JSON-RPC 2.0 request.
+
+        Args:
+            request: Parsed JSON-RPC request.
+
+        Returns:
+            JSON-RPC response dict.
+        """
+        if request.get("jsonrpc") != "2.0":
+            return {"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid JSON-RPC version"}}
+
+        request_id = request.get("id")
+        method = request.get("method")
+        params = request.get("params", {})
+
+        logger.debug(f"Handling method: {method}")
+
+        try:
+            if method == "initialize":
+                result = self.initialize()
+            elif method == "ocel/info":
+                result = self.get_ocel_info()
+            elif method == "tools/list":
+                result = {"tools": self.get_tools()}
+            elif method == "tools/call":
+                tool_name = params.get("name")
+                tool_args = params.get("arguments", {})
+                result = self.handle_tool_call(tool_name, tool_args)
+            else:
+                logger.warning(f"Unknown method: {method}")
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32601, "message": f"Method not found: {method}"},
+                }
+
+            response = {"jsonrpc": "2.0", "result": result}
+            if request_id is not None:
+                response["id"] = request_id
+            return response
+
+        except Exception as e:
+            logger.error(f"Error handling {method}: {e}")
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32000, "message": str(e)},
+            }
+
+
+def run_mcp_server_tcp(
+    ocel_path: Optional[str] = None,
+    debug: bool = False,
+    host: str = "127.0.0.1",
+    port: int = 9820,
+) -> None:
+    """
+    Runs the MCP server in TCP mode.
+
+    Listens for JSON-RPC 2.0 requests over TCP socket.
+
+    Args:
+        ocel_path: Path to the OCEL file.
+        debug: Whether to enable DEBUG logging.
+        host: Host to bind to.
+        port: TCP port to listen on.
+    """
+    import socket
+    import threading
+
+    logger.info(f"Starting MCP Server in TCP mode on {host}:{port}")
+
+    try:
+        server = OCELMCPServer(ocel_path, debug)
+    except Exception as e:
+        logger.critical(f"Failed to initialize server: {e}")
+        sys.exit(1)
+
+    def handle_client(client_socket: socket.socket, address: tuple) -> None:
+        """Handle a single client connection."""
+        logger.info(f"Client connected: {address}")
+        buffer = b""
+
+        try:
+            while True:
+                chunk = client_socket.recv(4096)
+                if not chunk:
+                    break
+                buffer += chunk
+
+                # Process complete lines (newline-delimited JSON)
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    if not line.strip():
+                        continue
+
+                    try:
+                        request = json.loads(line.decode("utf-8"))
+                        response = server.handle_request(request)
+                        response_bytes = json.dumps(response).encode("utf-8") + b"\n"
+                        client_socket.sendall(response_bytes)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Invalid JSON from {address}: {e}")
+                        error_response = {
+                            "jsonrpc": "2.0",
+                            "error": {"code": -32700, "message": "Parse error"},
+                        }
+                        client_socket.sendall(json.dumps(error_response).encode("utf-8") + b"\n")
+
+        except Exception as e:
+            logger.error(f"Error with client {address}: {e}")
+        finally:
+            client_socket.close()
+            logger.info(f"Client disconnected: {address}")
+
+    try:
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind((host, port))
+        server_socket.listen(5)
+        logger.info(f"Server listening on {host}:{port}")
+        print(f"MCP Server ready on {host}:{port}")
+
+        while True:
+            client_socket, address = server_socket.accept()
+            client_thread = threading.Thread(
+                target=handle_client,
+                args=(client_socket, address),
+                daemon=True,
+            )
+            client_thread.start()
+
+    except KeyboardInterrupt:
+        logger.info("Server stopped by user")
+    except Exception as e:
+        logger.critical(f"Fatal error: {e}")
+        sys.exit(1)
+    finally:
+        server_socket.close()
+
+
+def run_mcp_server_stdio(ocel_path: Optional[str] = None, debug: bool = False) -> None:
     """
     Runs the MCP server in STDIO mode.
 
@@ -289,65 +479,30 @@ def run_mcp_server(ocel_path: Optional[str] = None, debug: bool = False) -> None
         ocel_path: Path to the OCEL file.
         debug: Whether to enable DEBUG logging.
     """
-    import json
-    
     logger.info("Starting MCP Server in STDIO mode")
-    
+
     try:
         server = OCELMCPServer(ocel_path, debug)
         logger.info("Server ready to receive messages")
-        
+
         for line in sys.stdin:
             try:
                 request = json.loads(line.strip())
-                
-                if request.get("jsonrpc") != "2.0":
-                    logger.warning(f"Invalid JSON-RPC version: {request.get('jsonrpc')}")
-                    continue
-                
-                request_id = request.get("id")
-                method = request.get("method")
-                params = request.get("params", {})
-                
-                    logger.debug(f"Received message: {method}")
-                
-                if method == "initialize":
-                    response = server.initialize()
-                
-                elif method == "tools/list":
-                    response = {"tools": server.get_tools()}
-                
-                elif method == "tools/call":
-                    tool_name = params.get("name")
-                    tool_args = params.get("arguments", {})
-                    response = server.handle_tool_call(tool_name, tool_args)
-                
-                else:
-                    logger.warning(f"Unknown method: {method}")
-                    response = {
-                        "error": f"Unsupported method: {method}",
-                    }
-                
-                if request_id is not None:
-                    output = {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": response,
-                    }
-                else:
-                    output = {
-                        "jsonrpc": "2.0",
-                        "result": response,
-                    }
-                
-                print(json.dumps(output))
+                response = server.handle_request(request)
+                print(json.dumps(response))
                 sys.stdout.flush()
-            
+
             except json.JSONDecodeError as e:
                 logger.error(f"Invalid JSON: {e}")
+                error_response = {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32700, "message": "Parse error"},
+                }
+                print(json.dumps(error_response))
+                sys.stdout.flush()
             except Exception as e:
                 logger.error(f"Error processing message: {e}")
-    
+
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
     except Exception as e:
@@ -357,7 +512,7 @@ def run_mcp_server(ocel_path: Optional[str] = None, debug: bool = False) -> None
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(
         description="MCP Server para análisis agnóstico de OCEL 2.0"
     )
@@ -371,7 +526,32 @@ if __name__ == "__main__":
         action="store_true",
         help="Habilitar DEBUG logging",
     )
-    
+    parser.add_argument(
+        "--mode",
+        choices=["stdio", "tcp"],
+        default="tcp",
+        help="Transport mode: stdio or tcp (default: tcp)",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="TCP host to bind (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=9820,
+        help="TCP port to listen on (default: 9820)",
+    )
+
     args = parser.parse_args()
-    
-    run_mcp_server(ocel_path=args.ocel_path, debug=args.debug)
+
+    if args.mode == "stdio":
+        run_mcp_server_stdio(ocel_path=args.ocel_path, debug=args.debug)
+    else:
+        run_mcp_server_tcp(
+            ocel_path=args.ocel_path,
+            debug=args.debug,
+            host=args.host,
+            port=args.port,
+        )
