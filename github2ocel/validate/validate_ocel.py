@@ -3,13 +3,14 @@ import sys
 from pathlib import Path
 from jsonschema import validate, ValidationError
 
-# Add parent directory to path for shared module access
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+SCHEMA_PATH = REPO_ROOT / "shared" / "schemas" / "ocel_2_0.json"
 from shared.logger.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-def validate_ocel(ocel_path, schema_path=Path("schemas/ocel_2_0.json")):
+def validate_ocel(ocel_path, schema_path=Path(SCHEMA_PATH)) -> bool:
     if schema_path.is_file() is False:
         raise ValueError("Schema path must be a file")
 
