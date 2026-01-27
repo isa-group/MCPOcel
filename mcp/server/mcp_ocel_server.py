@@ -326,6 +326,89 @@ class OCELMCPServer:
             "end_date": end_date,
         }
 
+    def get_schema_section(self, section: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Returns OCEL 2.0 schema sections on demand.
+
+        Args:
+            section: Specific section to retrieve. Options:
+                - 'eventTypes': Event type definitions
+                - 'objectTypes': Object type definitions
+                - 'events': Event structure
+                - 'objects': Object structure
+                - 'attributes': Attribute definitions for all types
+                - None: Returns available sections list
+
+        Returns:
+            Dict with requested schema section or list of available sections.
+        """
+        logger.info(f"Returning schema section: {section or 'index'}")
+
+        available_sections = ["eventTypes", "objectTypes", "events", "objects", "attributes"]
+
+        if section is None:
+            # Return index of available sections with summary
+            return {
+                "available_sections": available_sections,
+                "summary": {
+                    "eventTypes": f"{len(self.config.event_types)} event types defined",
+                    "objectTypes": f"{len(self.config.object_types)} object types defined",
+                    "attributes": f"{len(self.config.attribute_names)} attribute categories",
+                },
+            }
+
+        if section == "eventTypes":
+            return {
+                "section": "eventTypes",
+                "data": self.config.event_types,
+                "description": "List of all event types in the OCEL log",
+            }
+
+        if section == "objectTypes":
+            return {
+                "section": "objectTypes",
+                "data": self.config.object_types,
+                "description": "List of all object types in the OCEL log",
+            }
+
+        if section == "attributes":
+            return {
+                "section": "attributes",
+                "data": self.config.attribute_names,
+                "description": "Attribute names grouped by category (event, object, etc.)",
+            }
+
+        if section == "events":
+            # Return schema structure for events (not the actual events)
+            return {
+                "section": "events",
+                "schema": {
+                    "ocel:eid": "string - Unique event identifier",
+                    "ocel:activity": "string - Activity/event type name",
+                    "ocel:timestamp": "datetime - ISO 8601 timestamp",
+                    "ocel:omap": "array - List of related object IDs",
+                    "ocel:vmap": "object - Event-specific attributes",
+                },
+                "description": "OCEL 2.0 event structure",
+            }
+
+        if section == "objects":
+            # Return schema structure for objects (not the actual objects)
+            return {
+                "section": "objects",
+                "schema": {
+                    "ocel:oid": "string - Unique object identifier",
+                    "ocel:type": "string - Object type name",
+                    "ocel:ovmap": "object - Object-specific attributes",
+                },
+                "description": "OCEL 2.0 object structure",
+            }
+
+        return {
+            "error": f"Unknown section: {section}",
+            "available_sections": available_sections,
+        }
+
     def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle a single JSON-RPC 2.0 request.
@@ -350,6 +433,9 @@ class OCELMCPServer:
                 result = self.initialize()
             elif method == "ocel/info":
                 result = self.get_ocel_info()
+            elif method == "ocel/schema":
+                section = params.get("section")
+                result = self.get_schema_section(section)
             elif method == "tools/list":
                 result = {"tools": self.get_tools()}
             elif method == "tools/call":

@@ -146,6 +146,20 @@ class MCPClient:
         """Call a tool on the server."""
         return self._send_request("tools/call", {"name": tool_name, "arguments": arguments})
 
+    def get_schema_section(self, section: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get OCEL schema sections from the server.
+
+        Args:
+            section: Specific section to retrieve (eventTypes, objectTypes, events, objects, attributes).
+                    If None, returns index of available sections.
+
+        Returns:
+            Dict with schema section data.
+        """
+        params = {"section": section} if section else {}
+        return self._send_request("ocel/schema", params)
+
     def __enter__(self) -> "MCPClient":
         self.connect()
         return self
