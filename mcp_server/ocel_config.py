@@ -10,7 +10,9 @@ from typing import Dict, List, Optional
 from pathlib import Path
 
 from . import constants
-from . import logger
+from shared.logger.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass

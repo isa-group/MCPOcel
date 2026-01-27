@@ -6,8 +6,10 @@ Combines verifiable references, markdown, visualization, and metadata.
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-from . import logger
 from .typing_ocel import UnifiedMCPResponse, EventReference, AnomalyReport
+from shared.logger.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class ResponseBuilder:

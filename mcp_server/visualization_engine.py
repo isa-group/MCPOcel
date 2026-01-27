@@ -8,7 +8,9 @@ import shutil
 from typing import Any, Dict, Optional
 from io import BytesIO
 
-from . import logger
+from shared.logger.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 try:
     import pm4py

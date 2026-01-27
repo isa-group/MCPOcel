@@ -7,8 +7,9 @@ import json
 import sys
 from typing import Any, Dict, List, Optional
 
-from . import logger, constants
+from . import constants
 from .ocel_config import OCELConfig, get_cached_config
+from shared.logger.logging_config import get_logger, setup_logging
 from .data_loading import load_ocel, SmartOCELLoader
 from .ocel_query_engine import OCELQueryEngine
 from .process_mining import ProcessMiningEngine
@@ -16,6 +17,7 @@ from .visualization_engine import VisualizationEngine
 from .response_builder import ResponseBuilder
 from .typing_ocel import UnifiedMCPResponse
 
+logger = get_logger(__name__)
 
 class OCELMCPServer:
     """Domain-agnostic MCP server for OCEL analysis."""
@@ -28,10 +30,11 @@ class OCELMCPServer:
             ocel_path: Path to the OCEL file (takes precedence over env var).
             debug: Whether to enable DEBUG logging.
         """
-        if debug:
-            logger.set_log_level("DEBUG")
-        else:
-            logger.set_log_level("INFO")
+        from shared.logger.logging_config import LoggingConfig
+        
+        level = "DEBUG" if debug else "INFO"
+        config = LoggingConfig(level=level)
+        setup_logging(config)
         
         logger.info("Initializing OCEL MCP Server")
         

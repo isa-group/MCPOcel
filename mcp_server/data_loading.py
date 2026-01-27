@@ -10,7 +10,9 @@ from pathlib import Path
 import pm4py
 
 from . import constants
-from . import logger
+from shared.logger.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class SmartOCELLoader:

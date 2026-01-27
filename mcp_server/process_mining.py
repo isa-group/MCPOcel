@@ -6,7 +6,9 @@ Exposes: DFG discovery, Petri net discovery, variants, and statistics.
 from typing import Any, Dict, List, Optional, Tuple
 import json
 
-from . import logger
+from shared.logger.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 try:
     import pm4py
