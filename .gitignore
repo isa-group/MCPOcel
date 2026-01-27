@@ -10,30 +10,16 @@ pip-log.txt
 pip-delete-this-directory.txt
 .ipynb_checkpoints
 
-# --- Secretos y Configuración (¡MUY IMPORTANTE!) ---
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# --- Environment variables ---
+.env*
 
-# --- Datos y Almacenamiento (ETL) ---
-# Ignoramos los logs generados para no ensuciar el repo
+# --- Data & Storage (ETL) ---
 github2ocel/storage/*.json
 github2ocel/storage/*.ocel
-# Pero permitimos que la carpeta exista con un .gitkeep si fuera necesario
-github2ocel/!storage/.gitkeep
+# Allow all .gitkeep files in any directory
+!**/.gitkeep
 
-logs/*.log
-
-personal/*
-# --- IDEs y Editores ---
-# VS Code
-.vscode/*
-!.vscode/extensions.json
-!.vscode/launch.json
-!.vscode/tasks.json
-.history/
+github2ocel/logs/*.log
 
 # PyCharm / IntelliJ
 .idea/
@@ -41,8 +27,6 @@ personal/*
 *.iml
 *.ipr
 
-# --- Sistema Operativo ---
+# --- OS ---
 .DS_Store
-Thumbs.db.env
-.env
-__pycache__/
+Thumbs.db*
