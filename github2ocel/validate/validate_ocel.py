@@ -8,8 +8,6 @@ from jsonschema import validate, ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from shared.logger.logging_config import get_logger
 
-from typing import Union
-
 logger = get_logger(__name__)
 
 def validate_ocel(ocel_path: Union[str, Path], schema_path: Union[str, Path] = Path("schemas/ocel_2_0.json")) -> bool:
