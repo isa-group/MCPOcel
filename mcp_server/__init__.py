@@ -4,7 +4,6 @@ OCEL MCP Server - Model Context Protocol server for domain-agnostic OCEL 2.0 ana
 Modules:
 - constants: Shared constants and configuration
 - typing_ocel: Data types and dataclasses
-- logger: Centralized logging
 - ocel_config: Dynamic OCEL configuration loading
 - data_loading: Smart OCEL loader
 - ocel_query_engine: Query engine (five MVP queries)

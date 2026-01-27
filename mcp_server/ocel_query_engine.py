@@ -7,8 +7,10 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 import json
 
-from . import logger
 from .typing_ocel import EventReference, ObjectReference, AnomalyReport
+from shared.logger.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class OCELQueryEngine:
