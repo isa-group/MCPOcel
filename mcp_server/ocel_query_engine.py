@@ -12,7 +12,6 @@ from shared.logger.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-
 class OCELQueryEngine:
     """Domain-agnostic query engine for OCEL 2.0."""
     

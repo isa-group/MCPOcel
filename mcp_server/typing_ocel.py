@@ -5,7 +5,6 @@ from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, TypedDict
 from datetime import datetime
 
-
 class EventReferenceDict(TypedDict):
     """Verifiable reference to an OCEL event."""
     event_id: str

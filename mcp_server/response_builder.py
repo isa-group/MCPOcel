@@ -11,7 +11,6 @@ from shared.logger.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-
 class ResponseBuilder:
     """Builds unified responses with references, summary, and visualization."""
     

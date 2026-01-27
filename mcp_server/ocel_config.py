@@ -14,7 +14,6 @@ from shared.logger.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-
 @dataclass
 class OCELConfig:
     """Dynamic OCEL schema configuration."""

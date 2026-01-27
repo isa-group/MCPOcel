@@ -14,7 +14,6 @@ from shared.logger.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-
 class SmartOCELLoader:
     """Smart loader that adapts strategy based on file size."""
     
