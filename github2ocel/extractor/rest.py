@@ -12,7 +12,7 @@ def _calculate_sleep_time(response: requests.Response) -> float:
     Calculate how long to sleep based on standard headers.
     Prioridad: Retry-After > X-RateLimit-Reset
     """
-    # 1. Retry-After (Estándar HTTP / GitHub Secondary Limits)
+    # 1. Retry-After (Standard HTTP / GitHub Secondary Limits)
     retry_after = response.headers.get("Retry-After")
     if retry_after:
         try:
@@ -164,13 +164,12 @@ def fetch_commits_rest(
     detailed_fetched = 0
     target_pages = pages if pages is not None else api_config.max_pages
 
-    current_page = 1 # Usamos un contador manual
+    current_page = 1
 
     while True:
         if target_pages is not None and current_page > target_pages:
             logger.info(f"Reached pagination limit of {target_pages} pages.")
             break
-    # Fetch Summary List
         if detailed_fetched >= max_detailed_total:
             break
 

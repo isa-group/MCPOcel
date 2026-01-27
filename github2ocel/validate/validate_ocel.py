@@ -10,8 +10,8 @@ from shared.logger.logging_config import get_logger
 logger = get_logger(__name__)
 
 def validate_ocel(ocel_path, schema_path=Path("schemas/ocel_2_0.json")):
-    if schema_path is None:
-        raise ValueError("Schema path cannot be None")
+    if schema_path.is_file() is False:
+        raise ValueError("Schema path must be a file")
 
     logger.info("Starting OCEL validation...")
 
