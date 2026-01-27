@@ -23,7 +23,7 @@ storage/
 
 github2ocel/logs/*.log
 logs/
-
+personal/
 # PyCharm / IntelliJ
 .idea/
 *.iws
