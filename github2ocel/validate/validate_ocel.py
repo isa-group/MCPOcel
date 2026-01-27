@@ -1,7 +1,11 @@
 import json
-from jsonschema import validate, ValidationError
-from shared.logger.logging_config import get_logger
+import sys
 from pathlib import Path
+from jsonschema import validate, ValidationError
+
+# Add parent directory to path for shared module access
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from shared.logger.logging_config import get_logger
 
 logger = get_logger(__name__)
 

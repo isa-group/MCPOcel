@@ -1,11 +1,13 @@
 import os
+import sys
 from dotenv import load_dotenv
 from datetime import datetime
 from pathlib import Path
+from config.settings import APIConfig
 
-# Configs & Utils
-from config.settings import APIConfig, LoggingConfig
-from shared.logger.logging_config import setup_logging, get_logger
+# Add parent directory to path for shared module access
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from shared.logger.logging_config import setup_logging, get_logger, LoggingConfig
 
 
 from transform.builder import OCELBuilder

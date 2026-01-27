@@ -3,7 +3,7 @@ import time
 import requests
 from typing import List, Dict, Any, Optional
 
-from config.settings import APIConfig
+from github2ocel.config.settings import APIConfig
 
 logger = logging.getLogger(__name__)
 
