@@ -12,6 +12,7 @@ pip-delete-this-directory.txt
 
 # --- Environment variables ---
 .env*
+!.env.example
 
 # --- Data & Storage (ETL) ---
 github2ocel/storage/*.json
