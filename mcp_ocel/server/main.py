@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from mcp.server.mcp_ocel_server import run_mcp_server
+from mcp_ocel.server.mcp_ocel_server import run_mcp_server_tcp
 
 
 def main() -> None:
@@ -28,7 +28,7 @@ def main() -> None:
     )
 
     args = parser.parse_args()
-    run_mcp_server(ocel_path=args.ocel_path, debug=args.debug)
+    run_mcp_server_tcp(ocel_path=args.ocel_path, debug=args.debug)
 
 
 if __name__ == "__main__":
