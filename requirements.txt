@@ -1,6 +1,6 @@
-requests
-python-dotenv
-jsonschema
+requests==2.32.5
+python-dotenv==1.2.1
+jsonschema==4.26.0
 pm4py==2.7.19.6
 mcp>=1.25,<2
 ijson==3.4.0.post0
