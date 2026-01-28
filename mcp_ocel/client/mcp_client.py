@@ -1,15 +1,16 @@
-"""MCP Client to communicate with the OCEL MCP Server via JSON-RPC 2.0 over TCP."""
+"""MCP Client to communicate with the OCEL MCP Server via HTTP (Streamable HTTP transport)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
-import socket
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import httpx
+
 # Default server connection settings
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 9820
+DEFAULT_URL = "http://127.0.0.1:8000/mcp"
 
 
 @dataclass
@@ -29,53 +30,77 @@ class MCPClientError(Exception):
 
 
 class MCPClient:
-    """Client to communicate with the MCP server via TCP socket (JSON-RPC 2.0)."""
+    """
+    Async client to communicate with the MCP server via HTTP.
+    
+    Uses the Streamable HTTP transport for MCP communication.
+    Designed to connect to an already-running server.
+    
+    Usage:
+        async with MCPClient("http://localhost:8000/mcp") as client:
+            tools = await client.list_tools()
+            result = await client.call_tool("get_statistics_by_object_type", {})
+    """
 
     def __init__(
         self,
-        host: str = DEFAULT_HOST,
-        port: int = DEFAULT_PORT,
+        server_url: str = DEFAULT_URL,
         timeout: float = 30.0,
     ):
         """
         Initialize the MCP client.
 
         Args:
-            host: Server hostname or IP address.
-            port: Server TCP port.
-            timeout: Socket timeout in seconds.
+            server_url: MCP server endpoint URL (e.g., http://localhost:8000/mcp)
+            timeout: Request timeout in seconds.
         """
-        self.host = host
-        self.port = port
+        self.server_url = server_url.rstrip("/")
         self.timeout = timeout
-        self._socket: Optional[socket.socket] = None
+        self._client: Optional[httpx.AsyncClient] = None
         self._request_id = 0
+        self._session_id: Optional[str] = None
 
-    def connect(self) -> None:
-        """Connect to the MCP server."""
-        if self._socket is not None:
+    async def connect(self) -> None:
+        """Connect to the MCP server and initialize session."""
+        if self._client is not None:
             return
 
         try:
-            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._socket.settimeout(self.timeout)
-            self._socket.connect((self.host, self.port))
-        except socket.error as e:
-            self._socket = None
-            raise MCPClientError(f"Failed to connect to {self.host}:{self.port}: {e}")
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+            
+            # Initialize MCP session
+            result = await self._send_request("initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "ocel-mcp-client",
+                    "version": "0.1.0",
+                },
+            })
+            
+            # Send initialized notification
+            await self._send_notification("notifications/initialized", {})
+            
+        except httpx.ConnectError as e:
+            self._client = None
+            raise MCPClientError(f"Failed to connect to {self.server_url}: {e}")
+        except Exception as e:
+            self._client = None
+            raise MCPClientError(f"Failed to initialize MCP session: {e}")
 
-    def disconnect(self) -> None:
+    async def disconnect(self) -> None:
         """Disconnect from the MCP server."""
-        if self._socket is not None:
+        if self._client is not None:
             try:
-                self._socket.close()
+                await self._client.aclose()
             except Exception:
                 pass
-            self._socket = None
+            self._client = None
+            self._session_id = None
 
-    def _send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Send a JSON-RPC 2.0 request and wait for response."""
-        if self._socket is None:
+    async def _send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Send a JSON-RPC 2.0 request over HTTP and wait for response."""
+        if self._client is None:
             raise MCPClientError("Not connected. Call connect() first.")
 
         self._request_id += 1
@@ -88,30 +113,45 @@ class MCPClient:
             request["params"] = params
 
         try:
-            # Send request (newline-delimited JSON)
-            message = json.dumps(request) + "\n"
-            self._socket.sendall(message.encode("utf-8"))
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            }
+            if self._session_id:
+                headers["Mcp-Session-Id"] = self._session_id
+            
+            response = await self._client.post(
+                self.server_url,
+                json=request,
+                headers=headers,
+            )
+            
+            # Store session ID if returned
+            if "Mcp-Session-Id" in response.headers:
+                self._session_id = response.headers["Mcp-Session-Id"]
+            
+            if response.status_code >= 400:
+                raise MCPClientError(f"Server error {response.status_code}: {response.text}")
+            
+            # Handle SSE or JSON response
+            content_type = response.headers.get("Content-Type", "")
+            
+            if "text/event-stream" in content_type:
+                # Parse SSE response
+                return await self._parse_sse_response(response.text)
+            else:
+                # Regular JSON response
+                result = response.json()
+                
+                if "error" in result:
+                    error = result["error"]
+                    if isinstance(error, dict):
+                        raise MCPClientError(f"Server error: {error.get('message', error)}")
+                    raise MCPClientError(f"Server error: {error}")
+                
+                return result.get("result", {})
 
-            # Receive response (read until newline)
-            buffer = b""
-            while b"\n" not in buffer:
-                chunk = self._socket.recv(4096)
-                if not chunk:
-                    raise MCPClientError("Connection closed by server")
-                buffer += chunk
-
-            response_line = buffer.split(b"\n")[0]
-            response = json.loads(response_line.decode("utf-8"))
-
-            if "error" in response:
-                error = response["error"]
-                if isinstance(error, dict):
-                    raise MCPClientError(f"Server error: {error.get('message', error)}")
-                raise MCPClientError(f"Server error: {error}")
-
-            return response.get("result", {})
-
-        except socket.timeout:
+        except httpx.TimeoutException:
             raise MCPClientError("Request timed out")
         except json.JSONDecodeError as e:
             raise MCPClientError(f"Invalid JSON response: {e}")
@@ -120,46 +160,139 @@ class MCPClient:
         except Exception as e:
             raise MCPClientError(f"Communication error: {e}")
 
-    def initialize(self) -> Dict[str, Any]:
-        """Send initialize request to the server."""
-        return self._send_request("initialize")
+    async def _parse_sse_response(self, sse_text: str) -> Dict[str, Any]:
+        """Parse SSE response and extract the result."""
+        for line in sse_text.strip().split("\n"):
+            if line.startswith("data:"):
+                data = line[5:].strip()
+                try:
+                    result = json.loads(data)
+                    if "error" in result:
+                        error = result["error"]
+                        if isinstance(error, dict):
+                            raise MCPClientError(f"Server error: {error.get('message', error)}")
+                        raise MCPClientError(f"Server error: {error}")
+                    return result.get("result", {})
+                except json.JSONDecodeError:
+                    continue
+        return {}
 
-    def get_ocel_info(self) -> OcelInfo:
-        """Get OCEL metadata from the server."""
-        result = self._send_request("ocel/info")
-        return OcelInfo(
-            object_types=result.get("object_types", []),
-            event_types=result.get("event_types", []),
-            total_objects=result.get("total_objects", 0),
-            total_events=result.get("total_events", 0),
-            start_date=result.get("start_date", "N/A"),
-            end_date=result.get("end_date", "N/A"),
-        )
+    async def _send_notification(self, method: str, params: Optional[Dict[str, Any]] = None) -> None:
+        """Send a JSON-RPC 2.0 notification (no response expected)."""
+        if self._client is None:
+            raise MCPClientError("Not connected. Call connect() first.")
 
-    def list_tools(self) -> List[Dict[str, Any]]:
+        request = {
+            "jsonrpc": "2.0",
+            "method": method,
+        }
+        if params:
+            request["params"] = params
+
+        try:
+            headers = {"Content-Type": "application/json"}
+            if self._session_id:
+                headers["Mcp-Session-Id"] = self._session_id
+            
+            await self._client.post(
+                self.server_url,
+                json=request,
+                headers=headers,
+            )
+        except Exception:
+            # Notifications don't require response handling
+            pass
+
+    async def list_tools(self) -> List[Dict[str, Any]]:
         """List available tools from the server."""
-        result = self._send_request("tools/list")
+        result = await self._send_request("tools/list")
         return result.get("tools", [])
 
-    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Call a tool on the server."""
-        return self._send_request("tools/call", {"name": tool_name, "arguments": arguments})
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Call a tool on the server.
+        
+        Args:
+            tool_name: Name of the tool to call
+            arguments: Tool arguments
+            
+        Returns:
+            Tool result as dictionary
+        """
+        result = await self._send_request("tools/call", {
+            "name": tool_name,
+            "arguments": arguments,
+        })
+        
+        # Extract content from MCP tool response format
+        if isinstance(result, dict):
+            content = result.get("content", [])
+            if content and isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        try:
+                            return json.loads(item.get("text", "{}"))
+                        except json.JSONDecodeError:
+                            return {"text": item.get("text", "")}
+            # Return structured content if available
+            if "structuredContent" in result:
+                return result["structuredContent"]
+        
+        return result
 
-    def get_schema_section(self, section: Optional[str] = None) -> Dict[str, Any]:
+    async def list_resources(self) -> List[Dict[str, Any]]:
+        """List available resources from the server."""
+        result = await self._send_request("resources/list")
+        return result.get("resources", [])
+
+    async def read_resource(self, uri: str) -> str:
+        """
+        Read a resource from the server.
+        
+        Args:
+            uri: Resource URI (e.g., ocel://info)
+            
+        Returns:
+            Resource content as string
+        """
+        result = await self._send_request("resources/read", {"uri": uri})
+        
+        contents = result.get("contents", [])
+        if contents and isinstance(contents, list):
+            content = contents[0]
+            if isinstance(content, dict):
+                return content.get("text", "")
+        
+        return ""
+
+    async def get_ocel_info(self) -> OcelInfo:
+        """Get OCEL metadata from the server."""
+        content = await self.read_resource("ocel://info")
+        data = json.loads(content) if content else {}
+        
+        return OcelInfo(
+            object_types=data.get("object_types", []),
+            event_types=data.get("event_types", []),
+            total_objects=data.get("total_objects", 0),
+            total_events=data.get("total_events", 0),
+            start_date=data.get("start_date", "N/A"),
+            end_date=data.get("end_date", "N/A"),
+        )
+
+    async def get_schema_section(self, section: str) -> Dict[str, Any]:
         """
         Get OCEL schema sections from the server.
 
         Args:
-            section: Specific section to retrieve (eventTypes, objectTypes, events, objects, attributes).
-                    If None, returns index of available sections.
+            section: Section to retrieve (eventTypes, objectTypes, events, objects, attributes)
 
         Returns:
             Dict with schema section data.
         """
-        params = {"section": section} if section else {}
-        return self._send_request("ocel/schema", params)
+        content = await self.read_resource(f"ocel://schema/{section}")
+        return json.loads(content) if content else {}
 
-    def search_ocel(
+    async def search_ocel(
         self,
         query: str,
         top_k: int = 5,
@@ -168,28 +301,90 @@ class MCPClient:
         """
         Perform hybrid semantic search over OCEL data.
 
-        Combines BM25 keyword matching with embedding-based semantic search
-        using Reciprocal Rank Fusion (RRF) for optimal results.
-
         Args:
             query: Natural language query to search for.
             top_k: Number of results to return (default: 5).
-            chunk_types: Optional filter for chunk types:
-                - 'metadata': Global log metadata
-                - 'event_type': Event type definitions
-                - 'object_type': Object type definitions
-                - 'events_batch': Batches of events
-                - 'objects_batch': Batches of objects
+            chunk_types: Optional filter for chunk types.
 
         Returns:
-            Dict with search results containing relevant OCEL chunks.
+            Dict with search results.
         """
-        params = {"query": query, "top_k": top_k}
+        args = {"query": query, "top_k": top_k}
         if chunk_types:
-            params["chunk_types"] = chunk_types
-        return self._send_request("ocel/search", params)
+            args["chunk_types"] = chunk_types
+        return await self.call_tool("search_ocel", args)
 
-    def __enter__(self) -> "MCPClient":
+    async def __aenter__(self) -> "MCPClient":
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.disconnect()
+
+
+# ============================================================================
+# Sync wrapper for compatibility with existing code
+# ============================================================================
+
+class SyncMCPClient:
+    """
+    Synchronous wrapper over async MCPClient for compatibility.
+    Runs async operations in an event loop.
+    """
+    
+    def __init__(self, server_url: str = DEFAULT_URL, timeout: float = 30.0):
+        self.server_url = server_url
+        self.timeout = timeout
+        self._async_client: Optional[MCPClient] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def connect(self) -> None:
+        """Connect to the server."""
+        self._loop = asyncio.new_event_loop()
+        self._async_client = MCPClient(self.server_url, self.timeout)
+        self._loop.run_until_complete(self._async_client.connect())
+
+    def disconnect(self) -> None:
+        """Disconnect from the server."""
+        if self._async_client and self._loop:
+            self._loop.run_until_complete(self._async_client.disconnect())
+            self._loop.close()
+            self._async_client = None
+            self._loop = None
+
+    def list_tools(self) -> List[Dict[str, Any]]:
+        if not self._async_client or not self._loop:
+            raise MCPClientError("Not connected")
+        return self._loop.run_until_complete(self._async_client.list_tools())
+
+    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._async_client or not self._loop:
+            raise MCPClientError("Not connected")
+        return self._loop.run_until_complete(self._async_client.call_tool(tool_name, arguments))
+
+    def get_ocel_info(self) -> OcelInfo:
+        if not self._async_client or not self._loop:
+            raise MCPClientError("Not connected")
+        return self._loop.run_until_complete(self._async_client.get_ocel_info())
+
+    def get_schema_section(self, section: str) -> Dict[str, Any]:
+        if not self._async_client or not self._loop:
+            raise MCPClientError("Not connected")
+        return self._loop.run_until_complete(self._async_client.get_schema_section(section))
+
+    def search_ocel(
+        self,
+        query: str,
+        top_k: int = 5,
+        chunk_types: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        if not self._async_client or not self._loop:
+            raise MCPClientError("Not connected")
+        return self._loop.run_until_complete(
+            self._async_client.search_ocel(query, top_k, chunk_types)
+        )
+
+    def __enter__(self) -> "SyncMCPClient":
         self.connect()
         return self
 

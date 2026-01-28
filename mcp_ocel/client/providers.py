@@ -46,8 +46,7 @@ class GeminiProvider(BaseProvider):
         prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
         response = self.client.models.generate_content(
             model=f"models/{model}" if not model.startswith("models/") else model,
-            contents=prompt,
-            stream=True,
+            contents=prompt
         )
         
         for chunk in response:

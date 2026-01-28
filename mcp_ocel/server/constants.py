@@ -28,8 +28,7 @@ MCP_IMPLEMENTATION_VERSION: Final[str] = "0.1.0"
 class LoadStrategy(str, Enum):
     """OCEL file loading strategy."""
     PM4PY = "pm4py"  # < 100MB
-    IJSON = "ijson"  # 100MB-1GB
-    DUCKDB = "duckdb"  # > 1GB
+    IJSON = "ijson"  # >= 100MB (streaming)
 
 
 class ErrorType(str, Enum):

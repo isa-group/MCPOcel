@@ -42,8 +42,8 @@ class ProcessMiningEngine:
             self.format = "dict"
             logger.debug("Detected format: dict (ijson)")
         else:
-            self.format = "duckdb"
-            logger.debug("Detected format: DuckDB")
+            self.format = "unknown"
+            logger.warning("Unknown OCEL format - some operations may not work")
     
     def discover_dfg(
         self, object_type: Optional[str] = None
@@ -61,11 +61,8 @@ class ProcessMiningEngine:
         
         if self.format == "pm4py":
             return self._discover_dfg_pm4py(object_type)
-        elif self.format == "dict":
-            return self._discover_dfg_dict(object_type)
         else:
-            logger.warning("DFG discovery with DuckDB: not implemented")
-            return {}, {}
+            return self._discover_dfg_dict(object_type)
     
     def _discover_dfg_pm4py(
         self, object_type: Optional[str] = None
@@ -162,11 +159,8 @@ class ProcessMiningEngine:
         
         if self.format == "pm4py":
             return self._discover_petri_net_pm4py(object_type)
-        elif self.format == "dict":
-            return self._discover_petri_net_dict(object_type)
         else:
-            logger.warning("Petri net discovery with DuckDB: not implemented")
-            return {}
+            return self._discover_petri_net_dict(object_type)
     
     def _discover_petri_net_pm4py(
         self, object_type: Optional[str] = None
@@ -254,11 +248,8 @@ class ProcessMiningEngine:
         
         if self.format == "pm4py":
             return self._variants_pm4py(object_type, limit)
-        elif self.format == "dict":
-            return self._variants_dict(object_type, limit)
         else:
-            logger.warning("Variant extraction with DuckDB: not implemented")
-            return []
+            return self._variants_dict(object_type, limit)
     
     def _variants_pm4py(
         self, object_type: Optional[str] = None, limit: int = 10
@@ -334,10 +325,8 @@ class ProcessMiningEngine:
         
         if self.format == "pm4py":
             return self._stats_pm4py()
-        elif self.format == "dict":
-            return self._stats_dict()
         else:
-            return self._stats_duckdb()
+            return self._stats_dict()
     
     def _stats_pm4py(self) -> Dict[str, Any]:
         """Statistics using PM4PY."""
@@ -374,8 +363,3 @@ class ProcessMiningEngine:
             "object_types": len(object_types),
             "event_types": len(event_types),
         }
-    
-    def _stats_duckdb(self) -> Dict[str, Any]:
-        """Statistics using DuckDB (placeholder)."""
-        logger.warning("DuckDB statistics: not implemented")
-        return {}

@@ -17,10 +17,12 @@ pip-delete-this-directory.txt
 # --- Data & Storage (ETL) ---
 github2ocel/storage/*.json
 github2ocel/storage/*.ocel
+storage/
 # Allow all .gitkeep files in any directory
 !**/.gitkeep
 
 github2ocel/logs/*.log
+logs/
 
 # PyCharm / IntelliJ
 .idea/

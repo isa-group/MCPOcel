@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import re
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Dict, List, Optional
 
 import tiktoken
 
-from .mcp_client import MCPClient, MCPClientError, OcelInfo, DEFAULT_HOST, DEFAULT_PORT
+from .mcp_client import MCPClient, MCPClientError, OcelInfo, DEFAULT_URL
 from .providers import ProviderError, build_provider
 
-DEFAULT_PROVIDER = "openai"
-DEFAULT_MODEL = "GPT-5.2"
+DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
+DEFAULT_MODEL = os.getenv("LLM_MODEL", "GPT-4o")
+print(f"Provider: {DEFAULT_PROVIDER}, Model: {DEFAULT_MODEL}")
 
 
 @dataclass
@@ -130,28 +131,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MCP client for OCEL schema Q&A")
     parser.add_argument("--provider", default=DEFAULT_PROVIDER, choices=["openai", "gemini"], help="LLM provider")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="LLM model name")
-    parser.add_argument("--host", default=DEFAULT_HOST, help=f"MCP server host (default: {DEFAULT_HOST})")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"MCP server port (default: {DEFAULT_PORT})")
-    parser.add_argument("-f", "--force", action="store_true", help="Omitir confirmacion de coste antes de enviar")
+    parser.add_argument("--url", default=DEFAULT_URL, help=f"MCP server URL (default: {DEFAULT_URL})")
+    parser.add_argument("-f", "--force", action="store_true", help="Skip cost confirmation before sending")
     return parser
 
 
-def create_mcp_client(host: str, port: int) -> MCPClient:
+async def create_mcp_client(url: str) -> MCPClient:
     """Create and connect to MCP server."""
-    client = MCPClient(host=host, port=port)
+    client = MCPClient(server_url=url)
     try:
-        client.connect()
-        client.initialize()
+        await client.connect()
         return client
     except MCPClientError as e:
         print(f"Error connecting to MCP server: {e}")
-        print(f"Make sure the server is running: python -m mcp.server --ocel-path <path>")
+        print(f"Make sure the server is running: python -m mcp_ocel.server --ocel-path <path>")
         sys.exit(1)
 
 
-def fetch_metadata_from_server(client: MCPClient) -> OcelMetadata:
+async def fetch_metadata_from_server(client: MCPClient) -> OcelMetadata:
     """Fetch OCEL metadata from connected MCP server."""
-    info = client.get_ocel_info()
+    info = await client.get_ocel_info()
     return OcelMetadata(
         object_types=info.object_types,
         event_types=info.event_types,
@@ -178,28 +177,28 @@ def extract_tool_calls(text: str) -> List[Dict]:
     return tool_calls
 
 
-def execute_tool_call(client: MCPClient, tool_call: Dict) -> str:
+async def execute_tool_call(client: MCPClient, tool_call: Dict) -> str:
     """Execute a tool call and return the result."""
     tool_name = tool_call.get("tool", "")
     params = tool_call.get("params", {})
 
     try:
         if tool_name == "get_schema_section":
-            section = params.get("section")
-            result = client.get_schema_section(section)
-            return f"**Schema Section: {section or 'index'}**\n```json\n{json.dumps(result, indent=2)}\n```"
+            section = params.get("section", "eventTypes")
+            result = await client.get_schema_section(section)
+            return f"**Schema Section: {section}**\n```json\n{json.dumps(result, indent=2)}\n```"
 
         elif tool_name == "call_mcp_tool":
             mcp_tool = params.get("tool_name", "")
             mcp_args = params.get("arguments", {})
-            result = client.call_tool(mcp_tool, mcp_args)
+            result = await client.call_tool(mcp_tool, mcp_args)
             return f"**MCP Tool: {mcp_tool}**\n```json\n{json.dumps(result, indent=2)}\n```"
 
         elif tool_name == "search_ocel":
             query = params.get("query", "")
             top_k = params.get("top_k", 5)
             chunk_types = params.get("chunk_types")
-            result = client.search_ocel(query, top_k, chunk_types)
+            result = await client.search_ocel(query, top_k, chunk_types)
             return f"**OCEL Search: {query[:50]}**\n```json\n{json.dumps(result, indent=2)}\n```"
 
         else:
@@ -209,14 +208,14 @@ def execute_tool_call(client: MCPClient, tool_call: Dict) -> str:
         return f"Tool error: {e}"
 
 
-def enrich_context_with_search(client: MCPClient, user_query: str) -> Optional[str]:
+async def enrich_context_with_search(client: MCPClient, user_query: str) -> Optional[str]:
     """
     Use hybrid search to find relevant OCEL context for the user's query.
     
     Returns formatted context string or None if search fails/unavailable.
     """
     try:
-        result = client.search_ocel(query=user_query, top_k=3)
+        result = await client.search_ocel(query=user_query, top_k=3)
         
         if "error" in result:
             return None
@@ -238,129 +237,129 @@ def enrich_context_with_search(client: MCPClient, user_query: str) -> Optional[s
         return None
 
 
-def interactive_chat(args: argparse.Namespace) -> None:
-    print(f"Connecting to MCP server at {args.host}:{args.port}...")
-    mcp_client = create_mcp_client(args.host, args.port)
+async def interactive_chat_async(args: argparse.Namespace) -> None:
+    """Main interactive chat loop (async version)."""
+    print(f"Connecting to MCP server at {args.url}...")
+    
+    async with MCPClient(args.url) as mcp_client:
+        # Get OCEL metadata from MCP server
+        meta = await fetch_metadata_from_server(mcp_client)
+        print(f"  Object Types: {meta.object_types}")
+        print(f"  Event Types: {meta.event_types}")
+        print(f"  Objects: {meta.total_objects:,} | Events: {meta.total_events:,}")
+        print(f"  Time Range: {meta.start_date} to {meta.end_date}")
 
-    # Get OCEL metadata from MCP server
-    meta = fetch_metadata_from_server(mcp_client)
-    print(f"  Object Types: {meta.object_types}")
-    print(f"  Event Types: {meta.event_types}")
-    print(f"  Objects: {meta.total_objects:,} | Events: {meta.total_events:,}")
-    print(f"  Time Range: {meta.start_date} to {meta.end_date}")
+        system_prompt = format_system_prompt(meta)
 
-    system_prompt = format_system_prompt(meta)
+        try:
+            provider = build_provider(args.provider)
+        except ProviderError as exc:
+            print(f"Provider error: {exc}")
+            sys.exit(1)
 
-    try:
-        provider = build_provider(args.provider)
-    except ProviderError as exc:
-        print(f"Provider error: {exc}")
-        mcp_client.disconnect()
-        sys.exit(1)
+        # Only system prompt - no full schema (retrieval-based)
+        base_messages: List[Dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
+        ]
+        history: List[Dict[str, str]] = base_messages.copy()
 
-    # Only system prompt - no full schema (retrieval-based)
-    base_messages: List[Dict[str, str]] = [
-        {"role": "system", "content": system_prompt},
-    ]
-    history: List[Dict[str, str]] = base_messages.copy()
+        print(f"\nProvider: {args.provider} | Model: {args.model}")
+        print("Type :quit or Ctrl+C to exit.\n")
 
-    print(f"\nProvider: {args.provider} | Model: {args.model}")
-    print("Type :quit or Ctrl+C to exit.\n")
+        try:
+            while True:
+                try:
+                    user_text = input("You> ").strip()
+                except (KeyboardInterrupt, EOFError):
+                    print("\nExiting.")
+                    break
 
-    try:
-        while True:
-            try:
-                user_text = input("You> ").strip()
-            except KeyboardInterrupt:
-                print("\nExiting.")
-                break
-
-            if not user_text:
-                continue
-            if user_text.lower() in {":quit", ":exit"}:
-                break
-
-            # Enrich context with hybrid search before sending to LLM
-            search_context = enrich_context_with_search(mcp_client, user_text)
-            if search_context:
-                enriched_query = f"{user_text}\n\n{search_context}"
-                print("  [Hybrid search context added]")
-            else:
-                enriched_query = user_text
-
-            messages = history + [{"role": "user", "content": enriched_query}]
-            prompt_tokens = estimate_tokens(messages, args.model)
-            print(f"Estimated prompt tokens: {prompt_tokens}")
-            if not args.force:
-                confirm = input("Send? [y/N]: ").strip().lower()
-                if confirm not in {"y", "yes"}:
-                    print("Cancelled.")
+                if not user_text:
                     continue
+                if user_text.lower() in {":quit", ":exit"}:
+                    break
 
-            print("Assistant> ", end="", flush=True)
-            chunks: List[str] = []
-            try:
-                for chunk in provider.stream_chat(messages, args.model):
-                    chunks.append(chunk)
-                    print(chunk, end="", flush=True)
-                print()
-            except KeyboardInterrupt:
-                print("\nInterrupted.")
-                continue
-            except Exception as exc:
-                print(f"\nError from provider: {exc}")
-                continue
+                # Enrich context with hybrid search before sending to LLM
+                search_context = await enrich_context_with_search(mcp_client, user_text)
+                if search_context:
+                    enriched_query = f"{user_text}\n\n{search_context}"
+                    print("  [Hybrid search context added]")
+                else:
+                    enriched_query = user_text
 
-            assistant_reply = "".join(chunks)
+                messages = history + [{"role": "user", "content": enriched_query}]
+                prompt_tokens = estimate_tokens(messages, args.model)
+                print(f"Estimated prompt tokens: {prompt_tokens}")
+                if not args.force:
+                    confirm = input("Send? [y/N]: ").strip().lower()
+                    if confirm not in {"y", "yes"}:
+                        print("Cancelled.")
+                        continue
 
-            # Check for tool calls in the response
-            tool_calls = extract_tool_calls(assistant_reply)
-            if tool_calls:
-                print("\n[Executing tool calls...]")
-                tool_results = []
-                for tc in tool_calls:
-                    print(f"  → {tc.get('tool', 'unknown')}")
-                    result = execute_tool_call(mcp_client, tc)
-                    tool_results.append(result)
-                    print(f"    ✓ Done")
-
-                # Add tool results to context and continue conversation
-                tool_context = "\n\n".join(tool_results)
-                history.extend([
-                    {"role": "user", "content": user_text},
-                    {"role": "assistant", "content": assistant_reply},
-                    {"role": "user", "content": f"Tool results:\n{tool_context}\n\nPlease continue your analysis with this information."},
-                ])
-
-                # Auto-continue with tool results
-                messages = history.copy()
-                print("\nAssistant> ", end="", flush=True)
-                chunks = []
+                print("Assistant> ", end="", flush=True)
+                chunks: List[str] = []
                 try:
                     for chunk in provider.stream_chat(messages, args.model):
                         chunks.append(chunk)
                         print(chunk, end="", flush=True)
                     print()
+                except KeyboardInterrupt:
+                    print("\nInterrupted.")
+                    continue
                 except Exception as exc:
-                    print(f"\nError: {exc}")
+                    print(f"\nError from provider: {exc}")
                     continue
 
-                followup_reply = "".join(chunks)
-                history.append({"role": "assistant", "content": followup_reply})
-            else:
-                history.extend([
-                    {"role": "user", "content": user_text},
-                    {"role": "assistant", "content": assistant_reply},
-                ])
+                assistant_reply = "".join(chunks)
 
-    finally:
-        mcp_client.disconnect()
+                # Check for tool calls in the response
+                tool_calls = extract_tool_calls(assistant_reply)
+                if tool_calls:
+                    print("\n[Executing tool calls...]")
+                    tool_results = []
+                    for tc in tool_calls:
+                        print(f"  → {tc.get('tool', 'unknown')}")
+                        result = await execute_tool_call(mcp_client, tc)
+                        tool_results.append(result)
+                        print(f"    ✓ Done")
+
+                    # Add tool results to context and continue conversation
+                    tool_context = "\n\n".join(tool_results)
+                    history.extend([
+                        {"role": "user", "content": user_text},
+                        {"role": "assistant", "content": assistant_reply},
+                        {"role": "user", "content": f"Tool results:\n{tool_context}\n\nPlease continue your analysis with this information."},
+                    ])
+
+                    # Auto-continue with tool results
+                    messages = history.copy()
+                    print("\nAssistant> ", end="", flush=True)
+                    chunks = []
+                    try:
+                        for chunk in provider.stream_chat(messages, args.model):
+                            chunks.append(chunk)
+                            print(chunk, end="", flush=True)
+                        print()
+                    except Exception as exc:
+                        print(f"\nError: {exc}")
+                        continue
+
+                    followup_reply = "".join(chunks)
+                    history.append({"role": "assistant", "content": followup_reply})
+                else:
+                    history.extend([
+                        {"role": "user", "content": user_text},
+                        {"role": "assistant", "content": assistant_reply},
+                    ])
+
+        except Exception as e:
+            print(f"\nError: {e}")
 
 
 def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
-    interactive_chat(args)
+    asyncio.run(interactive_chat_async(args))
 
 
 if __name__ == "__main__":

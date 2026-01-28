@@ -34,8 +34,8 @@ class OCELQueryEngine:
             self.format = "dict"
             logger.debug("Detected format: dict (ijson)")
         else:
-            self.format = "duckdb"
-            logger.debug("Detected format: DuckDB")
+            self.format = "unknown"
+            logger.warning("Unknown OCEL format - some operations may not work")
     
     def trace_object_lifecycle(self, object_id: str) -> List[EventReference]:
         """
@@ -54,10 +54,8 @@ class OCELQueryEngine:
         
         if self.format == "pm4py":
             return self._trace_lifecycle_pm4py(object_id)
-        elif self.format == "dict":
-            return self._trace_lifecycle_dict(object_id)
         else:
-            return self._trace_lifecycle_duckdb(object_id)
+            return self._trace_lifecycle_dict(object_id)
     
     def _trace_lifecycle_pm4py(self, object_id: str) -> List[EventReference]:
         """Lifecycle tracing using PM4PY."""
@@ -129,11 +127,6 @@ class OCELQueryEngine:
         logger.info(f"Lifecycle for {object_id}: {len(references)} events")
         return references
     
-    def _trace_lifecycle_duckdb(self, object_id: str) -> List[EventReference]:
-        """Lifecycle tracing using DuckDB (placeholder)."""
-        logger.warning("DuckDB lifecycle trace: not yet implemented")
-        return []
-    
     def query_events_by_timerange(
         self,
         start_datetime: str,
@@ -162,10 +155,8 @@ class OCELQueryEngine:
         
         if self.format == "pm4py":
             return self._timerange_pm4py(start, end)
-        elif self.format == "dict":
-            return self._timerange_dict(start, end)
         else:
-            return self._timerange_duckdb(start, end)
+            return self._timerange_dict(start, end)
     
     def _timerange_pm4py(self, start: datetime, end: datetime) -> List[EventReference]:
         """Time range query using PM4PY."""
@@ -232,11 +223,6 @@ class OCELQueryEngine:
         logger.info(f"Events in range: {len(references)}")
         return references
     
-    def _timerange_duckdb(self, start: datetime, end: datetime) -> List[EventReference]:
-        """Time range query using DuckDB (placeholder)."""
-        logger.warning("DuckDB timerange query: not yet implemented")
-        return []
-    
     def get_statistics_by_object_type(self) -> Dict[str, Any]:
         """
         Calculates statistics by object type.
@@ -248,10 +234,8 @@ class OCELQueryEngine:
         
         if self.format == "pm4py":
             return self._stats_pm4py()
-        elif self.format == "dict":
-            return self._stats_dict()
         else:
-            return self._stats_duckdb()
+            return self._stats_dict()
     
     def _stats_pm4py(self) -> Dict[str, Any]:
         """Statistics using PM4PY."""
@@ -283,11 +267,6 @@ class OCELQueryEngine:
         logger.info(f"Statistics: {len(stats_by_type)} object types")
         return stats_by_type
     
-    def _stats_duckdb(self) -> Dict[str, Any]:
-        """Statistics using DuckDB (placeholder)."""
-        logger.warning("DuckDB statistics: not yet implemented")
-        return {}
-    
     def detect_anomalies(self) -> List[AnomalyReport]:
         """
         Detects anomalies in the log.
@@ -304,10 +283,8 @@ class OCELQueryEngine:
         
         if self.format == "pm4py":
             return self._anomalies_pm4py()
-        elif self.format == "dict":
-            return self._anomalies_dict()
         else:
-            return self._anomalies_duckdb()
+            return self._anomalies_dict()
     
     def _anomalies_pm4py(self) -> List[AnomalyReport]:
         """Anomaly detection using PM4PY."""
@@ -375,11 +352,6 @@ class OCELQueryEngine:
         logger.info(f"Anomalies detected: {len(anomalies)}")
         return anomalies
     
-    def _anomalies_duckdb(self) -> List[AnomalyReport]:
-        """Anomaly detection using DuckDB (placeholder)."""
-        logger.warning("DuckDB anomaly detection: not yet implemented")
-        return []
-    
     def find_orphaned_objects(self) -> List[str]:
         """
         Finds objects that do not participate in any event.
@@ -391,10 +363,8 @@ class OCELQueryEngine:
         
         if self.format == "pm4py":
             return self._orphaned_pm4py()
-        elif self.format == "dict":
-            return self._orphaned_dict()
         else:
-            return self._orphaned_duckdb()
+            return self._orphaned_dict()
     
     def _orphaned_pm4py(self) -> List[str]:
         """Orphaned objects using PM4PY."""
@@ -420,8 +390,3 @@ class OCELQueryEngine:
         orphaned = list(all_objects - objects_in_events)
         logger.info(f"Orphaned objects found: {len(orphaned)}")
         return orphaned
-    
-    def _orphaned_duckdb(self) -> List[str]:
-        """Orphaned objects using DuckDB (placeholder)."""
-        logger.warning("DuckDB orphaned objects: not yet implemented")
-        return []
