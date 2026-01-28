@@ -13,10 +13,6 @@ from typing import Any, Dict, List, Optional
 
 import tiktoken
 
-# Add parent directory to path for importing from server
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from mcp_ocel.server.typing_ocel import ToolResponse
 from .mcp_client import MCPClient, MCPClientError, OcelInfo, DEFAULT_URL
 from .providers import ProviderError, build_provider
 

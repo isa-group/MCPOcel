@@ -4,7 +4,6 @@ Combines verifiable references, markdown, visualization, and metadata.
 """
 
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 
 from .typing_ocel import UnifiedMCPResponse, EventReference, AnomalyReport
 from shared.logger.logging_config import get_logger

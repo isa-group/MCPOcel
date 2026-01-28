@@ -7,7 +7,6 @@ import hashlib
 import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional
-from pathlib import Path
 
 from . import constants
 from shared.logger.logging_config import get_logger

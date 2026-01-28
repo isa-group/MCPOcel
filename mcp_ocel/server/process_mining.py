@@ -7,7 +7,6 @@ from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 import hashlib
-import json
 
 from shared.logger.logging_config import get_logger
 from .typing_ocel import (
