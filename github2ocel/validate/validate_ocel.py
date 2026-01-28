@@ -18,7 +18,7 @@ def validate_ocel(ocel_path, schema_path=Path(SCHEMA_PATH)) -> bool:
 
     if schema_path is None:
         # Subimos 3 niveles: validate -> github2ocel -> raíz del proyecto
-        base_dir = Path(__file__).resolve().parent.parent.parent
+        base_dir = Path(__file__).resolve().parent.parent
         schema_path = base_dir / "schemas" / "ocel_2_0.json"
     else:
         schema_path = Path(schema_path)

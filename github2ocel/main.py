@@ -9,17 +9,17 @@ from config.settings import APIConfig
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.logger.logging_config import setup_logging, get_logger, LoggingConfig
 
-
-from transform.builder import OCELBuilder
-from transform.mappers import (
+from github2ocel.config.settings import APIConfig, LoggingConfig
+from github2ocel.transform.builder import OCELBuilder
+from github2ocel.transform.mappers import (
     process_workflow_run,
     process_issue_node,
     process_commit_rest,
     process_release
 )
-from extractor.rest import fetch_workflow_runs, fetch_commits_rest, fetch_releases
-from extractor.graphql import fetch_github_data
-from validate.validate_ocel import validate_ocel
+from github2ocel.extractor.rest import fetch_workflow_runs, fetch_commits_rest, fetch_releases
+from github2ocel.extractor.graphql import fetch_github_data
+from github2ocel.validate.validate_ocel import validate_ocel
 
 logger = get_logger(__name__)
 
@@ -64,6 +64,7 @@ def main():
             process_release(rel, builder, repo_id)
     except Exception:
         logger.exception("Error in Releases extraction phase")
+        errors_occurred = True
 
     # REST Commits (With Conventional Commits)
     try:
@@ -72,6 +73,7 @@ def main():
             process_commit_rest(commit, builder, repo_id)
     except Exception:
         logger.exception("Error in Commits extraction phase")
+        errors_occurred = True
 
     # REST Workflows
     try:
@@ -81,6 +83,7 @@ def main():
                 process_workflow_run(run, builder, repo_id)
     except Exception:
         logger.exception("Error in Workflow extraction phase")
+        errors_occurred = True
 
     if errors_occurred:
         logger.error("Data extraction encountered errors. Skipping export to protect data integrity.")
