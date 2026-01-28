@@ -66,20 +66,20 @@ def _rest_get(
                 # Rate Limit Case (403/429)
                 if response.status_code in (403, 429):
                     sleep_seconds = _calculate_sleep_time(response)
-                    if sleep_seconds > 0:
-                        if sleep_seconds > MAX_SLEEP_ALLOWED:
-                            logger.error(f"Rate limit reset is too far ({sleep_seconds}s). Aborting.")
-                            response.raise_for_status()
 
-                        logger.warning(f"Rate limit hit. Sleeping for {sleep_seconds}s...")
-                        time.sleep(sleep_seconds)
-                        continue # Retry after sleeping
-                    else:
-                        logger.error("Rate limit hit but no reset time provided by GitHub.")
+                    if sleep_seconds <= 0:
+                        logger.error("Rate limit hit but no reset time found. Aborting request.")
                         response.raise_for_status()
+                        break
 
-                # Other Case (401, 404, etc.))
-                response.raise_for_status()
+                    if sleep_seconds > MAX_SLEEP_ALLOWED:
+                        logger.error(f"Rate limit reset in {sleep_seconds}s. Too long. Aborting.")
+                        response.raise_for_status()
+                        break
+
+                    logger.warning(f"Rate limit hit. Sleeping for {sleep_seconds}s...")
+                    time.sleep(sleep_seconds)
+                    continue
 
         except requests.RequestException as e:
             if attempt == api_config.max_retries:
@@ -219,30 +219,33 @@ def fetch_releases(
     repo: str,
     token: str,
     api_config: APIConfig,
-    pages: int = 1,
+    pages: Optional[int] = None,
     per_page: int = 30
 ) -> List[Dict[str, Any]]:
-    """
-    Fetch published Releases (and tags).
-    """
     logger.info("Fetching releases via REST API...")
     endpoint = f"/repos/{owner}/{repo}/releases"
     all_releases: List[Dict[str, Any]] = []
 
-    for page in range(1, pages + 1):
+    target_pages = pages if pages is not None else api_config.max_pages
+    current_page = 1
+
+    while True:
+        if target_pages is not None and current_page > target_pages:
+            break
         try:
             response = _rest_get(
                 endpoint,
                 token,
                 api_config,
-                params={"per_page": per_page, "page": page},
+                params={"per_page": per_page, "page": current_page},
             )
             releases = response.json()
             if not releases:
                 break
             all_releases.extend(releases)
+            current_page += 1
         except Exception:
-            logger.error(f"Failed to fetch releases page {page}.")
+            logger.error(f"Failed to fetch releases page {current_page}.")
             raise
 
     logger.info(f"Fetched {len(all_releases)} releases.")

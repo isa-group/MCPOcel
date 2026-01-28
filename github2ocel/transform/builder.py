@@ -9,7 +9,6 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # SCHEMA KEYS (Matching your JSON Schema)
-ATTR_TYPES = "attributeNames"
 EVT_TYPES = "eventTypes"
 OBJ_TYPES_KEY = "objectTypes"
 OBJECTS = "objects"
@@ -107,7 +106,7 @@ class OCELBuilder:
             if k not in existing_attrs:
                 target["attributes"].append({"name": k, "type": "string"})
 
-    def add_event(self, activity: str, timestamp: str, related_objects: Sequence[str], 
+    def add_event(self, activity: str, timestamp: str, related_objects: Sequence[str],
                   attributes: Optional[Dict[str, Any]] = None) -> str:
         """Adds an event and links it to objects. Returns the event UUID."""
         event_id = str(uuid.uuid4())
@@ -117,10 +116,10 @@ class OCELBuilder:
         self._register_event_type(activity, event_attrs)
 
         formatted_attrs = [{"name": k, "value": str(v)} for k, v in event_attrs.items()]
-        
+
         # Ensure relationships follow the (objectId, qualifier) schema
         relationships = [
-            {"objectId": str(oid), "qualifier": "related"} 
+            {"objectId": str(oid), "qualifier": "related"}
             for oid in list(related_objects)
         ]
 
@@ -135,7 +134,7 @@ class OCELBuilder:
 
     def export_json(self, filename: Union[str, Path], pretty: bool = True) -> None:
         """Finalizes the OCEL structure and writes it to a JSON file."""
-        
+
         # Build final dictionary using defined constants
         final_output = {
             EVT_TYPES: self.data[EVT_TYPES],
