@@ -269,6 +269,166 @@ def find_orphaned_objects() -> Dict[str, Any]:
 
 
 @mcp.tool()
+def list_available_tools() -> Dict[str, Any]:
+    """
+    List all available MCP tools with their descriptions and parameters.
+    Use this to discover what analysis capabilities are available.
+    Returns tool names, descriptions, parameter schemas, and metadata (e.g., time_unit for temporal tools).
+    """
+    tools_info = []
+    
+    # Get tools from the MCP server registry
+    try:
+        # Access FastMCP's internal tool registry
+        if hasattr(mcp, '_tool_manager') and hasattr(mcp._tool_manager, 'tools'):
+            for tool_name, tool in mcp._tool_manager.tools.items():
+                tool_info = {
+                    "name": tool_name,
+                    "description": tool.description if hasattr(tool, 'description') else "",
+                    "parameters": {},
+                    "metadata": {},
+                }
+                
+                # Extract parameters from the tool's input schema
+                if hasattr(tool, 'parameters') and tool.parameters:
+                    tool_info["parameters"] = tool.parameters
+                elif hasattr(tool, 'inputSchema'):
+                    tool_info["parameters"] = tool.inputSchema
+                
+                # Add metadata for temporal tools
+                temporal_tools = [
+                    "get_performance_metrics", "detect_bottlenecks",
+                    "get_process_variants", "check_conformance"
+                ]
+                if tool_name in temporal_tools:
+                    tool_info["metadata"]["time_unit"] = "seconds"
+                    tool_info["metadata"]["time_unit_description"] = "All temporal values in SI seconds"
+                
+                tools_info.append(tool_info)
+    except Exception as e:
+        logger.warning(f"Error accessing tool registry: {e}")
+        # Fallback: return static list of known tools
+        tools_info = _get_static_tools_list()
+    
+    return {
+        "tools": tools_info,
+        "total_count": len(tools_info),
+        "metadata": {
+            "time_unit": "seconds",
+            "time_unit_description": "All temporal metrics are returned in SI seconds",
+        },
+    }
+
+
+def _get_static_tools_list() -> List[Dict[str, Any]]:
+    """Fallback static list of available tools."""
+    return [
+        {
+            "name": "trace_object_lifecycle",
+            "description": "Trace the complete lifecycle of an object through all events",
+            "parameters": {"object_id": {"type": "string", "description": "OCEL object ID"}},
+        },
+        {
+            "name": "query_events_by_timerange",
+            "description": "Query events within a specific time range",
+            "parameters": {
+                "start_datetime": {"type": "string", "description": "Start datetime ISO 8601"},
+                "end_datetime": {"type": "string", "description": "End datetime ISO 8601"},
+            },
+        },
+        {
+            "name": "get_statistics_by_object_type",
+            "description": "Get statistics grouped by object type",
+            "parameters": {},
+        },
+        {
+            "name": "detect_anomalies",
+            "description": "Detect anomalies in the OCEL log",
+            "parameters": {},
+        },
+        {
+            "name": "find_orphaned_objects",
+            "description": "Find objects not participating in any event",
+            "parameters": {},
+        },
+        {
+            "name": "search_ocel",
+            "description": "Hybrid semantic search over OCEL data",
+            "parameters": {
+                "query": {"type": "string", "description": "Search query"},
+                "top_k": {"type": "integer", "description": "Number of results"},
+            },
+        },
+        {
+            "name": "discover_dfg",
+            "description": "Discover Directly Follows Graph from the OCEL log",
+            "parameters": {
+                "object_type": {"type": "string", "description": "Filter by object type (optional)"},
+                "include_visualization": {"type": "boolean", "description": "Include SVG visualization"},
+            },
+            "metadata": {"time_unit": "seconds"},
+        },
+        {
+            "name": "discover_petri_net",
+            "description": "Discover Object-Centric Petri Net from the OCEL log",
+            "parameters": {
+                "object_type": {"type": "string", "description": "Filter by object type (optional)"},
+                "include_visualization": {"type": "boolean", "description": "Include SVG visualization"},
+            },
+        },
+        {
+            "name": "get_process_variants",
+            "description": "Extract process variants (activity sequences) grouped by object",
+            "parameters": {
+                "object_type": {"type": "string", "description": "Filter by object type (optional)"},
+                "limit": {"type": "integer", "description": "Max variants to return"},
+            },
+        },
+        {
+            "name": "get_performance_metrics",
+            "description": "Calculate performance metrics (times between activities). All times in seconds.",
+            "parameters": {
+                "object_type": {"type": "string", "description": "Filter by object type (optional)"},
+            },
+            "metadata": {"time_unit": "seconds"},
+        },
+        {
+            "name": "detect_bottlenecks",
+            "description": "Detect bottlenecks in the process based on waiting times. Times in seconds.",
+            "parameters": {
+                "object_type": {"type": "string", "description": "Filter by object type (optional)"},
+                "threshold_percentile": {"type": "number", "description": "Percentile for bottleneck detection"},
+            },
+            "metadata": {"time_unit": "seconds"},
+        },
+        {
+            "name": "check_conformance",
+            "description": "Check conformance of log traces against discovered model",
+            "parameters": {
+                "object_type": {"type": "string", "description": "Filter by object type (optional)"},
+            },
+        },
+        {
+            "name": "analyze_object_interactions",
+            "description": "Analyze co-occurrence patterns between object types in shared events",
+            "parameters": {},
+        },
+        {
+            "name": "discover_social_network",
+            "description": "Discover organizational/social network based on resource attributes",
+            "parameters": {
+                "resource_attribute": {"type": "string", "description": "Attribute name for resource/actor"},
+            },
+        },
+        {
+            "name": "get_available_resource_attributes",
+            "description": "List available resource/actor attributes for social network analysis",
+            "parameters": {},
+        },
+    ]
+
+
+@mcp.tool()
 def search_ocel(
     query: str,
     top_k: int = 5,
@@ -318,6 +478,267 @@ def search_ocel(
     except Exception as e:
         logger.error(f"Search error: {e}")
         return {"error": str(e), "query": query}
+
+
+# ============================================================================
+# PROCESS MINING TOOLS - Discovery, Conformance, Performance
+# ============================================================================
+
+@mcp.tool()
+def discover_dfg(
+    object_type: Optional[str] = None,
+    include_visualization: bool = True,
+) -> Dict[str, Any]:
+    """
+    Discover a Directly Follows Graph (DFG) from the OCEL log.
+    Shows which activities follow each other and with what frequency.
+    
+    Args:
+        object_type: Filter by object type (optional, None = all types)
+        include_visualization: Include SVG visualization (default: True)
+    """
+    mining_engine = _ocel_state.get("mining_engine")
+    viz_engine = _ocel_state.get("viz_engine")
+    
+    if not mining_engine:
+        return {"error": "Server not initialized"}
+    
+    try:
+        dfg_dict, _ = mining_engine.discover_dfg(object_type)
+        
+        viz = None
+        if include_visualization and viz_engine:
+            try:
+                viz = viz_engine.visualize_dfg(dfg_dict)
+            except Exception as e:
+                logger.warning(f"Visualization failed: {e}")
+        
+        response = ResponseBuilder.build_dfg_response(dfg_dict, viz)
+        result = response.to_dict()
+        result["metadata"]["object_type_filter"] = object_type
+        return result
+    
+    except Exception as e:
+        logger.error(f"DFG discovery error: {e}")
+        return {"error": str(e), "object_type": object_type}
+
+
+@mcp.tool()
+def discover_petri_net(
+    object_type: Optional[str] = None,
+    include_visualization: bool = True,
+) -> Dict[str, Any]:
+    """
+    Discover an Object-Centric Petri Net (OC-PN) from the OCEL log.
+    Returns model structure with places, transitions, and arcs.
+    
+    Args:
+        object_type: Filter by object type (optional, None = all types)
+        include_visualization: Include SVG visualization (default: True)
+    """
+    mining_engine = _ocel_state.get("mining_engine")
+    viz_engine = _ocel_state.get("viz_engine")
+    
+    if not mining_engine:
+        return {"error": "Server not initialized"}
+    
+    try:
+        pn_dict = mining_engine.discover_petri_net(object_type)
+        
+        viz = None
+        if include_visualization and viz_engine:
+            try:
+                viz = viz_engine.visualize_petri_net(pn_dict)
+            except Exception as e:
+                logger.warning(f"Visualization failed: {e}")
+        
+        response = ResponseBuilder.build_petri_net_response(pn_dict, viz)
+        result = response.to_dict()
+        result["metadata"]["object_type_filter"] = object_type
+        return result
+    
+    except Exception as e:
+        logger.error(f"Petri net discovery error: {e}")
+        return {"error": str(e), "object_type": object_type}
+
+
+@mcp.tool()
+def get_process_variants(
+    object_type: Optional[str] = None,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """
+    Extract object-centric process variants (complete activity sequences per object).
+    Returns unique activity sequences ordered by frequency.
+    
+    Args:
+        object_type: Filter by object type (optional)
+        limit: Maximum variants to return (default: 10)
+    """
+    mining_engine = _ocel_state.get("mining_engine")
+    
+    if not mining_engine:
+        return {"error": "Server not initialized"}
+    
+    try:
+        variants = mining_engine.extract_object_centric_variants(object_type, limit)
+        response = ResponseBuilder.build_variants_response(variants, object_type)
+        return response.to_dict()
+    
+    except Exception as e:
+        logger.error(f"Variants extraction error: {e}")
+        return {"error": str(e), "object_type": object_type}
+
+
+@mcp.tool()
+def get_performance_metrics(
+    object_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Calculate performance metrics: times between consecutive activities.
+    All temporal values are returned in SECONDS (SI unit).
+    
+    Args:
+        object_type: Filter by object type (optional)
+    """
+    mining_engine = _ocel_state.get("mining_engine")
+    
+    if not mining_engine:
+        return {"error": "Server not initialized"}
+    
+    try:
+        metrics = mining_engine.get_performance_metrics(object_type)
+        response = ResponseBuilder.build_performance_response(metrics)
+        return response.to_dict()
+    
+    except Exception as e:
+        logger.error(f"Performance metrics error: {e}")
+        return {"error": str(e), "object_type": object_type}
+
+
+@mcp.tool()
+def detect_bottlenecks(
+    object_type: Optional[str] = None,
+    threshold_percentile: float = 90.0,
+) -> Dict[str, Any]:
+    """
+    Detect process bottlenecks based on waiting times between activities.
+    All temporal values are returned in SECONDS (SI unit).
+    
+    Args:
+        object_type: Filter by object type (optional)
+        threshold_percentile: Percentile above which transitions are bottlenecks (default: 90)
+    """
+    mining_engine = _ocel_state.get("mining_engine")
+    
+    if not mining_engine:
+        return {"error": "Server not initialized"}
+    
+    try:
+        bottlenecks = mining_engine.detect_bottlenecks(object_type, threshold_percentile)
+        response = ResponseBuilder.build_bottlenecks_response(bottlenecks)
+        return response.to_dict()
+    
+    except Exception as e:
+        logger.error(f"Bottleneck detection error: {e}")
+        return {"error": str(e), "object_type": object_type}
+
+
+@mcp.tool()
+def check_conformance(
+    object_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Check conformance of log traces against a discovered process model.
+    Returns fitness score and list of deviations.
+    
+    Args:
+        object_type: Filter by object type (optional)
+    """
+    mining_engine = _ocel_state.get("mining_engine")
+    
+    if not mining_engine:
+        return {"error": "Server not initialized"}
+    
+    try:
+        conformance = mining_engine.check_conformance(object_type)
+        response = ResponseBuilder.build_conformance_response(conformance)
+        return response.to_dict()
+    
+    except Exception as e:
+        logger.error(f"Conformance checking error: {e}")
+        return {"error": str(e), "object_type": object_type}
+
+
+@mcp.tool()
+def analyze_object_interactions() -> Dict[str, Any]:
+    """
+    Analyze co-occurrence patterns between object types in shared events.
+    Discovers which object types frequently interact in the same events.
+    """
+    mining_engine = _ocel_state.get("mining_engine")
+    
+    if not mining_engine:
+        return {"error": "Server not initialized"}
+    
+    try:
+        interactions = mining_engine.analyze_object_interactions()
+        response = ResponseBuilder.build_interactions_response(interactions)
+        return response.to_dict()
+    
+    except Exception as e:
+        logger.error(f"Object interactions analysis error: {e}")
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def get_available_resource_attributes() -> Dict[str, Any]:
+    """
+    List available resource/actor attributes in the OCEL log.
+    Use this before discover_social_network to find valid attribute names.
+    """
+    mining_engine = _ocel_state.get("mining_engine")
+    
+    if not mining_engine:
+        return {"error": "Server not initialized"}
+    
+    try:
+        attributes = mining_engine.get_available_resource_attributes()
+        return {
+            "available_attributes": attributes,
+            "total_count": len(attributes),
+            "hint": "Use one of these attributes with discover_social_network",
+        }
+    
+    except Exception as e:
+        logger.error(f"Resource attributes error: {e}")
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def discover_social_network(
+    resource_attribute: str,
+) -> Dict[str, Any]:
+    """
+    Discover organizational/social network based on resource handovers.
+    Shows how work flows between resources/actors.
+    
+    Args:
+        resource_attribute: Attribute name containing resource/actor info
+    """
+    mining_engine = _ocel_state.get("mining_engine")
+    
+    if not mining_engine:
+        return {"error": "Server not initialized"}
+    
+    try:
+        network = mining_engine.discover_social_network(resource_attribute)
+        response = ResponseBuilder.build_social_network_response(network)
+        return response.to_dict()
+    
+    except Exception as e:
+        logger.error(f"Social network discovery error: {e}")
+        return {"error": str(e), "resource_attribute": resource_attribute}
 
 
 # ============================================================================

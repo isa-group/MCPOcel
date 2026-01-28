@@ -19,6 +19,9 @@ DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "GPT-4o")
 print(f"Provider: {DEFAULT_PROVIDER}, Model: {DEFAULT_MODEL}")
 
+# Global cache for available tools (fetched once from server)
+_cached_tools: Optional[List[Dict]] = None
+
 
 @dataclass
 class OcelMetadata:
@@ -31,37 +34,86 @@ class OcelMetadata:
     end_date: str = "N/A"
 
 
-# Available tools the LLM can call
-AVAILABLE_TOOLS = [
-    {
-        "name": "get_schema_section",
-        "description": "Retrieve OCEL 2.0 schema sections on demand. Use this when you need details about event structure, object structure, or attribute definitions.",
-        "parameters": {
-            "section": {
-                "type": "string",
-                "enum": ["eventTypes", "objectTypes", "events", "objects", "attributes"],
-                "description": "The schema section to retrieve",
-            }
-        },
-    },
-    {
-        "name": "search_ocel",
-        "description": "Hybrid semantic search over OCEL data. Use this to find relevant events, objects, or patterns.",
-        "parameters": {
-            "query": {"type": "string", "description": "Natural language search query"},
-            "top_k": {"type": "integer", "description": "Number of results (default: 5)"},
-            "chunk_types": {"type": "array", "description": "Filter by chunk type: metadata, event_type, object_type, events_batch, objects_batch"},
-        },
-    },
-    {
-        "name": "call_mcp_tool",
-        "description": "Call an MCP server tool to analyze the OCEL data.",
-        "parameters": {
-            "tool_name": {"type": "string", "description": "Name of the MCP tool"},
-            "arguments": {"type": "object", "description": "Tool arguments"},
-        },
-    },
-]
+async def fetch_available_tools(client: MCPClient) -> List[Dict]:
+    """
+    Fetch available MCP tools from the server and cache them.
+    
+    Args:
+        client: Connected MCPClient instance.
+        
+    Returns:
+        List of tool definitions with name, description, parameters.
+    """
+    global _cached_tools
+    
+    if _cached_tools is not None:
+        return _cached_tools
+    
+    try:
+        # Call the list_available_tools MCP tool
+        result = await client.call_tool("list_available_tools", {})
+        
+        if "error" in result:
+            # Fallback to MCP native tools/list
+            tools = await client.list_tools()
+            _cached_tools = tools
+            return tools
+        
+        _cached_tools = result.get("tools", [])
+        return _cached_tools
+    
+    except Exception as e:
+        # Fallback to empty list
+        print(f"  Warning: Could not fetch tools: {e}")
+        _cached_tools = []
+        return []
+
+
+def format_tools_section(tools: List[Dict]) -> str:
+    """
+    Format the available tools into a markdown section for the system prompt.
+    
+    Args:
+        tools: List of tool definitions.
+        
+    Returns:
+        Formatted markdown string.
+    """
+    if not tools:
+        return "No tools available."
+    
+    lines = []
+    for i, tool in enumerate(tools, 1):
+        name = tool.get("name", "unknown")
+        desc = tool.get("description", "No description")
+        params = tool.get("parameters", {})
+        metadata = tool.get("metadata", {})
+        
+        # Format parameters
+        if params:
+            if isinstance(params, dict):
+                param_strs = []
+                for pname, pinfo in params.items():
+                    if isinstance(pinfo, dict):
+                        param_strs.append(f"{pname} ({pinfo.get('type', 'any')})")
+                    else:
+                        param_strs.append(pname)
+                params_text = ", ".join(param_strs) if param_strs else "none"
+            else:
+                params_text = str(params)
+        else:
+            params_text = "none"
+        
+        # Add time unit note if applicable
+        time_note = ""
+        if metadata.get("time_unit") == "seconds":
+            time_note = " [times in seconds]"
+        
+        lines.append(f"{i}. `{name}` - {desc}{time_note}")
+        if params_text != "none":
+            lines.append(f"   Params: {params_text}")
+    
+    return "\n".join(lines)
 
 
 SYSTEM_PROMPT_TEMPLATE = """
@@ -76,27 +128,39 @@ The following metadata describes the active dataset. USE ONLY these exact names 
 - **Log Stats**: {total_objects:,} objects, {total_events:,} events.
 - **Time Range**: {start_date} to {end_date}.
 
-### AVAILABLE TOOLS
+### AVAILABLE MCP TOOLS
 You can request additional information by responding with a tool call in this format:
 ```tool
 {{"tool": "tool_name", "params": {{"param1": "value1"}}}}
 ```
 
-Available tools:
-1. `search_ocel` - Hybrid semantic search over OCEL data. Params: query, top_k (optional), chunk_types (optional)
-2. `get_schema_section` - Get OCEL schema details. Params: section (eventTypes|objectTypes|events|objects|attributes)
-3. `call_mcp_tool` - Call MCP analysis tools. Params: tool_name, arguments
+**IMPORTANT: All temporal metrics (performance, bottlenecks) are returned in SECONDS (SI unit).**
 
-Example: To search for order-related events:
+Available tools:
+{available_tools_section}
+
+### TOOL USAGE PATTERNS
+
+**For semantic search:**
 ```tool
 {{"tool": "search_ocel", "params": {{"query": "order creation and payment events"}}}}
+```
+
+**For process discovery:**
+```tool
+{{"tool": "call_mcp_tool", "params": {{"tool_name": "discover_dfg", "arguments": {{}}}}}}
+```
+
+**For performance analysis:**
+```tool
+{{"tool": "call_mcp_tool", "params": {{"tool_name": "get_performance_metrics", "arguments": {{}}}}}}
 ```
 
 ### ANALYSIS GUIDELINES
 1. **Multiplicity First**: Do not assume a single Case ID. Analyze how events link multiple objects (1:n, m:n relations).
 2. **Cardinality**: Identify "Batching" (one event, many objects) vs. "Singular" flows.
 3. **Graph Perspective**: Treat the log as a dynamic graph where objects are nodes and events are hyperedges.
-4. **Performance**: Calculate throughput times per 'Object Type'.
+4. **Performance**: Calculate throughput times per 'Object Type'. All times are in SECONDS.
 
 ### OUTPUT FORMAT
 - Strict Markdown.
@@ -105,9 +169,17 @@ Example: To search for order-related events:
 - If you need more context, use search_ocel or get_schema_section first.
 """
 
-
-def format_system_prompt(meta: OcelMetadata) -> str:
-    """Format the system prompt with real OCEL metadata values."""
+def format_system_prompt(meta: OcelMetadata, tools_section: str = "") -> str:
+    """
+    Format the system prompt with real OCEL metadata and available tools.
+    
+    Args:
+        meta: OCEL metadata from server.
+        tools_section: Formatted tools section string.
+        
+    Returns:
+        Complete system prompt.
+    """
     return SYSTEM_PROMPT_TEMPLATE.format(
         object_types_list=meta.object_types if meta.object_types else ["(no object types loaded)"],
         event_types_list=meta.event_types if meta.event_types else ["(no event types loaded)"],
@@ -115,6 +187,7 @@ def format_system_prompt(meta: OcelMetadata) -> str:
         total_events=meta.total_events,
         start_date=meta.start_date,
         end_date=meta.end_date,
+        available_tools_section=tools_section if tools_section else "No tools available.",
     )
 
 
@@ -248,8 +321,15 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
         print(f"  Event Types: {meta.event_types}")
         print(f"  Objects: {meta.total_objects:,} | Events: {meta.total_events:,}")
         print(f"  Time Range: {meta.start_date} to {meta.end_date}")
-
-        system_prompt = format_system_prompt(meta)
+        
+        # Fetch available tools from server (cached globally)
+        print("  Loading available tools...")
+        available_tools = await fetch_available_tools(mcp_client)
+        print(f"  Tools available: {len(available_tools)}")
+        
+        # Build dynamic tools section for system prompt
+        tools_section = format_tools_section(available_tools)
+        system_prompt = format_system_prompt(meta, tools_section)
 
         try:
             provider = build_provider(args.provider)
