@@ -99,13 +99,19 @@ def ensure_file(builder: OCELBuilder, repo_id: str, path: str) -> str:
 
 def ensure_label(builder: OCELBuilder, repo_id: str, label: Dict[str, Any]) -> str:
     label_id = make_id(repo_id, "label", label["name"].lower())
-    builder.add_object(label_id, "Label", {"name": label["name"], "color": label["color"]})
+    builder.add_object(label_id, "Label", {"name": label["name"], "color": label.get("color")})
     return label_id
 
 
-def ensure_commit(builder: OCELBuilder, repo_id: str, sha: str, source: str = "rest") -> str:
+def ensure_commit(builder: OCELBuilder, repo_id: str, sha: str, message: str = "", source: str = "rest") -> str:
     commit_id = make_id(repo_id, "commit", sha)
-    builder.add_object(commit_id, "Commit", {"sha": sha, "source": source})
+
+    attrs = {"sha": sha, "source": source}
+
+    if message:
+        attrs["message"] = message.split('\n')[0]
+    builder.add_object(commit_id, "Commit", attrs)
+
     return commit_id
 
 
@@ -128,7 +134,8 @@ def ensure_pr_object(builder: OCELBuilder, repo_id: str, pr_data: Dict[str, Any]
     pr_id = make_id(repo_id, "pr", pr_data["number"])
     attributes = {
         "number": pr_data["number"],
-        "source": "workflow_stub" if is_stub else "graphql"
+        "source": "workflow_stub" if is_stub else "graphql",
+        "is_stub": is_stub
     }
     if not is_stub:
         attributes.update({
@@ -138,8 +145,7 @@ def ensure_pr_object(builder: OCELBuilder, repo_id: str, pr_data: Dict[str, Any]
     builder.add_object(pr_id, "PullRequest", attributes)
     return pr_id
 
-
-# Dispatcher & Graphql mappers
+# Dispatcher
 def process_issue_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     node_type = node.get("__type")
     if node_type == "Issue":
@@ -153,7 +159,7 @@ def process_issue_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str)
         else:
             _map_issue(node, builder, repo_id)
 
-
+# Helpers
 def _process_common_relations(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> List[str]:
     related = []
     if author_id := ensure_user(builder, node.get("author", {}).get("login") if node.get("author") else None):
@@ -171,7 +177,7 @@ def _map_comments(
         related_base: List[str],
         activity_name: str
 ) -> None:
-    """Helper to map comments for both Issues and PRs."""
+
     comments = node.get("comments", {}).get("nodes", [])
     for comment in comments:
         commenter_login = comment.get("author", {}).get("login")
@@ -179,19 +185,19 @@ def _map_comments(
             continue
 
         commenter_id = ensure_user(builder, commenter_login)
-        # Link the base object (Issue/PR), the repo, and the author of the comment
         related = related_base + [commenter_id] if commenter_id else related_base
-
         builder.add_event(activity_name, comment["createdAt"], related)
 
+# Issue Mapper
 def _map_issue(issue: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     issue_id = ensure_issue_object(builder, repo_id, issue)
     related = [issue_id, repo_id] + _process_common_relations(issue, builder, repo_id)
     builder.add_event(Activities.ISSUE_OPENED, issue["createdAt"], related)
     if issue.get("closedAt"):
         builder.add_event(Activities.ISSUE_CLOSED, issue["closedAt"], related, {"state": issue["state"]})
+    _map_comments(issue, builder, repo_id, related, Activities.ISSUE_COMMENT)
 
-
+# Pull Request Mapper
 def _map_pull_request(pr: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     pr_id = ensure_pr_object(builder, repo_id, pr)
     related = [pr_id, repo_id] + _process_common_relations(pr, builder, repo_id)
@@ -208,9 +214,9 @@ def _map_pull_request(pr: Dict[str, Any], builder: OCELBuilder, repo_id: str) ->
                 Activities.PR_REVIEW,
                 review.get("submittedAt"),
                 [pr_id, repo_id, reviewer_id],
-                {"state": review["state"]}
+                {"review_state": review["state"]}
             )
-
+    _map_comments(pr, builder, repo_id, related, Activities.PR_COMMENT)
 
 # REST mappers
 def process_workflow_run(run: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
@@ -247,7 +253,8 @@ def process_commit_rest(commit: Dict[str, Any], builder: OCELBuilder, repo_id: s
     Processes a REST commit and injects Conventional Commits attributes.
     """
     sha = commit["sha"]
-    commit_id = ensure_commit(builder, repo_id, sha)
+    raw_message = commit.get("commit", {}).get("message", "")
+    commit_id = ensure_commit(builder, repo_id, sha, raw_message, source="rest")
 
     gh_author = commit.get("author") or {}
     related = [commit_id, repo_id]
@@ -264,7 +271,6 @@ def process_commit_rest(commit: Dict[str, Any], builder: OCELBuilder, repo_id: s
     stats = commit.get("stats", {})
 
     # Extracting Attributes from Conventional Commits
-    raw_message = commit.get("commit", {}).get("message", "")
     cc_attrs = _parse_conventional_commit(raw_message)
 
     if git_timestamp:
