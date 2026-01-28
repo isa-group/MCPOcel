@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+# Add parent directory to path for importing from server
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from mcp_ocel.server.typing_ocel import ToolResponse
 
 # Default server connection settings
 DEFAULT_URL = "http://127.0.0.1:8000/mcp"
@@ -61,7 +68,11 @@ class MCPClient:
         self._session_id: Optional[str] = None
 
     async def connect(self) -> None:
-        """Connect to the MCP server and initialize session."""
+        """Connect to the MCP server and initialize session.
+        
+        Raises:
+            MCPClientError: If connection or initialization fails.
+        """
         if self._client is not None:
             return
 
@@ -208,7 +219,7 @@ class MCPClient:
         result = await self._send_request("tools/list")
         return result.get("tools", [])
 
-    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> ToolResponse:
         """
         Call a tool on the server.
         
@@ -217,7 +228,7 @@ class MCPClient:
             arguments: Tool arguments
             
         Returns:
-            Tool result as dictionary
+            Tool result as ToolResponse (one of the specific response TypedDicts)
         """
         result = await self._send_request("tools/call", {
             "name": tool_name,
@@ -357,7 +368,19 @@ class SyncMCPClient:
             raise MCPClientError("Not connected")
         return self._loop.run_until_complete(self._async_client.list_tools())
 
-    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> ToolResponse:
+        """Call a tool on the server.
+        
+        Args:
+            tool_name: Name of the tool to call.
+            arguments: Tool arguments.
+            
+        Returns:
+            ToolResponse from the server.
+            
+        Raises:
+            MCPClientError: If not connected.
+        """
         if not self._async_client or not self._loop:
             raise MCPClientError("Not connected")
         return self._loop.run_until_complete(self._async_client.call_tool(tool_name, arguments))

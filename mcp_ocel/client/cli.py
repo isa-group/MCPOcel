@@ -5,13 +5,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import tiktoken
 
+# Add parent directory to path for importing from server
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from mcp_ocel.server.typing_ocel import ToolResponse
 from .mcp_client import MCPClient, MCPClientError, OcelInfo, DEFAULT_URL
 from .providers import ProviderError, build_provider
 
@@ -20,7 +25,7 @@ DEFAULT_MODEL = os.getenv("LLM_MODEL", "GPT-4o")
 print(f"Provider: {DEFAULT_PROVIDER}, Model: {DEFAULT_MODEL}")
 
 # Global cache for available tools (fetched once from server)
-_cached_tools: Optional[List[Dict]] = None
+_cached_tools: Optional[List[Dict[str, Any]]] = None
 
 
 @dataclass
@@ -34,7 +39,7 @@ class OcelMetadata:
     end_date: str = "N/A"
 
 
-async def fetch_available_tools(client: MCPClient) -> List[Dict]:
+async def fetch_available_tools(client: MCPClient) -> List[Dict[str, Any]]:
     """
     Fetch available MCP tools from the server and cache them.
     
@@ -69,7 +74,7 @@ async def fetch_available_tools(client: MCPClient) -> List[Dict]:
         return []
 
 
-def format_tools_section(tools: List[Dict]) -> str:
+def format_tools_section(tools: List[Dict[str, Any]]) -> str:
     """
     Format the available tools into a markdown section for the system prompt.
     
@@ -234,9 +239,16 @@ async def fetch_metadata_from_server(client: MCPClient) -> OcelMetadata:
     )
 
 
-def extract_tool_calls(text: str) -> List[Dict]:
-    """Extract tool calls from LLM response."""
-    tool_calls = []
+def extract_tool_calls(text: str) -> List[Dict[str, Any]]:
+    """Extract tool calls from LLM response.
+    
+    Args:
+        text: LLM response text.
+        
+    Returns:
+        List of parsed tool call dictionaries.
+    """
+    tool_calls: List[Dict[str, Any]] = []
     # Match ```tool ... ``` blocks
     pattern = r"```tool\s*\n?(.*?)\n?```"
     matches = re.findall(pattern, text, re.DOTALL)
@@ -250,8 +262,16 @@ def extract_tool_calls(text: str) -> List[Dict]:
     return tool_calls
 
 
-async def execute_tool_call(client: MCPClient, tool_call: Dict) -> str:
-    """Execute a tool call and return the result."""
+async def execute_tool_call(client: MCPClient, tool_call: Dict[str, Any]) -> str:
+    """Execute a tool call and return the result.
+    
+    Args:
+        client: Connected MCPClient instance.
+        tool_call: Tool call dictionary with 'tool' and 'params' keys.
+        
+    Returns:
+        Formatted result string.
+    """
     tool_name = tool_call.get("tool", "")
     params = tool_call.get("params", {})
 

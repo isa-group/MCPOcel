@@ -7,7 +7,13 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 import json
 
-from .typing_ocel import EventReference, ObjectReference, AnomalyReport
+from .typing_ocel import (
+    EventReference,
+    ObjectReference,
+    AnomalyReport,
+    OCELData,
+    ObjectTypeStatsDict,
+)
 from shared.logger.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -15,7 +21,10 @@ logger = get_logger(__name__)
 class OCELQueryEngine:
     """Domain-agnostic query engine for OCEL 2.0."""
     
-    def __init__(self, ocel_data: Any):
+    ocel_data: OCELData
+    format: str
+    
+    def __init__(self, ocel_data: OCELData) -> None:
         """
         Initializes the query engine.
 
@@ -223,12 +232,12 @@ class OCELQueryEngine:
         logger.info(f"Events in range: {len(references)}")
         return references
     
-    def get_statistics_by_object_type(self) -> Dict[str, Any]:
+    def get_statistics_by_object_type(self) -> Dict[str, ObjectTypeStatsDict]:
         """
         Calculates statistics by object type.
 
         Returns:
-            Dict with counts and type distribution.
+            Dict mapping object type names to their statistics.
         """
         logger.debug("Calculating statistics by object type")
         
@@ -237,9 +246,13 @@ class OCELQueryEngine:
         else:
             return self._stats_dict()
     
-    def _stats_pm4py(self) -> Dict[str, Any]:
-        """Statistics using PM4PY."""
-        stats_by_type = {}
+    def _stats_pm4py(self) -> Dict[str, ObjectTypeStatsDict]:
+        """Statistics using PM4PY.
+        
+        Returns:
+            Dict mapping object type names to statistics.
+        """
+        stats_by_type: Dict[str, ObjectTypeStatsDict] = {}
         
         for obj_id, obj in self.ocel_data.objects.items():
             obj_type = obj.get("ocel:type", "unknown")
@@ -252,9 +265,13 @@ class OCELQueryEngine:
         logger.info(f"Statistics: {len(stats_by_type)} object types")
         return stats_by_type
     
-    def _stats_dict(self) -> Dict[str, Any]:
-        """Statistics using dict."""
-        stats_by_type = {}
+    def _stats_dict(self) -> Dict[str, ObjectTypeStatsDict]:
+        """Statistics using dict.
+        
+        Returns:
+            Dict mapping object type names to statistics.
+        """
+        stats_by_type: Dict[str, ObjectTypeStatsDict] = {}
         
         for obj_id, obj in self.ocel_data.get("ocel:objects", {}).items():
             obj_type = obj.get("ocel:type", "unknown")

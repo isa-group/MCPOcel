@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from io import BytesIO
 
 from shared.logger.logging_config import get_logger
+from .typing_ocel import OCELData, VisualizationDict, DFGDict, PetriNetDict, OCELStatsDict
 
 logger = get_logger(__name__)
 
@@ -20,7 +21,10 @@ except ImportError:
 class VisualizationEngine:
     """Visualization generator for processes and logs."""
     
-    def __init__(self, ocel_data: Any, mining_engine: Optional[Any] = None):
+    ocel_data: OCELData
+    mining_engine: Optional[Any]
+    
+    def __init__(self, ocel_data: OCELData, mining_engine: Optional[Any] = None) -> None:
         """
         Initializes the visualization engine.
 
@@ -51,8 +55,8 @@ class VisualizationEngine:
         return graphviz_available
     
     def visualize_dfg(
-        self, dfg_dict: Dict, format: str = "svg", height: int = 500
-    ) -> Optional[Dict[str, Any]]:
+        self, dfg_dict: DFGDict, format: str = "svg", height: int = 500
+    ) -> Optional[VisualizationDict]:
         """
         Visualizes a Directly Follows Graph.
 
@@ -62,7 +66,7 @@ class VisualizationEngine:
             height: Graph height (default 500px so it fits inline in MCP clients).
 
         Returns:
-            Dict with visualization or None on error.
+            VisualizationDict with visualization data or None on error.
         """
         logger.debug(f"Visualizing DFG (format={format})")
         
@@ -188,10 +192,10 @@ class VisualizationEngine:
     
     def visualize_petri_net(
         self,
-        petri_net_dict: Dict,
+        petri_net_dict: PetriNetDict,
         format: str = "svg",
         height: int = 500,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[VisualizationDict]:
         """
         Visualizes an Object-Centric Petri Net.
 
@@ -201,7 +205,7 @@ class VisualizationEngine:
             height: Height (default 500px to keep chat views readable).
 
         Returns:
-            Dict with visualization or None.
+            VisualizationDict with visualization data or None.
         """
         logger.debug(f"Visualizing Petri Net (format={format})")
         
@@ -325,12 +329,12 @@ class VisualizationEngine:
         dot_lines.append("}")
         return "\n".join(dot_lines)
     
-    def generate_summary_visualization(self) -> Optional[Dict[str, Any]]:
+    def generate_summary_visualization(self) -> Optional[VisualizationDict]:
         """
         Generates an OCEL summary visualization.
 
         Returns:
-            Dict with embedded SVG or PNG.
+            VisualizationDict with embedded SVG or PNG, or None on error.
         """
         logger.debug("Generating summary visualization")
         
@@ -352,8 +356,15 @@ class VisualizationEngine:
         
         return None
     
-    def _create_stats_svg(self, stats: Dict[str, Any]) -> str:
-        """Creates a simple SVG with statistics."""
+    def _create_stats_svg(self, stats: OCELStatsDict) -> str:
+        """Creates a simple SVG with statistics.
+        
+        Args:
+            stats: OCEL statistics dictionary.
+            
+        Returns:
+            SVG content as string.
+        """
         total_events = stats.get("total_events", 0)
         total_objects = stats.get("total_objects", 0)
         
