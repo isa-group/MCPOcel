@@ -10,6 +10,18 @@ import hashlib
 import json
 
 from shared.logger.logging_config import get_logger
+from .typing_ocel import (
+    OCELData,
+    DFGDict,
+    PetriNetDict,
+    PerformanceMetricsDict,
+    BottleneckResultDict,
+    ConformanceResultDict,
+    ObjectInteractionsResultDict,
+    VariantDict,
+    SocialNetworkResultDict,
+    OCELStatsDict,
+)
 
 logger = get_logger(__name__)
 
@@ -89,7 +101,10 @@ _model_cache = ModelCache(maxsize=32)
 class ProcessMiningEngine:
     """Domain-agnostic process mining wrapper with PM4PY."""
     
-    def __init__(self, ocel_data: Any):
+    ocel_data: OCELData
+    format: str
+    
+    def __init__(self, ocel_data: OCELData) -> None:
         """
         Initializes the process mining engine.
 
@@ -116,7 +131,7 @@ class ProcessMiningEngine:
     
     def discover_dfg(
         self, object_type: Optional[str] = None, use_cache: bool = True
-    ) -> Tuple[Dict, Dict]:
+    ) -> Tuple[DFGDict, Dict[str, Any]]:
         """
         Discovers an object-centric Directly Follows Graph (DFG).
 
@@ -125,7 +140,7 @@ class ProcessMiningEngine:
             use_cache: Whether to use cached results (default: True).
 
         Returns:
-            (dfg_dict, freq_net_dict): Tuple with DFG and frequencies.
+            Tuple of (DFGDict with edges and start activities, frequency dict).
         """
         # Check cache first
         if use_cache:
@@ -227,7 +242,7 @@ class ProcessMiningEngine:
     
     def discover_petri_net(
         self, object_type: Optional[str] = None, use_cache: bool = True
-    ) -> Dict[str, Any]:
+    ) -> PetriNetDict:
         """
         Discovers an Object-Centric Petri Net (OC-PN).
 
@@ -236,7 +251,7 @@ class ProcessMiningEngine:
             use_cache: Whether to use cached results (default: True).
 
         Returns:
-            Dict with places, transitions, and start/end data.
+            PetriNetDict with places, transitions, arcs, and markings.
         """
         # Check cache first
         if use_cache:
@@ -328,7 +343,7 @@ class ProcessMiningEngine:
     
     def extract_process_variants(
         self, object_type: Optional[str] = None, limit: int = 10
-    ) -> List[Dict[str, Any]]:
+    ) -> List[VariantDict]:
         """
         Extracts process variants (activity sequences).
 
@@ -337,7 +352,7 @@ class ProcessMiningEngine:
             limit: Maximum variants to return (top-N) to keep responses manageable; defaults to 10.
 
         Returns:
-            List of variants ordered by frequency.
+            List of VariantDict ordered by frequency.
         """
         logger.info(f"Extracting process variants (limit={limit})")
         
@@ -409,12 +424,12 @@ class ProcessMiningEngine:
         logger.info(f"Variants extracted: {len(sorted_variants)}")
         return sorted_variants
     
-    def get_ocel_statistics(self) -> Dict[str, Any]:
+    def get_ocel_statistics(self) -> OCELStatsDict:
         """
         Retrieves general OCEL statistics.
 
         Returns:
-            Dict with totals for events, objects, types, and distributions.
+            OCELStatsDict with totals for events, objects, types, and distributions.
         """
         logger.debug("Fetching OCEL statistics")
         
@@ -465,7 +480,7 @@ class ProcessMiningEngine:
     
     def extract_object_centric_variants(
         self, object_type: Optional[str] = None, limit: int = 10
-    ) -> List[Dict[str, Any]]:
+    ) -> List[VariantDict]:
         """
         Extract true object-centric process variants.
         Groups complete activity sequences per object, then aggregates by unique sequence.
@@ -475,7 +490,7 @@ class ProcessMiningEngine:
             limit: Maximum variants to return.
 
         Returns:
-            List of variants with sequence, frequency, and sample objects.
+            List of VariantDict with sequence, frequency, and sample objects.
         """
         logger.info(f"Extracting object-centric variants (object_type={object_type}, limit={limit})")
         
@@ -534,7 +549,7 @@ class ProcessMiningEngine:
     
     def get_performance_metrics(
         self, object_type: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> PerformanceMetricsDict:
         """
         Calculate performance metrics: times between consecutive activities.
         All times are in SECONDS (SI unit).
@@ -543,7 +558,7 @@ class ProcessMiningEngine:
             object_type: Filter by object type (optional).
 
         Returns:
-            Dict with activity transition times (avg, min, max, median) in seconds.
+            PerformanceMetricsDict with activity transition times in seconds.
         """
         logger.info(f"Calculating performance metrics (object_type={object_type})")
         
@@ -622,7 +637,7 @@ class ProcessMiningEngine:
     
     def detect_bottlenecks(
         self, object_type: Optional[str] = None, threshold_percentile: float = 90.0
-    ) -> Dict[str, Any]:
+    ) -> BottleneckResultDict:
         """
         Detect bottlenecks based on waiting times above threshold percentile.
         All times are in SECONDS (SI unit).
@@ -632,7 +647,7 @@ class ProcessMiningEngine:
             threshold_percentile: Percentile above which transitions are bottlenecks.
 
         Returns:
-            Dict with identified bottlenecks and their metrics.
+            BottleneckResultDict with identified bottlenecks and their metrics.
         """
         logger.info(f"Detecting bottlenecks (threshold={threshold_percentile}%)")
         
@@ -689,7 +704,7 @@ class ProcessMiningEngine:
     
     def check_conformance(
         self, object_type: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> ConformanceResultDict:
         """
         Check conformance of log traces against discovered Petri net model.
 
@@ -697,7 +712,7 @@ class ProcessMiningEngine:
             object_type: Filter by object type (optional).
 
         Returns:
-            Dict with fitness score and deviation details.
+            ConformanceResultDict with fitness score and deviation details.
         """
         logger.info(f"Checking conformance (object_type={object_type})")
         
@@ -770,12 +785,12 @@ class ProcessMiningEngine:
             logger.error(f"Error in conformance checking: {e}")
             return {"error": str(e)}
     
-    def analyze_object_interactions(self) -> Dict[str, Any]:
+    def analyze_object_interactions(self) -> ObjectInteractionsResultDict:
         """
         Analyze co-occurrence patterns between object types in shared events.
 
         Returns:
-            Dict with interaction matrix and patterns.
+            ObjectInteractionsResultDict with interaction matrix and patterns.
         """
         logger.info("Analyzing object interactions")
         
@@ -889,7 +904,7 @@ class ProcessMiningEngine:
     
     def discover_social_network(
         self, resource_attribute: str
-    ) -> Dict[str, Any]:
+    ) -> SocialNetworkResultDict:
         """
         Discover social/organizational network based on handovers between resources.
 
@@ -897,7 +912,7 @@ class ProcessMiningEngine:
             resource_attribute: Attribute name containing resource/actor info.
 
         Returns:
-            Dict with network nodes (resources) and edges (handovers).
+            SocialNetworkResultDict with network nodes and edges.
         """
         logger.info(f"Discovering social network (attribute={resource_attribute})")
         

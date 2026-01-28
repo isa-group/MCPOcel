@@ -5,7 +5,7 @@ Uses FastMCP with streamable-http transport for process-separated client/server.
 
 import os
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 from contextlib import asynccontextmanager
 
 from mcp.server.fastmcp import FastMCP
@@ -18,6 +18,27 @@ from .ocel_query_engine import OCELQueryEngine
 from .process_mining import ProcessMiningEngine
 from .visualization_engine import VisualizationEngine
 from .response_builder import ResponseBuilder
+from .typing_ocel import (
+    OCELData,
+    ToolResponse,
+    TraceLifecycleResponseDict,
+    TimeRangeQueryResponseDict,
+    StatisticsResponseDict,
+    AnomaliesResponseDict,
+    OrphanedObjectsResponseDict,
+    DFGResponseDict,
+    PetriNetResponseDict,
+    VariantsResponseDict,
+    PerformanceResponseDict,
+    BottlenecksResponseDict,
+    ConformanceResponseDict,
+    InteractionsResponseDict,
+    ResourceAttributesResponseDict,
+    SocialNetworkResponseDict,
+    SearchResultDict,
+    ListToolsResponseDict,
+    ToolInfoDict,
+)
 
 # Lazy import for retrieval engine (optional dependency)
 _retrieval_engine = None
@@ -25,8 +46,12 @@ _retrieval_engine = None
 logger = get_logger(__name__)
 
 
-def _get_retrieval_engine():
-    """Lazy-load the retrieval engine to avoid import overhead."""
+def _get_retrieval_engine() -> Optional[Type[Any]]:
+    """Lazy-load the retrieval engine to avoid import overhead.
+    
+    Returns:
+        The OCELRetrievalEngine class if available, False if import failed, None otherwise.
+    """
     global _retrieval_engine
     if _retrieval_engine is None:
         try:
@@ -43,8 +68,16 @@ def _get_retrieval_engine():
 _ocel_state: Dict[str, Any] = {}
 
 
-def _ocel_to_dict(ocel_data: Any, config: OCELConfig) -> Dict[str, Any]:
-    """Convert pm4py OCEL object to dict format for indexing."""
+def _ocel_to_dict(ocel_data: OCELData, config: OCELConfig) -> Dict[str, Any]:
+    """Convert pm4py OCEL object to dict format for indexing.
+    
+    Args:
+        ocel_data: Loaded OCEL data (PM4PY or dict format).
+        config: OCEL configuration with attribute names and object types.
+        
+    Returns:
+        Dict conforming to OCEL 2.0 JSON schema.
+    """
     result = {
         "ocel:global-log": {
             "ocel:attribute-names": config.attribute_names,
@@ -152,7 +185,7 @@ mcp = FastMCP(
 # ============================================================================
 
 @mcp.tool()
-def trace_object_lifecycle(object_id: str) -> Dict[str, Any]:
+def trace_object_lifecycle(object_id: str) -> TraceLifecycleResponseDict:
     """
     Trace the complete lifecycle of an object.
     Returns all events it participates in ordered by timestamp,
@@ -161,9 +194,9 @@ def trace_object_lifecycle(object_id: str) -> Dict[str, Any]:
     Args:
         object_id: OCEL object ID (ocel:oid)
     """
-    query_engine = _ocel_state.get("query_engine")
-    mining_engine = _ocel_state.get("mining_engine")
-    viz_engine = _ocel_state.get("viz_engine")
+    query_engine: Optional[OCELQueryEngine] = _ocel_state.get("query_engine")
+    mining_engine: Optional[ProcessMiningEngine] = _ocel_state.get("mining_engine")
+    viz_engine: Optional[VisualizationEngine] = _ocel_state.get("viz_engine")
     
     if not query_engine:
         return {"error": "Server not initialized"}
@@ -186,7 +219,7 @@ def trace_object_lifecycle(object_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def query_events_by_timerange(start_datetime: str, end_datetime: str) -> Dict[str, Any]:
+def query_events_by_timerange(start_datetime: str, end_datetime: str) -> TimeRangeQueryResponseDict:
     """
     Query events within a specific time range.
     Returns all events between two timestamps with participating object information.
@@ -195,7 +228,7 @@ def query_events_by_timerange(start_datetime: str, end_datetime: str) -> Dict[st
         start_datetime: Start datetime in ISO 8601 format (e.g., '2025-01-20T10:00:00')
         end_datetime: End datetime in ISO 8601 format
     """
-    query_engine = _ocel_state.get("query_engine")
+    query_engine: Optional[OCELQueryEngine] = _ocel_state.get("query_engine")
     
     if not query_engine:
         return {"error": "Server not initialized"}
@@ -206,13 +239,13 @@ def query_events_by_timerange(start_datetime: str, end_datetime: str) -> Dict[st
 
 
 @mcp.tool()
-def get_statistics_by_object_type() -> Dict[str, Any]:
+def get_statistics_by_object_type() -> StatisticsResponseDict:
     """
     Calculate global OCEL statistics grouped by object type.
     Returns object counts by type, distributions, and an analytical summary.
     """
-    query_engine = _ocel_state.get("query_engine")
-    viz_engine = _ocel_state.get("viz_engine")
+    query_engine: Optional[OCELQueryEngine] = _ocel_state.get("query_engine")
+    viz_engine: Optional[VisualizationEngine] = _ocel_state.get("viz_engine")
     
     if not query_engine:
         return {"error": "Server not initialized"}
@@ -230,12 +263,12 @@ def get_statistics_by_object_type() -> Dict[str, Any]:
 
 
 @mcp.tool()
-def detect_anomalies() -> Dict[str, Any]:
+def detect_anomalies() -> AnomaliesResponseDict:
     """
     Detect anomalies in the OCEL log.
     Identifies objects without events (orphaned), events without objects, and broken references.
     """
-    query_engine = _ocel_state.get("query_engine")
+    query_engine: Optional[OCELQueryEngine] = _ocel_state.get("query_engine")
     
     if not query_engine:
         return {"error": "Server not initialized"}
@@ -246,13 +279,13 @@ def detect_anomalies() -> Dict[str, Any]:
 
 
 @mcp.tool()
-def find_orphaned_objects() -> Dict[str, Any]:
+def find_orphaned_objects() -> OrphanedObjectsResponseDict:
     """
     Find objects that do not participate in any event.
     Useful to detect incomplete data or inconsistencies.
     """
-    query_engine = _ocel_state.get("query_engine")
-    ocel_data = _ocel_state.get("ocel_data")
+    query_engine: Optional[OCELQueryEngine] = _ocel_state.get("query_engine")
+    ocel_data: Optional[OCELData] = _ocel_state.get("ocel_data")
     
     if not query_engine:
         return {"error": "Server not initialized"}
@@ -269,13 +302,13 @@ def find_orphaned_objects() -> Dict[str, Any]:
 
 
 @mcp.tool()
-def list_available_tools() -> Dict[str, Any]:
+def list_available_tools() -> ListToolsResponseDict:
     """
     List all available MCP tools with their descriptions and parameters.
     Use this to discover what analysis capabilities are available.
     Returns tool names, descriptions, parameter schemas, and metadata (e.g., time_unit for temporal tools).
     """
-    tools_info = []
+    tools_info: List[ToolInfoDict] = []
     
     # Get tools from the MCP server registry
     try:
@@ -320,8 +353,12 @@ def list_available_tools() -> Dict[str, Any]:
     }
 
 
-def _get_static_tools_list() -> List[Dict[str, Any]]:
-    """Fallback static list of available tools."""
+def _get_static_tools_list() -> List[ToolInfoDict]:
+    """Fallback static list of available tools.
+    
+    Returns:
+        List of ToolInfoDict with tool definitions.
+    """
     return [
         {
             "name": "trace_object_lifecycle",
@@ -433,7 +470,7 @@ def search_ocel(
     query: str,
     top_k: int = 5,
     chunk_types: Optional[List[str]] = None,
-) -> Dict[str, Any]:
+) -> SearchResultDict:
     """
     Perform hybrid semantic search over OCEL data.
     Combines BM25 keyword matching with embedding-based semantic search.
@@ -443,7 +480,7 @@ def search_ocel(
         top_k: Number of results to return (default: 5)
         chunk_types: Optional filter for chunk types ('schema' or 'data')
     """
-    retrieval_engine = _ocel_state.get("retrieval_engine")
+    retrieval_engine: Optional[Any] = _ocel_state.get("retrieval_engine")
     
     if retrieval_engine is None:
         return {
@@ -488,7 +525,7 @@ def search_ocel(
 def discover_dfg(
     object_type: Optional[str] = None,
     include_visualization: bool = True,
-) -> Dict[str, Any]:
+) -> DFGResponseDict:
     """
     Discover a Directly Follows Graph (DFG) from the OCEL log.
     Shows which activities follow each other and with what frequency.
@@ -497,8 +534,8 @@ def discover_dfg(
         object_type: Filter by object type (optional, None = all types)
         include_visualization: Include SVG visualization (default: True)
     """
-    mining_engine = _ocel_state.get("mining_engine")
-    viz_engine = _ocel_state.get("viz_engine")
+    mining_engine: Optional[ProcessMiningEngine] = _ocel_state.get("mining_engine")
+    viz_engine: Optional[VisualizationEngine] = _ocel_state.get("viz_engine")
     
     if not mining_engine:
         return {"error": "Server not initialized"}
@@ -527,7 +564,7 @@ def discover_dfg(
 def discover_petri_net(
     object_type: Optional[str] = None,
     include_visualization: bool = True,
-) -> Dict[str, Any]:
+) -> PetriNetResponseDict:
     """
     Discover an Object-Centric Petri Net (OC-PN) from the OCEL log.
     Returns model structure with places, transitions, and arcs.
@@ -536,8 +573,8 @@ def discover_petri_net(
         object_type: Filter by object type (optional, None = all types)
         include_visualization: Include SVG visualization (default: True)
     """
-    mining_engine = _ocel_state.get("mining_engine")
-    viz_engine = _ocel_state.get("viz_engine")
+    mining_engine: Optional[ProcessMiningEngine] = _ocel_state.get("mining_engine")
+    viz_engine: Optional[VisualizationEngine] = _ocel_state.get("viz_engine")
     
     if not mining_engine:
         return {"error": "Server not initialized"}
@@ -566,7 +603,7 @@ def discover_petri_net(
 def get_process_variants(
     object_type: Optional[str] = None,
     limit: int = 10,
-) -> Dict[str, Any]:
+) -> VariantsResponseDict:
     """
     Extract object-centric process variants (complete activity sequences per object).
     Returns unique activity sequences ordered by frequency.
@@ -575,7 +612,7 @@ def get_process_variants(
         object_type: Filter by object type (optional)
         limit: Maximum variants to return (default: 10)
     """
-    mining_engine = _ocel_state.get("mining_engine")
+    mining_engine: Optional[ProcessMiningEngine] = _ocel_state.get("mining_engine")
     
     if not mining_engine:
         return {"error": "Server not initialized"}
@@ -593,7 +630,7 @@ def get_process_variants(
 @mcp.tool()
 def get_performance_metrics(
     object_type: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> PerformanceResponseDict:
     """
     Calculate performance metrics: times between consecutive activities.
     All temporal values are returned in SECONDS (SI unit).
@@ -601,7 +638,7 @@ def get_performance_metrics(
     Args:
         object_type: Filter by object type (optional)
     """
-    mining_engine = _ocel_state.get("mining_engine")
+    mining_engine: Optional[ProcessMiningEngine] = _ocel_state.get("mining_engine")
     
     if not mining_engine:
         return {"error": "Server not initialized"}
@@ -620,7 +657,7 @@ def get_performance_metrics(
 def detect_bottlenecks(
     object_type: Optional[str] = None,
     threshold_percentile: float = 90.0,
-) -> Dict[str, Any]:
+) -> BottlenecksResponseDict:
     """
     Detect process bottlenecks based on waiting times between activities.
     All temporal values are returned in SECONDS (SI unit).
@@ -629,7 +666,7 @@ def detect_bottlenecks(
         object_type: Filter by object type (optional)
         threshold_percentile: Percentile above which transitions are bottlenecks (default: 90)
     """
-    mining_engine = _ocel_state.get("mining_engine")
+    mining_engine: Optional[ProcessMiningEngine] = _ocel_state.get("mining_engine")
     
     if not mining_engine:
         return {"error": "Server not initialized"}
@@ -647,7 +684,7 @@ def detect_bottlenecks(
 @mcp.tool()
 def check_conformance(
     object_type: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> ConformanceResponseDict:
     """
     Check conformance of log traces against a discovered process model.
     Returns fitness score and list of deviations.
@@ -655,7 +692,7 @@ def check_conformance(
     Args:
         object_type: Filter by object type (optional)
     """
-    mining_engine = _ocel_state.get("mining_engine")
+    mining_engine: Optional[ProcessMiningEngine] = _ocel_state.get("mining_engine")
     
     if not mining_engine:
         return {"error": "Server not initialized"}
@@ -671,12 +708,12 @@ def check_conformance(
 
 
 @mcp.tool()
-def analyze_object_interactions() -> Dict[str, Any]:
+def analyze_object_interactions() -> InteractionsResponseDict:
     """
     Analyze co-occurrence patterns between object types in shared events.
     Discovers which object types frequently interact in the same events.
     """
-    mining_engine = _ocel_state.get("mining_engine")
+    mining_engine: Optional[ProcessMiningEngine] = _ocel_state.get("mining_engine")
     
     if not mining_engine:
         return {"error": "Server not initialized"}
@@ -692,12 +729,12 @@ def analyze_object_interactions() -> Dict[str, Any]:
 
 
 @mcp.tool()
-def get_available_resource_attributes() -> Dict[str, Any]:
+def get_available_resource_attributes() -> ResourceAttributesResponseDict:
     """
     List available resource/actor attributes in the OCEL log.
     Use this before discover_social_network to find valid attribute names.
     """
-    mining_engine = _ocel_state.get("mining_engine")
+    mining_engine: Optional[ProcessMiningEngine] = _ocel_state.get("mining_engine")
     
     if not mining_engine:
         return {"error": "Server not initialized"}
@@ -718,7 +755,7 @@ def get_available_resource_attributes() -> Dict[str, Any]:
 @mcp.tool()
 def discover_social_network(
     resource_attribute: str,
-) -> Dict[str, Any]:
+) -> SocialNetworkResponseDict:
     """
     Discover organizational/social network based on resource handovers.
     Shows how work flows between resources/actors.
@@ -726,7 +763,7 @@ def discover_social_network(
     Args:
         resource_attribute: Attribute name containing resource/actor info
     """
-    mining_engine = _ocel_state.get("mining_engine")
+    mining_engine: Optional[ProcessMiningEngine] = _ocel_state.get("mining_engine")
     
     if not mining_engine:
         return {"error": "Server not initialized"}

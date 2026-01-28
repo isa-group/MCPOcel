@@ -4,12 +4,13 @@ Automatically selects: PM4PY (< 100MB), ijson (100MB-1GB), DuckDB (> 1GB).
 
 import os
 import json
-from typing import Any, Dict, Generator, Optional, Union
+from typing import Any, Dict, List, Generator, Optional, Union
 from pathlib import Path
 
 import pm4py
 
 from . import constants
+from .typing_ocel import OCELData, EventStreamGenerator
 from shared.logger.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -40,13 +41,17 @@ class SmartOCELLoader:
         )
     
     def _select_strategy(self) -> constants.LoadStrategy:
-        """Selects strategy based on file size."""
+        """Selects strategy based on file size.
+        
+        Returns:
+            LoadStrategy enum value based on file size thresholds.
+        """
         if self.file_size_mb < constants.FILE_SIZE_SMALL:
             return constants.LoadStrategy.PM4PY
         else:
             return constants.LoadStrategy.IJSON
     
-    def load(self) -> Any:
+    def load(self) -> OCELData:
         """
         Loads OCEL using selected strategy.
         
@@ -65,8 +70,15 @@ class SmartOCELLoader:
         else:
             return self._load_ijson()
     
-    def _load_pm4py(self) -> Any:
-        """Loads OCEL using PM4PY (for small files)."""
+    def _load_pm4py(self) -> OCELData:
+        """Loads OCEL using PM4PY (for small files).
+        
+        Returns:
+            PM4PY OCEL object.
+            
+        Raises:
+            Exception: If loading fails.
+        """
         try:
             logger.info(f"Loading OCEL with PM4PY from: {self.ocel_path}")
             ocel = pm4py.read_ocel(self.ocel_path)
@@ -79,12 +91,15 @@ class SmartOCELLoader:
             logger.error(f"Error loading OCEL with PM4PY: {e}")
             raise
     
-    def _load_ijson(self) -> Dict[str, Any]:
+    def _load_ijson(self) -> OCELData:
         """
         Loads OCEL with ijson in streaming mode (for medium files).
         
         Returns:
-            Dict with OCEL structure (lazy loading).
+            Dict with OCEL structure conforming to OCEL 2.0 schema.
+            
+        Raises:
+            Exception: If loading fails.
         """
         try:
             import ijson
@@ -136,7 +151,7 @@ class SmartOCELLoader:
     
     def stream_events(
         self, chunk_size: int = constants.DEFAULT_CHUNK_SIZE
-    ) -> Generator[list, None, None]:
+    ) -> EventStreamGenerator:
         """
         Generates events in chunks for memory-efficient processing.
         
@@ -144,7 +159,7 @@ class SmartOCELLoader:
             chunk_size: Number of events per chunk.
             
         Yields:
-            List of events (dict).
+            List of event dictionaries.
         """
         if self.strategy == constants.LoadStrategy.PM4PY:
             ocel = self._load_pm4py()
@@ -176,7 +191,7 @@ class SmartOCELLoader:
                 raise
 
 
-def load_ocel(ocel_path: str) -> Any:
+def load_ocel(ocel_path: str) -> OCELData:
     """
     Convenience loader: automatically loads OCEL.
     
@@ -184,7 +199,11 @@ def load_ocel(ocel_path: str) -> Any:
         ocel_path: Path to OCEL file.
         
     Returns:
-        Loaded OCEL (type depends on strategy).
+        Loaded OCEL data (PM4PY OCEL object or dict structure).
+        
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        Exception: If loading fails.
     """
     loader = SmartOCELLoader(ocel_path)
     return loader.load()

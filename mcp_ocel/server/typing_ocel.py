@@ -1,9 +1,492 @@
 """Generic types and dataclasses for OCEL MCP responses.
+
+This module serves as the central hub for all type definitions used across
+the MCP OCEL server and client. It includes TypedDicts for tool responses,
+dataclasses for domain objects, and type aliases for common patterns.
 """
 
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict, Union, Generator
+from typing_extensions import NotRequired
 from datetime import datetime
+
+
+# =============================================================================
+# Type Aliases for External Dependencies
+# =============================================================================
+
+# PM4PY OCEL object or dict-based OCEL - treated as Any since external
+OCELData = Any
+
+# Logging module type
+Logger = Any
+
+
+# =============================================================================
+# Base TypedDicts for Common Structures
+# =============================================================================
+
+class ErrorResponse(TypedDict):
+    """Base error response that can be included in any tool response."""
+    error: str
+
+
+class VisualizationDict(TypedDict, total=False):
+    """Visualization data returned by visualization tools."""
+    format: str  # "svg" or "png"
+    content: NotRequired[str]  # SVG content
+    data_base64: NotRequired[str]  # PNG base64 data
+    type: str  # "visualization"
+    metadata: NotRequired[Dict[str, Any]]
+
+
+class MetadataDict(TypedDict, total=False):
+    """Common metadata structure."""
+    time_unit: NotRequired[str]
+    object_type_filter: NotRequired[Optional[str]]
+    total_events: NotRequired[int]
+    total_objects: NotRequired[int]
+
+
+# =============================================================================
+# DFG (Directly Follows Graph) Types
+# =============================================================================
+
+class DFGEdgeDict(TypedDict):
+    """A single edge in a DFG."""
+    source: str
+    target: str
+    frequency: int
+
+
+class DFGStartActivityDict(TypedDict):
+    """Start activity in a DFG."""
+    activity: str
+    frequency: int
+
+
+class DFGDict(TypedDict, total=False):
+    """DFG structure returned by process mining engine."""
+    edges: List[DFGEdgeDict]
+    start_activities: NotRequired[List[DFGStartActivityDict]]
+
+
+# =============================================================================
+# Petri Net Types
+# =============================================================================
+
+class PetriNetDict(TypedDict):
+    """Petri Net structure returned by process mining engine."""
+    places: int
+    transitions: int
+    arcs: int
+    initial_marking: str
+    final_marking: str
+
+
+# =============================================================================
+# Performance Metrics Types
+# =============================================================================
+
+class TransitionStatsDict(TypedDict):
+    """Statistics for a single transition."""
+    count: int
+    avg_seconds: float
+    min_seconds: float
+    max_seconds: float
+    median_seconds: float
+    std_seconds: float
+
+
+class PerformanceMetricsDict(TypedDict, total=False):
+    """Performance metrics returned by process mining engine."""
+    time_unit: str
+    transitions: Dict[str, TransitionStatsDict]
+    total_transitions_analyzed: int
+    error: NotRequired[str]
+
+
+# =============================================================================
+# Bottleneck Detection Types
+# =============================================================================
+
+class BottleneckInfoDict(TypedDict):
+    """Information about a detected bottleneck."""
+    transition: str
+    avg_seconds: float
+    max_seconds: float
+    count: int
+    severity: str  # "high" or "medium"
+
+
+class BottleneckResultDict(TypedDict, total=False):
+    """Bottleneck detection result."""
+    bottlenecks: List[BottleneckInfoDict]
+    threshold_percentile: float
+    threshold_seconds: NotRequired[float]
+    time_unit: str
+    total_transitions: NotRequired[int]
+    error: NotRequired[str]
+
+
+# =============================================================================
+# Conformance Checking Types
+# =============================================================================
+
+class DeviationDict(TypedDict):
+    """A conformance deviation."""
+    object_id: str
+    deviation: str
+    position: int
+
+
+class ConformanceModelDict(TypedDict):
+    """Model info in conformance result."""
+    places: int
+    transitions: int
+
+
+class ConformanceResultDict(TypedDict, total=False):
+    """Conformance checking result."""
+    fitness_score: float
+    fitness_percentage: float
+    sample_size: int
+    conformant_traces: int
+    deviations: List[DeviationDict]
+    total_deviations: int
+    model: NotRequired[ConformanceModelDict]
+    error: NotRequired[str]
+
+
+# =============================================================================
+# Object Interactions Types
+# =============================================================================
+
+class ObjectInteractionDict(TypedDict):
+    """A single object type interaction."""
+    type_1: str
+    type_2: str
+    co_occurrences: int
+
+
+class ObjectInteractionsResultDict(TypedDict, total=False):
+    """Object interactions analysis result."""
+    object_types: List[str]
+    co_occurrence_matrix: Dict[str, Dict[str, int]]
+    top_interactions: List[ObjectInteractionDict]
+    total_pairs_analyzed: int
+    error: NotRequired[str]
+
+
+# =============================================================================
+# Process Variants Types
+# =============================================================================
+
+class VariantDict(TypedDict, total=False):
+    """A single process variant."""
+    activity_sequence: List[str]
+    frequency: int
+    sample_objects: NotRequired[List[str]]
+    sample_events: NotRequired[List[str]]
+
+
+# =============================================================================
+# Social Network Types
+# =============================================================================
+
+class SocialNetworkEdgeDict(TypedDict):
+    """An edge in the social network."""
+    source: str
+    target: str
+    weight: int
+
+
+class SocialNetworkResultDict(TypedDict, total=False):
+    """Social network discovery result."""
+    nodes: List[str]
+    edges: List[SocialNetworkEdgeDict]
+    total_nodes: int
+    total_edges: int
+    resource_attribute: str
+    error: NotRequired[str]
+    available_attributes: NotRequired[List[str]]
+
+
+# =============================================================================
+# Statistics Types
+# =============================================================================
+
+class ObjectTypeStatsDict(TypedDict):
+    """Statistics for a single object type."""
+    count: int
+    objects: List[str]
+
+
+class StatsByObjectTypeDict(TypedDict):
+    """Statistics grouped by object type."""
+    # Keys are object type names, values are ObjectTypeStatsDict
+    pass  # This is a dynamic dict, use Dict[str, ObjectTypeStatsDict] in practice
+
+
+class OCELStatsDict(TypedDict, total=False):
+    """Basic OCEL statistics."""
+    total_events: int
+    total_objects: int
+    object_types: int
+    event_types: int
+    error: NotRequired[str]
+
+
+# =============================================================================
+# Search/Retrieval Types
+# =============================================================================
+
+class SearchResultItemDict(TypedDict, total=False):
+    """A single search result item."""
+    content: str
+    chunk_type: str
+    path: str
+    score: float
+    metadata: NotRequired[Dict[str, Any]]
+
+
+class SearchResultDict(TypedDict, total=False):
+    """Search result from retrieval engine."""
+    query: str
+    total_results: int
+    results: List[SearchResultItemDict]
+    error: NotRequired[str]
+    fallback: NotRequired[str]
+
+
+# =============================================================================
+# Tool List Types
+# =============================================================================
+
+class ToolParameterDict(TypedDict, total=False):
+    """Parameter definition for a tool."""
+    type: str
+    description: str
+
+
+class ToolInfoDict(TypedDict, total=False):
+    """Information about an MCP tool."""
+    name: str
+    description: str
+    parameters: Dict[str, ToolParameterDict]
+    metadata: NotRequired[Dict[str, Any]]
+
+
+class ListToolsResponseDict(TypedDict):
+    """Response from list_available_tools."""
+    tools: List[ToolInfoDict]
+    total_count: int
+    metadata: Dict[str, Any]
+
+
+# =============================================================================
+# MCP Tool Response Types (for each specific tool)
+# =============================================================================
+
+class TraceLifecycleResponseDict(TypedDict, total=False):
+    """Response from trace_object_lifecycle tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+    object_id: NotRequired[str]
+
+
+class TimeRangeQueryResponseDict(TypedDict, total=False):
+    """Response from query_events_by_timerange tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+
+
+class StatisticsResponseDict(TypedDict, total=False):
+    """Response from get_statistics_by_object_type tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+
+
+class AnomaliesResponseDict(TypedDict, total=False):
+    """Response from detect_anomalies tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+
+
+class OrphanedObjectsResponseDict(TypedDict, total=False):
+    """Response from find_orphaned_objects tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+
+
+class DFGResponseDict(TypedDict, total=False):
+    """Response from discover_dfg tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+    object_type: NotRequired[str]
+
+
+class PetriNetResponseDict(TypedDict, total=False):
+    """Response from discover_petri_net tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+    object_type: NotRequired[str]
+
+
+class VariantsResponseDict(TypedDict, total=False):
+    """Response from get_process_variants tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+    object_type: NotRequired[str]
+
+
+class PerformanceResponseDict(TypedDict, total=False):
+    """Response from get_performance_metrics tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+    object_type: NotRequired[str]
+
+
+class BottlenecksResponseDict(TypedDict, total=False):
+    """Response from detect_bottlenecks tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+    object_type: NotRequired[str]
+
+
+class ConformanceResponseDict(TypedDict, total=False):
+    """Response from check_conformance tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+    object_type: NotRequired[str]
+
+
+class InteractionsResponseDict(TypedDict, total=False):
+    """Response from analyze_object_interactions tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+
+
+class ResourceAttributesResponseDict(TypedDict, total=False):
+    """Response from get_available_resource_attributes tool."""
+    available_attributes: List[str]
+    total_count: int
+    hint: str
+    error: NotRequired[str]
+
+
+class SocialNetworkResponseDict(TypedDict, total=False):
+    """Response from discover_social_network tool."""
+    references: List[Dict[str, Any]]
+    summary: str
+    visualization: NotRequired[VisualizationDict]
+    metadata: Dict[str, Any]
+    verification_hash: str
+    generated_at: str
+    error: NotRequired[str]
+    resource_attribute: NotRequired[str]
+
+
+# =============================================================================
+# Union Type for All Tool Responses
+# =============================================================================
+
+ToolResponse = Union[
+    TraceLifecycleResponseDict,
+    TimeRangeQueryResponseDict,
+    StatisticsResponseDict,
+    AnomaliesResponseDict,
+    OrphanedObjectsResponseDict,
+    DFGResponseDict,
+    PetriNetResponseDict,
+    VariantsResponseDict,
+    PerformanceResponseDict,
+    BottlenecksResponseDict,
+    ConformanceResponseDict,
+    InteractionsResponseDict,
+    ResourceAttributesResponseDict,
+    SocialNetworkResponseDict,
+    SearchResultDict,
+    ListToolsResponseDict,
+    ErrorResponse,
+]
+
+
+# =============================================================================
+# Client Types
+# =============================================================================
+
+class ChatMessageDict(TypedDict):
+    """A chat message for LLM providers."""
+    role: str  # "system", "user", "assistant"
+    content: str
+
+
+# =============================================================================
+# Generator Types
+# =============================================================================
+
+EventStreamGenerator = Generator[List[Dict[str, Any]], None, None]
 
 class EventReferenceDict(TypedDict):
     """Verifiable reference to an OCEL event."""

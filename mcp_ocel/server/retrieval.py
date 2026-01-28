@@ -21,6 +21,8 @@ from chromadb.config import Settings
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
+from .typing_ocel import SearchResultItemDict
+
 # Default embedding model (small, fast, good quality)
 DEFAULT_MODEL = "all-MiniLM-L6-v2"
 
@@ -403,7 +405,7 @@ class OCELRetrievalEngine:
         Index OCEL data for retrieval.
 
         Args:
-            ocel_data: Parsed OCEL JSON.
+            ocel_data: Parsed OCEL JSON dictionary.
             force: Force reindex.
 
         Returns:
@@ -420,7 +422,7 @@ class OCELRetrievalEngine:
             data = json.load(f)
         return self.index_ocel(data, force=force)
 
-    def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def search(self, query: str, top_k: int = 5) -> List[SearchResultItemDict]:
         """
         Search indexed OCEL data.
 
@@ -429,7 +431,7 @@ class OCELRetrievalEngine:
             top_k: Number of results.
 
         Returns:
-            List of results with chunk content and metadata.
+            List of SearchResultItemDict with chunk content and metadata.
         """
         if not self._indexed:
             return []
@@ -446,8 +448,16 @@ class OCELRetrievalEngine:
             for chunk, score in results
         ]
 
-    def search_schema(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
-        """Search only schema-related chunks (types, attributes)."""
+    def search_schema(self, query: str, top_k: int = 3) -> List[SearchResultItemDict]:
+        """Search only schema-related chunks (types, attributes).
+        
+        Args:
+            query: Natural language query.
+            top_k: Number of results.
+            
+        Returns:
+            List of SearchResultItemDict for schema chunks.
+        """
         if not self._indexed:
             return []
 
@@ -463,8 +473,16 @@ class OCELRetrievalEngine:
             for chunk, score in results
         ]
 
-    def search_data(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Search only data chunks (events, objects)."""
+    def search_data(self, query: str, top_k: int = 5) -> List[SearchResultItemDict]:
+        """Search only data chunks (events, objects).
+        
+        Args:
+            query: Natural language query.
+            top_k: Number of results.
+            
+        Returns:
+            List of SearchResultItemDict for data chunks.
+        """
         if not self._indexed:
             return []
 
