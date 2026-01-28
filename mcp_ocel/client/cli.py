@@ -43,7 +43,7 @@ async def fetch_available_tools(client: MCPClient) -> List[Dict[str, Any]]:
         client: Connected MCPClient instance.
         
     Returns:
-        List of tool definitions with name, description, parameters.
+        List of tool definitions in MCP standard format.
     """
     global _cached_tools
     
@@ -70,53 +70,6 @@ async def fetch_available_tools(client: MCPClient) -> List[Dict[str, Any]]:
         return []
 
 
-def format_tools_section(tools: List[Dict[str, Any]]) -> str:
-    """
-    Format the available tools into a markdown section for the system prompt.
-    
-    Args:
-        tools: List of tool definitions.
-        
-    Returns:
-        Formatted markdown string.
-    """
-    if not tools:
-        return "No tools available."
-    
-    lines = []
-    for i, tool in enumerate(tools, 1):
-        name = tool.get("name", "unknown")
-        desc = tool.get("description", "No description")
-        params = tool.get("parameters", {})
-        metadata = tool.get("metadata", {})
-        
-        # Format parameters
-        if params:
-            if isinstance(params, dict):
-                param_strs = []
-                for pname, pinfo in params.items():
-                    if isinstance(pinfo, dict):
-                        param_strs.append(f"{pname} ({pinfo.get('type', 'any')})")
-                    else:
-                        param_strs.append(pname)
-                params_text = ", ".join(param_strs) if param_strs else "none"
-            else:
-                params_text = str(params)
-        else:
-            params_text = "none"
-        
-        # Add time unit note if applicable
-        time_note = ""
-        if metadata.get("time_unit") == "seconds":
-            time_note = " [times in seconds]"
-        
-        lines.append(f"{i}. `{name}` - {desc}{time_note}")
-        if params_text != "none":
-            lines.append(f"   Params: {params_text}")
-    
-    return "\n".join(lines)
-
-
 SYSTEM_PROMPT_TEMPLATE = """
 ### ROLE & OBJECTIVE
 You are an Expert in Object-Centric Process Mining (OCPM) analyzing OCEL 2.0 logs.
@@ -140,23 +93,6 @@ You can request additional information by responding with a tool call in this fo
 Available tools:
 {available_tools_section}
 
-### TOOL USAGE PATTERNS
-
-**For semantic search:**
-```tool
-{{"tool": "search_ocel", "params": {{"query": "order creation and payment events"}}}}
-```
-
-**For process discovery:**
-```tool
-{{"tool": "call_mcp_tool", "params": {{"tool_name": "discover_dfg", "arguments": {{}}}}}}
-```
-
-**For performance analysis:**
-```tool
-{{"tool": "call_mcp_tool", "params": {{"tool_name": "get_performance_metrics", "arguments": {{}}}}}}
-```
-
 ### ANALYSIS GUIDELINES
 1. **Multiplicity First**: Do not assume a single Case ID. Analyze how events link multiple objects (1:n, m:n relations).
 2. **Cardinality**: Identify "Batching" (one event, many objects) vs. "Singular" flows.
@@ -170,17 +106,19 @@ Available tools:
 - If you need more context, use search_ocel or get_schema_section first.
 """
 
-def format_system_prompt(meta: OcelMetadata, tools_section: str = "") -> str:
+def format_system_prompt(meta: OcelMetadata, tools: List[Dict[str, Any]]) -> str:
     """
     Format the system prompt with real OCEL metadata and available tools.
     
     Args:
         meta: OCEL metadata from server.
-        tools_section: Formatted tools section string.
+        tools: List of tool definitions in MCP standard format.
         
     Returns:
         Complete system prompt.
     """
+    tools_json = json.dumps(tools, indent=2) if tools else "No tools available."
+    
     return SYSTEM_PROMPT_TEMPLATE.format(
         object_types_list=meta.object_types if meta.object_types else ["(no object types loaded)"],
         event_types_list=meta.event_types if meta.event_types else ["(no event types loaded)"],
@@ -188,7 +126,7 @@ def format_system_prompt(meta: OcelMetadata, tools_section: str = "") -> str:
         total_events=meta.total_events,
         start_date=meta.start_date,
         end_date=meta.end_date,
-        available_tools_section=tools_section if tools_section else "No tools available.",
+        available_tools_section=tools_json,
     )
 
 
@@ -272,26 +210,9 @@ async def execute_tool_call(client: MCPClient, tool_call: Dict[str, Any]) -> str
     params = tool_call.get("params", {})
 
     try:
-        if tool_name == "get_schema_section":
-            section = params.get("section", "eventTypes")
-            result = await client.get_schema_section(section)
-            return f"**Schema Section: {section}**\n```json\n{json.dumps(result, indent=2)}\n```"
-
-        elif tool_name == "call_mcp_tool":
-            mcp_tool = params.get("tool_name", "")
-            mcp_args = params.get("arguments", {})
-            result = await client.call_tool(mcp_tool, mcp_args)
-            return f"**MCP Tool: {mcp_tool}**\n```json\n{json.dumps(result, indent=2)}\n```"
-
-        elif tool_name == "search_ocel":
-            query = params.get("query", "")
-            top_k = params.get("top_k", 5)
-            chunk_types = params.get("chunk_types")
-            result = await client.search_ocel(query, top_k, chunk_types)
-            return f"**OCEL Search: {query[:50]}**\n```json\n{json.dumps(result, indent=2)}\n```"
-
-        else:
-            return f"Unknown tool: {tool_name}"
+        # Call any MCP tool directly
+        result = await client.call_tool(tool_name, params)
+        return f"**Tool: {tool_name}**\n```json\n{json.dumps(result, indent=2)}\n```"
 
     except MCPClientError as e:
         return f"Tool error: {e}"
@@ -343,9 +264,9 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
         available_tools = await fetch_available_tools(mcp_client)
         print(f"  Tools available: {len(available_tools)}")
         
-        # Build dynamic tools section for system prompt
-        tools_section = format_tools_section(available_tools)
-        system_prompt = format_system_prompt(meta, tools_section)
+        # Build system prompt with tools in MCP format
+        system_prompt = format_system_prompt(meta, available_tools)
+        print(system_prompt)
 
         try:
             provider = build_provider(args.provider)

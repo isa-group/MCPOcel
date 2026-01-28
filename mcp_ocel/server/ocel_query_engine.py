@@ -38,7 +38,7 @@ class OCELQueryEngine:
         if hasattr(self.ocel_data, "events") and hasattr(self.ocel_data, "objects"):
             self.format = "pm4py"
             logger.debug("Detected format: PM4PY")
-        elif isinstance(self.ocel_data, dict) and "ocel:events" in self.ocel_data:
+        elif isinstance(self.ocel_data, dict) and "events" in self.ocel_data:
             self.format = "dict"
             logger.debug("Detected format: dict (ijson)")
         else:
@@ -50,7 +50,7 @@ class OCELQueryEngine:
         Traces the full lifecycle of an object.
 
         Args:
-            object_id: Object ID (ocel:oid).
+            object_id: Object ID.
 
         Returns:
             List of events ordered by timestamp.
@@ -66,68 +66,79 @@ class OCELQueryEngine:
             return self._trace_lifecycle_dict(object_id)
     
     def _trace_lifecycle_pm4py(self, object_id: str) -> List[EventReference]:
-        """Lifecycle tracing using PM4PY."""
-        import pm4py
-        
-        if object_id not in self.ocel_data.objects:
+        """Lifecycle tracing using PM4PY DataFrames."""
+        # Check if object exists using the ocel:oid column
+        if object_id not in self.ocel_data.objects["ocel:oid"].values:
             raise ValueError(f"Object not found: {object_id}")
         
-        try:
-            event_ids = pm4py.ocel_get_events_of_object(self.ocel_data, object_id)
-        except Exception as e:
-            logger.error(f"Error tracing lifecycle in PM4PY: {e}")
-            raise
+        # Get events for this object from relations DataFrame
+        obj_relations = self.ocel_data.relations[
+            self.ocel_data.relations["ocel:oid"] == object_id
+        ]
+        event_ids = obj_relations["ocel:eid"].unique()
         
         references = []
         for event_id in sorted(event_ids):
-            event = self.ocel_data.events.get(event_id)
-            if event:
-                involved_objs = [
-                    ObjectReference(
-                        object_id=oid,
-                        object_type=self.ocel_data.objects[oid].get("ocel:type", "unknown"),
-                        role=None,
-                    )
-                    for oid in event.get("ocel:omap", [])
-                    if oid in self.ocel_data.objects
-                ]
-                references.append(
-                    EventReference(
-                        event_id=event_id,
-                        activity=event.get("ocel:activity", "unknown"),
-                        timestamp=event.get("ocel:timestamp", ""),
-                        involved_objects=involved_objs,
-                    )
+            # Get event data from events DataFrame
+            event_row = self.ocel_data.events[
+                self.ocel_data.events["ocel:eid"] == event_id
+            ]
+            if event_row.empty:
+                continue
+            
+            event = event_row.iloc[0]
+            
+            # Get all objects related to this event
+            event_relations = self.ocel_data.relations[
+                self.ocel_data.relations["ocel:eid"] == event_id
+            ]
+            involved_objs = [
+                ObjectReference(
+                    object_id=str(row["ocel:oid"]),
+                    object_type=str(row["ocel:type"]),
+                    role=str(row.get("ocel:qualifier", "")) if row.get("ocel:qualifier") else None,
                 )
+                for _, row in event_relations.iterrows()
+            ]
+            
+            references.append(
+                EventReference(
+                    event_id=str(event_id),
+                    activity=str(event.get("ocel:activity", "unknown")),
+                    timestamp=str(event.get("ocel:timestamp", "")),
+                    involved_objects=involved_objs,
+                )
+            )
         
         logger.info(f"Lifecycle for {object_id}: {len(references)} events")
         return references
     
     def _trace_lifecycle_dict(self, object_id: str) -> List[EventReference]:
         """Lifecycle tracing using dict (ijson)."""
-        if object_id not in self.ocel_data.get("ocel:objects", {}):
+        # Build objects index by id
+        objects_by_id = {obj.get("id"): obj for obj in self.ocel_data.get("objects", [])}
+        
+        if object_id not in objects_by_id:
             raise ValueError(f"Object not found: {object_id}")
         
         references = []
-        for event in self.ocel_data.get("ocel:events", []):
-            omap = event.get("ocel:omap", [])
+        for event in self.ocel_data.get("events", []):
+            relationships = event.get("relationships", [])
             
-            if any(obj.get("ocel:oid") == object_id for obj in omap):
+            if any(rel.get("objectId") == object_id for rel in relationships):
                 involved_objs = [
                     ObjectReference(
-                        object_id=obj.get("ocel:oid"),
-                        object_type=self.ocel_data["ocel:objects"]
-                        .get(obj.get("ocel:oid"), {})
-                        .get("ocel:type", "unknown"),
-                        role=obj.get("ocel:qualifier"),
+                        object_id=rel.get("objectId"),
+                        object_type=objects_by_id.get(rel.get("objectId"), {}).get("type", "unknown"),
+                        role=rel.get("qualifier"),
                     )
-                    for obj in omap
+                    for rel in relationships
                 ]
                 references.append(
                     EventReference(
-                        event_id=event.get("ocel:eid", ""),
-                        activity=event.get("ocel:activity", "unknown"),
-                        timestamp=event.get("ocel:timestamp", ""),
+                        event_id=event.get("id", ""),
+                        activity=event.get("type", "unknown"),
+                        timestamp=event.get("time", ""),
                         involved_objects=involved_objs,
                     )
                 )
@@ -167,60 +178,68 @@ class OCELQueryEngine:
             return self._timerange_dict(start, end)
     
     def _timerange_pm4py(self, start: datetime, end: datetime) -> List[EventReference]:
-        """Time range query using PM4PY."""
+        """Time range query using PM4PY DataFrames."""
         references = []
-        for event_id, event in self.ocel_data.events.items():
+        
+        for _, event in self.ocel_data.events.iterrows():
             try:
-                ts_str = event.get("ocel:timestamp", "")
+                ts_str = str(event.get("ocel:timestamp", ""))
                 ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                 
                 if start <= ts <= end:
+                    event_id = str(event.get("ocel:eid", ""))
+                    
+                    # Get all objects related to this event
+                    event_relations = self.ocel_data.relations[
+                        self.ocel_data.relations["ocel:eid"] == event_id
+                    ]
                     involved_objs = [
                         ObjectReference(
-                            object_id=oid,
-                            object_type=self.ocel_data.objects[oid].get("ocel:type"),
-                            role=None,
+                            object_id=str(row["ocel:oid"]),
+                            object_type=str(row["ocel:type"]),
+                            role=str(row.get("ocel:qualifier", "")) if row.get("ocel:qualifier") else None,
                         )
-                        for oid in event.get("ocel:omap", [])
-                        if oid in self.ocel_data.objects
+                        for _, row in event_relations.iterrows()
                     ]
+                    
                     references.append(
                         EventReference(
                             event_id=event_id,
-                            activity=event.get("ocel:activity", "unknown"),
+                            activity=str(event.get("ocel:activity", "unknown")),
                             timestamp=ts_str,
                             involved_objects=involved_objs,
                         )
                     )
             except Exception as e:
-                logger.debug(f"Error processing event {event_id}: {e}")
+                logger.debug(f"Error processing event: {e}")
         
         logger.info(f"Events in range: {len(references)}")
         return references
     
     def _timerange_dict(self, start: datetime, end: datetime) -> List[EventReference]:
         """Time range query using dict."""
+        # Build objects index by id
+        objects_by_id = {obj.get("id"): obj for obj in self.ocel_data.get("objects", [])}
+        
         references = []
-        for event in self.ocel_data.get("ocel:events", []):
+        for event in self.ocel_data.get("events", []):
             try:
-                ts_str = event.get("ocel:timestamp", "")
+                ts_str = event.get("time", "")
                 ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                 
                 if start <= ts <= end:
                     involved_objs = [
                         ObjectReference(
-                            object_id=obj.get("ocel:oid"),
-                            object_type=self.ocel_data["ocel:objects"]
-                            .get(obj.get("ocel:oid"), {})
-                            .get("ocel:type"),
-                            role=obj.get("ocel:qualifier"),
+                            object_id=rel.get("objectId"),
+                            object_type=objects_by_id.get(rel.get("objectId"), {}).get("type"),
+                            role=rel.get("qualifier"),
                         )
-                        for obj in event.get("ocel:omap", [])
+                        for rel in event.get("relationships", [])
                     ]
                     references.append(
                         EventReference(
-                            event_id=event.get("ocel:eid", ""),
-                            activity=event.get("ocel:activity", "unknown"),
+                            event_id=event.get("id", ""),
+                            activity=event.get("type", "unknown"),
                             timestamp=ts_str,
                             involved_objects=involved_objs,
                         )
@@ -246,15 +265,16 @@ class OCELQueryEngine:
             return self._stats_dict()
     
     def _stats_pm4py(self) -> Dict[str, ObjectTypeStatsDict]:
-        """Statistics using PM4PY.
+        """Statistics using PM4PY DataFrames.
         
         Returns:
             Dict mapping object type names to statistics.
         """
         stats_by_type: Dict[str, ObjectTypeStatsDict] = {}
         
-        for obj_id, obj in self.ocel_data.objects.items():
-            obj_type = obj.get("ocel:type", "unknown")
+        for _, obj in self.ocel_data.objects.iterrows():
+            obj_id = str(obj.get("ocel:oid", ""))
+            obj_type = str(obj.get("ocel:type", "unknown"))
             if obj_type not in stats_by_type:
                 stats_by_type[obj_type] = {"count": 0, "objects": []}
             
@@ -272,8 +292,9 @@ class OCELQueryEngine:
         """
         stats_by_type: Dict[str, ObjectTypeStatsDict] = {}
         
-        for obj_id, obj in self.ocel_data.get("ocel:objects", {}).items():
-            obj_type = obj.get("ocel:type", "unknown")
+        for obj in self.ocel_data.get("objects", []):
+            obj_id = obj.get("id", "")
+            obj_type = obj.get("type", "unknown")
             if obj_type not in stats_by_type:
                 stats_by_type[obj_type] = {"count": 0, "objects": []}
             
@@ -303,16 +324,14 @@ class OCELQueryEngine:
             return self._anomalies_dict()
     
     def _anomalies_pm4py(self) -> List[AnomalyReport]:
-        """Anomaly detection using PM4PY."""
-        import pm4py
-        
+        """Anomaly detection using PM4PY DataFrames."""
         anomalies = []
         
-        all_object_ids = set(self.ocel_data.objects.keys())
-        objects_in_events = set()
+        # Get all object IDs from objects DataFrame
+        all_object_ids = set(self.ocel_data.objects["ocel:oid"].values)
         
-        for event in self.ocel_data.events.values():
-            objects_in_events.update(event.get("ocel:omap", []))
+        # Get all object IDs that appear in relations
+        objects_in_events = set(self.ocel_data.relations["ocel:oid"].unique())
         
         orphaned_objects = all_object_ids - objects_in_events
         for obj_id in orphaned_objects:
@@ -320,38 +339,43 @@ class OCELQueryEngine:
                 AnomalyReport(
                     anomaly_type="orphaned_object",
                     severity="medium",
-                    affected_id=obj_id,
+                    affected_id=str(obj_id),
                     description="Object does not participate in any event",
                     timestamp=datetime.utcnow().isoformat(),
                 )
             )
         
-        for event_id, event in self.ocel_data.events.items():
-            omap = event.get("ocel:omap", [])
-            if not omap:
-                anomalies.append(
-                    AnomalyReport(
-                        anomaly_type="event_no_objects",
-                        severity="high",
-                        affected_id=event_id,
-                        description="Event without related objects",
-                        timestamp=datetime.utcnow().isoformat(),
-                    )
-                )
+        # Check for events without related objects
+        all_event_ids = set(self.ocel_data.events["ocel:eid"].values)
+        events_with_objects = set(self.ocel_data.relations["ocel:eid"].unique())
+        events_without_objects = all_event_ids - events_with_objects
         
-            logger.info(f"Anomalies detected: {len(anomalies)}")
+        for event_id in events_without_objects:
+            anomalies.append(
+                AnomalyReport(
+                    anomaly_type="event_no_objects",
+                    severity="high",
+                    affected_id=str(event_id),
+                    description="Event without related objects",
+                    timestamp=datetime.utcnow().isoformat(),
+                )
+            )
+        
+        logger.info(f"Anomalies detected: {len(anomalies)}")
         return anomalies
     
     def _anomalies_dict(self) -> List[AnomalyReport]:
         """Anomaly detection using dict."""
         anomalies = []
         
-        all_object_ids = set(self.ocel_data.get("ocel:objects", {}).keys())
+        # Build objects index by id
+        objects_by_id = {obj.get("id"): obj for obj in self.ocel_data.get("objects", [])}
+        all_object_ids = set(objects_by_id.keys())
         objects_in_events = set()
         
-        for event in self.ocel_data.get("ocel:events", []):
-            for obj_ref in event.get("ocel:omap", []):
-                objects_in_events.add(obj_ref.get("ocel:oid"))
+        for event in self.ocel_data.get("events", []):
+            for rel in event.get("relationships", []):
+                objects_in_events.add(rel.get("objectId"))
         
         orphaned_objects = all_object_ids - objects_in_events
         for obj_id in orphaned_objects:
@@ -383,25 +407,27 @@ class OCELQueryEngine:
             return self._orphaned_dict()
     
     def _orphaned_pm4py(self) -> List[str]:
-        """Orphaned objects using PM4PY."""
-        all_objects = set(self.ocel_data.objects.keys())
-        objects_in_events = set()
+        """Orphaned objects using PM4PY DataFrames."""
+        # Get all object IDs from objects DataFrame
+        all_objects = set(self.ocel_data.objects["ocel:oid"].values)
         
-        for event in self.ocel_data.events.values():
-            objects_in_events.update(event.get("ocel:omap", []))
+        # Get all object IDs that appear in relations
+        objects_in_events = set(self.ocel_data.relations["ocel:oid"].unique())
         
-        orphaned = list(all_objects - objects_in_events)
+        orphaned = [str(oid) for oid in (all_objects - objects_in_events)]
         logger.info(f"Orphaned objects found: {len(orphaned)}")
         return orphaned
     
     def _orphaned_dict(self) -> List[str]:
         """Orphaned objects using dict."""
-        all_objects = set(self.ocel_data.get("ocel:objects", {}).keys())
+        # Build objects index by id
+        objects_by_id = {obj.get("id"): obj for obj in self.ocel_data.get("objects", [])}
+        all_objects = set(objects_by_id.keys())
         objects_in_events = set()
         
-        for event in self.ocel_data.get("ocel:events", []):
-            for obj_ref in event.get("ocel:omap", []):
-                objects_in_events.add(obj_ref.get("ocel:oid"))
+        for event in self.ocel_data.get("events", []):
+            for rel in event.get("relationships", []):
+                objects_in_events.add(rel.get("objectId"))
         
         orphaned = list(all_objects - objects_in_events)
         logger.info(f"Orphaned objects found: {len(orphaned)}")

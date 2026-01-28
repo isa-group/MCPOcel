@@ -3,6 +3,7 @@
 import argparse
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Ensure repo root is on sys.path when executed as a script (python main.py)
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -55,4 +56,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    load_dotenv()
     main()

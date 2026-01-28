@@ -42,27 +42,28 @@ class ErrorType(str, Enum):
     GRAPHVIZ_NOT_FOUND = "graphviz_not_found"
 
 
-OCEL_RESERVED_ATTRS: Final[dict] = {
-    "global": {"ocel:global-log"},
+OCEL2_KEYS: Final[dict] = {
     "log": {
-        "ocel:version",
-        "ocel:ordering",
-        "ocel:attribute-names",
-        "ocel:object-types",
-        "ocel:event-types",
-        "ocel:objects",
-        "ocel:events",
+        "eventTypes",
+        "objectTypes",
+        "events",
+        "objects",
     },
     "event": {
-        "ocel:eid",
-        "ocel:activity",
-        "ocel:timestamp",
-        "ocel:omap",
-        "ocel:vmap",
+        "id",
+        "type",
+        "time",
+        "attributes",
+        "relationships",
     },
     "object": {
-        "ocel:oid",
-        "ocel:type",
-        "ocel:ovmap",
+        "id",
+        "type",
+        "attributes",
+        "relationships",
+    },
+    "relationship": {
+        "objectId",
+        "qualifier",
     },
 }
