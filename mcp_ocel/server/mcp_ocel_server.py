@@ -28,7 +28,7 @@ def _get_retrieval_engine():
     global _retrieval_engine
     if _retrieval_engine is None:
         try:
-            from mcp.server.retrieval import OCELRetrievalEngine
+            from mcp_ocel.server.retrieval import OCELRetrievalEngine
             _retrieval_engine = OCELRetrievalEngine
             logger.info("Hybrid retrieval engine loaded successfully")
         except ImportError as e:
