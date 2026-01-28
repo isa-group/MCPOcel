@@ -17,7 +17,24 @@ from .visualization_engine import VisualizationEngine
 from .response_builder import ResponseBuilder
 from .typing_ocel import UnifiedMCPResponse
 
+# Lazy import for retrieval engine (optional dependency)
+_retrieval_engine = None
+
 logger = get_logger(__name__)
+
+
+def _get_retrieval_engine():
+    """Lazy-load the retrieval engine to avoid import overhead."""
+    global _retrieval_engine
+    if _retrieval_engine is None:
+        try:
+            from mcp.server.retrieval import OCELRetrievalEngine
+            _retrieval_engine = OCELRetrievalEngine
+            logger.info("Hybrid retrieval engine loaded successfully")
+        except ImportError as e:
+            logger.warning(f"Retrieval engine not available: {e}")
+            _retrieval_engine = False
+    return _retrieval_engine
 
 class OCELMCPServer:
     """Domain-agnostic MCP server for OCEL analysis."""
@@ -55,11 +72,69 @@ class OCELMCPServer:
             self.mining_engine = ProcessMiningEngine(self.ocel_data)
             self.viz_engine = VisualizationEngine(self.ocel_data, self.mining_engine)
             
+            # Initialize hybrid retrieval engine (optional)
+            self.retrieval_engine = None
+            self._init_retrieval_engine()
+            
             logger.info("Engines initialized successfully")
             
         except Exception as e:
             logger.error(f"Error initializing server: {e}")
             raise
+    
+    def _init_retrieval_engine(self) -> None:
+        """Initialize the hybrid retrieval engine for semantic search."""
+        RetrievalEngine = _get_retrieval_engine()
+        if RetrievalEngine and RetrievalEngine is not False:
+            try:
+                self.retrieval_engine = RetrievalEngine()
+                # Index the OCEL data
+                if hasattr(self.ocel_data, "events"):
+                    # pm4py OCEL object - convert to dict
+                    ocel_dict = self._ocel_to_dict()
+                else:
+                    ocel_dict = self.ocel_data
+                self.retrieval_engine.index_ocel(ocel_dict)
+                logger.info("OCEL indexed for hybrid search")
+            except Exception as e:
+                logger.warning(f"Failed to initialize retrieval engine: {e}")
+                self.retrieval_engine = None
+    
+    def _ocel_to_dict(self) -> Dict[str, Any]:
+        """Convert pm4py OCEL object to dict format for indexing."""
+        result = {
+            "ocel:global-log": {
+                "ocel:attribute-names": self.config.attribute_names,
+                "ocel:object-types": self.config.object_types,
+            },
+            "ocel:events": [],
+            "ocel:objects": {},
+        }
+        
+        try:
+            # Convert events
+            if hasattr(self.ocel_data, "events"):
+                events_df = self.ocel_data.events
+                for _, row in events_df.iterrows():
+                    event = {
+                        "ocel:eid": str(row.get("ocel:eid", "")),
+                        "ocel:activity": str(row.get("ocel:activity", "")),
+                        "ocel:timestamp": str(row.get("ocel:timestamp", "")),
+                    }
+                    result["ocel:events"].append(event)
+            
+            # Convert objects
+            if hasattr(self.ocel_data, "objects"):
+                objects_df = self.ocel_data.objects
+                for _, row in objects_df.iterrows():
+                    oid = str(row.get("ocel:oid", ""))
+                    result["ocel:objects"][oid] = {
+                        "ocel:type": str(row.get("ocel:type", "")),
+                    }
+        except Exception as e:
+            logger.warning(f"Error converting OCEL to dict: {e}")
+        
+        return result
     
     def get_tools(self) -> List[Dict[str, Any]]:
         """
@@ -409,6 +484,69 @@ class OCELMCPServer:
             "available_sections": available_sections,
         }
 
+    def search_ocel(
+        self,
+        query: str,
+        top_k: int = 5,
+        chunk_types: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Perform hybrid semantic search over OCEL data.
+
+        Combines BM25 keyword matching with embedding-based semantic search
+        using Reciprocal Rank Fusion (RRF) for optimal results.
+
+        Args:
+            query: Natural language query to search for.
+            top_k: Number of results to return (default: 5).
+            chunk_types: Optional filter for chunk types. Options:
+                - 'schema': Schema-related (metadata, types, attributes)
+                - 'data': Data chunks (events, objects)
+                - None: Search all chunks
+
+        Returns:
+            Dict with search results containing relevant OCEL chunks.
+        """
+        logger.info(f"Searching OCEL for: {query[:50]}...")
+
+        if self.retrieval_engine is None:
+            return {
+                "error": "Hybrid search not available. Install sentence-transformers, chromadb, and rank-bm25.",
+                "fallback": "Use ocel/schema to get schema sections instead.",
+            }
+
+        try:
+            # Choose search method based on chunk_types filter
+            if chunk_types and "schema" in chunk_types:
+                results = self.retrieval_engine.search_schema(query, top_k=top_k)
+            elif chunk_types and "data" in chunk_types:
+                results = self.retrieval_engine.search_data(query, top_k=top_k)
+            else:
+                results = self.retrieval_engine.search(query, top_k=top_k)
+
+            formatted_results = []
+            for result in results:
+                formatted_results.append({
+                    "content": result.get("content", ""),
+                    "chunk_type": result.get("type", "unknown"),
+                    "path": result.get("path", ""),
+                    "score": round(result.get("score", 0.0), 4),
+                    "metadata": result.get("metadata", {}),
+                })
+
+            return {
+                "query": query,
+                "total_results": len(formatted_results),
+                "results": formatted_results,
+            }
+
+        except Exception as e:
+            logger.error(f"Search error: {e}")
+            return {
+                "error": str(e),
+                "query": query,
+            }
+
     def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle a single JSON-RPC 2.0 request.
@@ -436,6 +574,11 @@ class OCELMCPServer:
             elif method == "ocel/schema":
                 section = params.get("section")
                 result = self.get_schema_section(section)
+            elif method == "ocel/search":
+                query = params.get("query", "")
+                top_k = params.get("top_k", 5)
+                chunk_types = params.get("chunk_types")
+                result = self.search_ocel(query, top_k, chunk_types)
             elif method == "tools/list":
                 result = {"tools": self.get_tools()}
             elif method == "tools/call":

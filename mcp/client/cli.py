@@ -44,6 +44,15 @@ AVAILABLE_TOOLS = [
         },
     },
     {
+        "name": "search_ocel",
+        "description": "Hybrid semantic search over OCEL data. Use this to find relevant events, objects, or patterns.",
+        "parameters": {
+            "query": {"type": "string", "description": "Natural language search query"},
+            "top_k": {"type": "integer", "description": "Number of results (default: 5)"},
+            "chunk_types": {"type": "array", "description": "Filter by chunk type: metadata, event_type, object_type, events_batch, objects_batch"},
+        },
+    },
+    {
         "name": "call_mcp_tool",
         "description": "Call an MCP server tool to analyze the OCEL data.",
         "parameters": {
@@ -73,12 +82,13 @@ You can request additional information by responding with a tool call in this fo
 ```
 
 Available tools:
-1. `get_schema_section` - Get OCEL schema details. Params: section (eventTypes|objectTypes|events|objects|attributes)
-2. `call_mcp_tool` - Call MCP analysis tools. Params: tool_name, arguments
+1. `search_ocel` - Hybrid semantic search over OCEL data. Params: query, top_k (optional), chunk_types (optional)
+2. `get_schema_section` - Get OCEL schema details. Params: section (eventTypes|objectTypes|events|objects|attributes)
+3. `call_mcp_tool` - Call MCP analysis tools. Params: tool_name, arguments
 
-Example: To get the event structure schema:
+Example: To search for order-related events:
 ```tool
-{{"tool": "get_schema_section", "params": {{"section": "events"}}}}
+{{"tool": "search_ocel", "params": {{"query": "order creation and payment events"}}}}
 ```
 
 ### ANALYSIS GUIDELINES
@@ -91,7 +101,7 @@ Example: To get the event structure schema:
 - Strict Markdown.
 - When citing specific flows, refer to the Object Types defined in the Context above.
 - If generating SQL/Python, ensure compatibility with the OCEL 2.0 relational schema (event_map, object_map).
-- If you need schema details, request them with a tool call first.
+- If you need more context, use search_ocel or get_schema_section first.
 """
 
 
@@ -185,11 +195,47 @@ def execute_tool_call(client: MCPClient, tool_call: Dict) -> str:
             result = client.call_tool(mcp_tool, mcp_args)
             return f"**MCP Tool: {mcp_tool}**\n```json\n{json.dumps(result, indent=2)}\n```"
 
+        elif tool_name == "search_ocel":
+            query = params.get("query", "")
+            top_k = params.get("top_k", 5)
+            chunk_types = params.get("chunk_types")
+            result = client.search_ocel(query, top_k, chunk_types)
+            return f"**OCEL Search: {query[:50]}**\n```json\n{json.dumps(result, indent=2)}\n```"
+
         else:
             return f"Unknown tool: {tool_name}"
 
     except MCPClientError as e:
         return f"Tool error: {e}"
+
+
+def enrich_context_with_search(client: MCPClient, user_query: str) -> Optional[str]:
+    """
+    Use hybrid search to find relevant OCEL context for the user's query.
+    
+    Returns formatted context string or None if search fails/unavailable.
+    """
+    try:
+        result = client.search_ocel(query=user_query, top_k=3)
+        
+        if "error" in result:
+            return None
+        
+        results = result.get("results", [])
+        if not results:
+            return None
+        
+        context_parts = []
+        for r in results:
+            chunk_type = r.get("chunk_type", "unknown")
+            content = r.get("content", "")
+            score = r.get("score", 0)
+            context_parts.append(f"[{chunk_type} | relevance: {score:.3f}]\n{content}")
+        
+        return "### Relevant OCEL Context (from hybrid search)\n" + "\n\n".join(context_parts)
+    
+    except Exception:
+        return None
 
 
 def interactive_chat(args: argparse.Namespace) -> None:
@@ -234,7 +280,15 @@ def interactive_chat(args: argparse.Namespace) -> None:
             if user_text.lower() in {":quit", ":exit"}:
                 break
 
-            messages = history + [{"role": "user", "content": user_text}]
+            # Enrich context with hybrid search before sending to LLM
+            search_context = enrich_context_with_search(mcp_client, user_text)
+            if search_context:
+                enriched_query = f"{user_text}\n\n{search_context}"
+                print("  [Hybrid search context added]")
+            else:
+                enriched_query = user_text
+
+            messages = history + [{"role": "user", "content": enriched_query}]
             prompt_tokens = estimate_tokens(messages, args.model)
             print(f"Estimated prompt tokens: {prompt_tokens}")
             if not args.force:

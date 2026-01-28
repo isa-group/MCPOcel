@@ -128,7 +128,6 @@ class MCPClient:
         """Get OCEL metadata from the server."""
         result = self._send_request("ocel/info")
         return OcelInfo(
-            ocel_path=result.get("ocel_path", ""),
             object_types=result.get("object_types", []),
             event_types=result.get("event_types", []),
             total_objects=result.get("total_objects", 0),
@@ -159,6 +158,36 @@ class MCPClient:
         """
         params = {"section": section} if section else {}
         return self._send_request("ocel/schema", params)
+
+    def search_ocel(
+        self,
+        query: str,
+        top_k: int = 5,
+        chunk_types: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Perform hybrid semantic search over OCEL data.
+
+        Combines BM25 keyword matching with embedding-based semantic search
+        using Reciprocal Rank Fusion (RRF) for optimal results.
+
+        Args:
+            query: Natural language query to search for.
+            top_k: Number of results to return (default: 5).
+            chunk_types: Optional filter for chunk types:
+                - 'metadata': Global log metadata
+                - 'event_type': Event type definitions
+                - 'object_type': Object type definitions
+                - 'events_batch': Batches of events
+                - 'objects_batch': Batches of objects
+
+        Returns:
+            Dict with search results containing relevant OCEL chunks.
+        """
+        params = {"query": query, "top_k": top_k}
+        if chunk_types:
+            params["chunk_types"] = chunk_types
+        return self._send_request("ocel/search", params)
 
     def __enter__(self) -> "MCPClient":
         self.connect()
