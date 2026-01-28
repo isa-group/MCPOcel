@@ -4,8 +4,7 @@ Automatically selects: PM4PY (< 100MB), ijson (100MB-1GB), DuckDB (> 1GB).
 
 import os
 import json
-from typing import Any, Dict, List, Generator, Optional, Union
-from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 import pm4py
 
