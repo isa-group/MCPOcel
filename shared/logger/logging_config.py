@@ -29,7 +29,7 @@ class LoggingConfig:
         )
 
 
-def setup_logging(config: Optional[LoggingConfig] = None) -> logging.Logger:
+def setup_logging(config: Optional[LoggingConfig] = None) -> None:
 
     if config is None:
         config = LoggingConfig.from_env()
@@ -57,26 +57,26 @@ def setup_logging(config: Optional[LoggingConfig] = None) -> logging.Logger:
     console_formatter = logging.Formatter(
         '%(levelname)s - %(message)s'
     )
-
-    # File handler (detailed)
-    # Rotates when file reaches 5MB, keeps last 5 backups
-    file_handler = RotatingFileHandler(
-        filename=config.log_file,
-        encoding='utf-8',
-        maxBytes=5 * 1024 * 1024,
-        backupCount=5
-    )
-    file_handler.setLevel(logging.DEBUG)  # Files capture everything
-    file_handler.setFormatter(detailed_formatter)
-    root_logger.addHandler(file_handler)
+    try:
+        # File handler (detailed)
+        # Rotates when file reaches 5MB, keeps last 5 backups
+        file_handler = RotatingFileHandler(
+            filename=config.log_file,
+            encoding='utf-8',
+            maxBytes=5 * 1024 * 1024,
+            backupCount=5
+        )
+        file_handler.setLevel(logging.DEBUG)  # Files capture everything
+        file_handler.setFormatter(detailed_formatter)
+        root_logger.addHandler(file_handler)
+    except Exception as e:
+        print(f"Error inicializando el archivo de log: {e}", file=sys.stderr)
 
     # Console handler (less verbose)
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(config.level)
     console_handler.setFormatter(console_formatter)
     root_logger.addHandler(console_handler)
-
-    return root_logger
 
 
 def get_logger(name: str) -> logging.Logger:

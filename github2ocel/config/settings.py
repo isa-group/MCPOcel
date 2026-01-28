@@ -17,22 +17,18 @@ class APIConfig:
 
     @classmethod
     def from_env(cls) -> "APIConfig":
-        raw_pages = int(os.getenv("GITHUB_MAX_PAGES", 0))
-        max_pages = raw_pages if raw_pages > 0 else None
+        try:
+            raw_pages = int(os.getenv("GITHUB_MAX_PAGES", "0"))
+            max_pages = raw_pages if raw_pages > 0 else None
+        except ValueError:
+            max_pages = None
 
         return cls(
             max_pages=max_pages,
-            graphql_url=os.getenv(
-                "GITHUB_GRAPHQL_URL",
-                "https://api.github.com/graphql",
-            ),
-            rest_url=os.getenv(
-                "GITHUB_API_URL",
-                "https://api.github.com",
-            ),
+            graphql_url=os.getenv("GITHUB_GRAPHQL_URL", "https://api.github.com/graphql"),
+            rest_url=os.getenv("GITHUB_API_URL", "https://api.github.com"),
             timeout=int(os.getenv("API_TIMEOUT", "30")),
             max_retries=int(os.getenv("MAX_RETRIES", "3")),
-            # .env configurable backoff settings
             retry_backoff_min=float(os.getenv("RETRY_BACKOFF_MIN", "4.0")),
             retry_backoff_max=float(os.getenv("RETRY_BACKOFF_MAX", "30.0")),
         )

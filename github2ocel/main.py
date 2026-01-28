@@ -1,3 +1,4 @@
+# stdlib
 import os
 import sys
 from dotenv import load_dotenv
@@ -9,6 +10,8 @@ from config.settings import APIConfig
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.logger.logging_config import setup_logging, get_logger, LoggingConfig
 
+# internal
+from shared.logger import get_logger, setup_logging
 from github2ocel.config.settings import APIConfig, LoggingConfig
 from github2ocel.transform.builder import OCELBuilder
 from github2ocel.transform.mappers import (
@@ -25,8 +28,6 @@ logger = get_logger(__name__)
 
 # Config Repository & Output
 STORAGE_DIR = Path("./storage")
-REPO_OWNER = "statuscompliance"
-REPO_NAME = "status-backend"
 
 def main():
     load_dotenv()
@@ -35,22 +36,27 @@ def main():
     setup_logging(log_config)
     api_config = APIConfig.from_env()
 
-    errors_occurred = False
-
-    logger.info(f"--- Starting OCEL Pipeline for {REPO_OWNER}/{REPO_NAME} ---")
-
+    OWNER = os.getenv("GITHUB_OWNER", "statuscompliance")
+    REPO = os.getenv("GITHUB_REPO", "status-backend")
     TOKEN = os.getenv("GITHUB_TOKEN")
+
     if not TOKEN:
         logger.critical("GitHub Token missing. Check your .env file.")
         return
 
+    errors_occurred = False
+
+    logger.info(f"--- Starting OCEL Pipeline for {OWNER}/{REPO} ---")
+
+
+
     builder = OCELBuilder()
-    repo_id = f"repo_{REPO_OWNER}_{REPO_NAME}"
-    builder.add_object(repo_id, "Repository", {"name": REPO_NAME})
+    repo_id = f"repo_{OWNER}_{REPO}"
+    builder.add_object(repo_id, "Repository", {"name": REPO})
 
     # GraphQL (Issues & PRs)
     try:
-        nodes = fetch_github_data(REPO_OWNER, REPO_NAME, TOKEN, api_config, pages=None)
+        nodes = fetch_github_data(OWNER, REPO, TOKEN, api_config, pages=None)
         for node in nodes:
             process_issue_node(node, builder, repo_id)
     except Exception:
@@ -59,7 +65,7 @@ def main():
 
     # REST Releases
     try:
-        releases = fetch_releases(REPO_OWNER, REPO_NAME, TOKEN, api_config)
+        releases = fetch_releases(OWNER, REPO, TOKEN, api_config)
         for rel in releases:
             process_release(rel, builder, repo_id)
     except Exception:
@@ -68,7 +74,7 @@ def main():
 
     # REST Commits (With Conventional Commits)
     try:
-        commits = fetch_commits_rest(REPO_OWNER, REPO_NAME, TOKEN, api_config, pages=None, max_detailed_total=50)
+        commits = fetch_commits_rest(OWNER, REPO, TOKEN, api_config, pages=None, max_detailed_total=50)
         for commit in commits:
             process_commit_rest(commit, builder, repo_id)
     except Exception:
@@ -77,7 +83,7 @@ def main():
 
     # REST Workflows
     try:
-        runs = fetch_workflow_runs(REPO_OWNER, REPO_NAME, TOKEN, api_config, pages=None)
+        runs = fetch_workflow_runs(OWNER, REPO, TOKEN, api_config, pages=None)
         for run in runs:
             if run.get("status") == "completed":
                 process_workflow_run(run, builder, repo_id)

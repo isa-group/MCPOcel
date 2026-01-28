@@ -70,21 +70,22 @@ def _rest_get(
                     if sleep_seconds <= 0:
                         logger.error("Rate limit hit but no reset time found. Aborting request.")
                         response.raise_for_status()
-                        break
 
                     if sleep_seconds > MAX_SLEEP_ALLOWED:
                         logger.error(f"Rate limit reset in {sleep_seconds}s. Too long. Aborting.")
                         response.raise_for_status()
-                        break
 
                     logger.warning(f"Rate limit hit. Sleeping for {sleep_seconds}s...")
                     time.sleep(sleep_seconds)
                     continue
 
+                # Other HTTP errors
+                response.raise_for_status()
+
         except requests.RequestException as e:
             if attempt == api_config.max_retries:
                 logger.error(f"REST Request failed permanently after {attempt} attempts: {url}")
-                raise
+                raise e
 
             # Exponential Backoff
             wait = min(
@@ -119,10 +120,10 @@ def fetch_workflow_runs(
     all_runs: List[Dict[str, Any]] = []
 
     target_pages = pages if pages is not None else api_config.max_pages
-    page = 1
+    current_page = 1
 
     while True:
-        if target_pages is not None and page > target_pages:
+        if target_pages is not None and current_page > target_pages:
             logger.info(f"Reached pagination limit of {target_pages} pages.")
             break
 
@@ -130,7 +131,7 @@ def fetch_workflow_runs(
             endpoint,
             token,
             api_config,
-            params={"per_page": per_page, "page": page},
+            params={"per_page": per_page, "page": current_page},
         )
 
         data = response.json()
@@ -140,8 +141,8 @@ def fetch_workflow_runs(
             break
 
         all_runs.extend(runs)
-        logger.info(f"Fetched {len(all_runs)} workflow runs (Page {page})...")
-        page += 1
+        logger.info(f"Fetched {len(all_runs)} workflow runs (Page {current_page})...")
+        current_page += 1
     return all_runs
 
 
