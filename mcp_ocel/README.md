@@ -1,120 +1,114 @@
-# MCP: OCEL Server & Client
+# MCP OCEL Server & Client
 
-This folder contains the MCP (Model Context Protocol) server for OCEL 2.0 analysis and an interactive LLM client for querying the OCEL schema.
+Server and client for OCEL 2.0 process mining analysis via MCP (Model Context Protocol).
 
-## Communication Protocol
+## Quick Start
 
-The server supports **JSON-RPC 2.0** with two transport modes:
-
-| Mode | Use Case | How it works |
-|------|----------|--------------|
-| **TCP** | Standalone client/server | Server listens on a port, clients connect via socket |
-| **STDIO** | MCP host integration (VS Code, etc.) | Host spawns server as subprocess, communicates via stdin/stdout |
-
-## Setup
-
-Install dependencies:
-```bash
-pip install -r ../requirements.txt
-```
-
-The client estimates tokens using `tiktoken` before each query and shows the cost. Confirm or edit the message before sending (`-f` to auto-approve).
-
----
-
-## Server
-
-The server loads an OCEL file and exposes analysis tools via JSON-RPC 2.0.
-
-### Mode 1: TCP (for standalone client)
-
-The server listens on a TCP port and accepts connections from any client.
+### 1. Install dependencies
 
 ```bash
-# Start TCP server on 127.0.0.1:9820 (default)
-python -m mcp.server --ocel-path ./storage/github.ocel_v1.json
-
-# Custom host/port
-python -m mcp.server --ocel-path ./storage/my_log.json --host 0.0.0.0 --port 8000
+pip install -r requirements.txt
 ```
 
-Then connect with the client:
+### 2. Configure environment variables
+
+Create `.env` files or export these variables:
+
+**Server:**
 ```bash
-python -m mcp.client --host 127.0.0.1 --port 9820
+export OCEL_FILE=./storage/your_log.json  # Path to OCEL 2.0 JSON file
+export OCEL_DEBUG=false                    # Enable debug logging (optional)
 ```
 
-### Mode 2: STDIO (for MCP host integration)
+**Client:**
+```bash
+export OPENAI_API_KEY=sk-...   # For OpenAI provider
+# or
+export GEMINI_API_KEY=...      # For Gemini provider
+```
 
-In STDIO mode, the server reads JSON-RPC requests from **stdin** and writes responses to **stdout**. This is used when an MCP host (like VSCode) spawns the server as a subprocess.
+### 3. Start the server (Terminal 1)
 
 ```bash
-python -m mcp.server --mode stdio --ocel-path ./storage/github.ocel_v1.json
+python -m mcp_ocel.server --ocel-path ./storage/your_log.json
 ```
 
-**Manual testing with STDIO** (for debugging):
-```bash
-# Start server in STDIO mode
-python -m mcp.server --mode stdio --ocel-path ./storage/ocel.json
+The server will start on `http://127.0.0.1:8000/mcp`.
 
-# Then type JSON-RPC requests directly (one per line):
-{"jsonrpc": "2.0", "id": 1, "method": "initialize"}
-{"jsonrpc": "2.0", "id": 2, "method": "ocel/info"}
-{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}
-```
-
-### Server Arguments
+**Server options:**
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--ocel-path PATH` | Path to OCEL JSON file | (required or `OCEL_FILE` env) |
-| `--mode {tcp, stdio}` | Transport mode | `tcp` |
-| `--host HOST` | TCP host to bind | `127.0.0.1` |
-| `--port PORT` | TCP port to listen on | `9820` |
-| `--debug` | Enable DEBUG logging | `false` |
+| `--ocel-path PATH` | Path to OCEL JSON file | `OCEL_FILE` env var |
+| `--host HOST` | Host to bind | `127.0.0.1` |
+| `--port PORT` | Port to listen on | `8000` |
+| `--transport {streamable-http,sse,stdio}` | Transport mode | `streamable-http` |
+| `--debug` | Enable debug logging | `false` |
 
-**Environment variables:**
-- `OCEL_FILE`: Path to OCEL JSON file (optional if `--ocel-path` provided)
-- `LOG_LEVEL`: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
-- `LOG_FILE`: Path to log file (default: logs/mcp_server.log)
+### 4. Start the client (Terminal 2)
 
-See [server/.env.example](server/.env.example) for full configuration.
-
----
-
-## Client
-
-Interactive terminal CLI for asking questions about the OCEL schema using OpenAI or Gemini. The client connects to the MCP server **via TCP** to fetch OCEL metadata (object types, event types, counts, time range).
-
-> **Note:** The client only works with TCP mode. For STDIO mode, use an MCP host like VSCode.
-
-### Run
 ```bash
-# Start server first (in one terminal)
-python -m mcp.server --ocel-path ./storage/github.ocel_v1.json
-
-# Run client (in another terminal)
-python -m mcp.client --provider openai --model GPT-5.2
-
-# Connect to custom server
-python -m mcp.client --host 192.168.1.100 --port 8000
-
-# Skip cost confirmation prompt
-python -m mcp.client -f
+python -m mcp_ocel.client --url http://127.0.0.1:8000/mcp
 ```
 
-### Client Arguments
+**Client options:**
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--provider {openai, gemini}` | LLM provider | `openai` |
-| `--model MODEL` | Model name | `GPT-5.2` |
-| `--schema-path PATH` | Path to OCEL schema JSON | `shared/schemas/ocel_2_0.json` |
-| `--host HOST` | MCP server host | `127.0.0.1` |
-| `--port PORT` | MCP server port | `9820` |
+| `--url URL` | MCP server URL | `http://127.0.0.1:8000/mcp` |
+| `--provider {openai,gemini}` | LLM provider | `openai` |
+| `--model MODEL` | Model name | `gpt-4o` |
 | `-f, --force` | Skip cost confirmation | `false` |
 
-**Environment variables:**
-- `OPENAI_API_KEY`: Required for OpenAI provider
-- `GEMINI_API_KEY`: Required for Gemini provider
+## Configuration Priorities
 
-See [client/.env.example](client/.env.example) for setup.
+### Server Configuration
+The server follows this priority order for configuration (highest to lowest):
+
+1. **Command-line arguments** (highest priority)
+2. **Environment variables**
+3. **Default values**
+
+**OCEL File Path:**
+- CLI: `--ocel-path PATH`
+- Env: `OCEL_FILE`
+- Default: `./log.json`
+
+**Debug Logging:**
+- CLI: `--debug` (sets `OCEL_DEBUG=true`)
+- Env: `OCEL_DEBUG` (values: `true`/`false`)
+- Default: `false`
+
+**Host, Port, Transport:** Only configurable via CLI arguments.
+
+### Client Configuration
+The client has different priority handling:
+
+**LLM Provider API Keys:**
+- Only from environment variables (no CLI override)
+- `OPENAI_API_KEY` for OpenAI provider
+- `GEMINI_API_KEY` for Gemini provider
+
+**Other Settings (Provider, Model, URL, Force):**
+- Only from command-line arguments (no environment variable fallbacks)
+- Use defaults if not specified
+
+## Available Tools
+
+The server exposes these MCP tools for process mining analysis:
+
+| Tool | Description |
+|------|-------------|
+| `trace_object_lifecycle` | Trace all events for a specific object |
+| `query_events_by_timerange` | Query events within a time range |
+| `get_statistics_by_object_type` | Get object type statistics |
+| `detect_anomalies` | Detect orphaned objects and broken references |
+| `find_orphaned_objects` | Find objects without events |
+| `search_ocel` | Hybrid semantic search over OCEL data |
+
+## Resources
+
+| URI | Description |
+|-----|-------------|
+| `ocel://info` | OCEL file metadata (types, counts, time range) |
+| `ocel://schema/{section}` | Schema sections (eventTypes, objectTypes, etc.) |

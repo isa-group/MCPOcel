@@ -9,26 +9,49 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from mcp_ocel.server.mcp_ocel_server import run_mcp_server_tcp
+from mcp_ocel.server.mcp_ocel_server import run_server
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="MCP Server para análisis agnóstico de OCEL 2.0"
+        description="MCP Server for domain-agnostic OCEL 2.0 analysis"
     )
     parser.add_argument(
         "--ocel-path",
         type=str,
-        help="Ruta al archivo OCEL (prioridad sobre OCEL_FILE env var)",
+        help="Path to OCEL file (priority over OCEL_FILE env var)",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host to bind (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to listen on (default: 8000)",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["streamable-http", "sse", "stdio"],
+        default="streamable-http",
+        help="Transport mode (default: streamable-http)",
     )
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Habilitar DEBUG logging",
+        help="Enable DEBUG logging",
     )
 
     args = parser.parse_args()
-    run_mcp_server_tcp(ocel_path=args.ocel_path, debug=args.debug)
+    run_server(
+        host=args.host,
+        port=args.port,
+        ocel_path=args.ocel_path,
+        debug=args.debug,
+        transport=args.transport,
+    )
 
 
 if __name__ == "__main__":

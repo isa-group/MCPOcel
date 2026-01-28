@@ -43,10 +43,8 @@ class SmartOCELLoader:
         """Selects strategy based on file size."""
         if self.file_size_mb < constants.FILE_SIZE_SMALL:
             return constants.LoadStrategy.PM4PY
-        elif self.file_size_mb < constants.FILE_SIZE_MEDIUM:
-            return constants.LoadStrategy.IJSON
         else:
-            return constants.LoadStrategy.DUCKDB
+            return constants.LoadStrategy.IJSON
     
     def load(self) -> Any:
         """
@@ -64,10 +62,8 @@ class SmartOCELLoader:
         
         if self.strategy == constants.LoadStrategy.PM4PY:
             return self._load_pm4py()
-        elif self.strategy == constants.LoadStrategy.IJSON:
+        else:
             return self._load_ijson()
-        else:  # DuckDB
-            return self._load_duckdb()
     
     def _load_pm4py(self) -> Any:
         """Loads OCEL using PM4PY (for small files)."""
@@ -138,35 +134,6 @@ class SmartOCELLoader:
             logger.error(f"Error loading OCEL with ijson: {e}")
             raise
     
-    def _load_duckdb(self) -> Any:
-        """
-        Loads OCEL with DuckDB for SQL analysis (for large files).
-        
-        Returns:
-            DuckDB connection with OCEL data loaded.
-        """
-        try:
-            import duckdb
-            
-            logger.info(f"Loading OCEL with DuckDB from: {self.ocel_path}")
-            
-            conn = duckdb.connect(":memory:")
-            
-            conn.execute(f"""
-                CREATE TABLE ocel_raw AS
-                SELECT * FROM read_json_auto('{self.ocel_path}')
-            """)
-            
-            logger.info("DuckDB connection established for SQL analysis")
-            return conn
-        
-        except ImportError:
-            logger.warning("DuckDB not installed, falling back to ijson")
-            return self._load_ijson()
-        except Exception as e:
-            logger.error(f"Error loading OCEL with DuckDB: {e}")
-            raise
-    
     def stream_events(
         self, chunk_size: int = constants.DEFAULT_CHUNK_SIZE
     ) -> Generator[list, None, None]:
@@ -207,25 +174,6 @@ class SmartOCELLoader:
             except ImportError:
                 logger.warning("ijson not installed for streaming")
                 raise
-        
-        else:
-            import duckdb
-            
-            conn = self._load_duckdb()
-            offset = 0
-            while True:
-                result = conn.execute(f"""
-                    SELECT * FROM ocel_raw
-                    WHERE COLUMN = 'ocel:events'
-                    LIMIT {chunk_size} OFFSET {offset}
-                """).fetchall()
-                
-                if not result:
-                    break
-                
-                yield result
-                offset += chunk_size
-                logger.debug(f"Generated chunk (DuckDB) from offset {offset}")
 
 
 def load_ocel(ocel_path: str) -> Any:
