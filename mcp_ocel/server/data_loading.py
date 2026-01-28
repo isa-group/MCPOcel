@@ -80,7 +80,7 @@ class SmartOCELLoader:
         """
         try:
             logger.info(f"Loading OCEL with PM4PY from: {self.ocel_path}")
-            ocel = pm4py.read_ocel(self.ocel_path)
+            ocel = pm4py.read_ocel2_json(self.ocel_path)
             logger.info(
                 f"OCEL loaded: {len(ocel.events)} events, "
                 f"{len(ocel.objects)} objects"
@@ -95,7 +95,7 @@ class SmartOCELLoader:
         Loads OCEL with ijson in streaming mode (for medium files).
         
         Returns:
-            Dict with OCEL structure conforming to OCEL 2.0 schema.
+            Dict with OCEL 2.0 structure (eventTypes, objectTypes, events, objects).
             
         Raises:
             Exception: If loading fails.
@@ -105,39 +105,38 @@ class SmartOCELLoader:
             
             logger.info(f"Loading OCEL with ijson (streaming) from: {self.ocel_path}")
             
+            data: Dict[str, Any] = {
+                "eventTypes": [],
+                "objectTypes": [],
+                "events": [],
+                "objects": [],
+            }
+            
+            # First pass: load metadata (eventTypes, objectTypes)
             with open(self.ocel_path, "rb") as f:
-                data = {
-                    "ocel:version": None,
-                    "ocel:attribute-names": None,
-                    "ocel:object-types": None,
-                    "ocel:event-types": None,
-                    "ocel:objects": {},
-                    "ocel:events": [],
-                }
-                
-                f.seek(0)
                 parser = ijson.kvitems(f, "")
                 for key, value in parser:
-                    if key in ["ocel:version", "ocel:attribute-names", 
-                              "ocel:object-types", "ocel:event-types"]:
-                        data[key] = value
-                    elif key == "ocel:objects":
-                        data["ocel:objects"] = value
+                    if key == "eventTypes":
+                        data["eventTypes"] = value
+                    elif key == "objectTypes":
+                        data["objectTypes"] = value
+                    elif key == "objects":
+                        data["objects"] = value
                         break
 
+            # Second pass: stream events
             with open(self.ocel_path, "rb") as f:
-                parser = ijson.items(f, "ocel:events.item")
+                parser = ijson.items(f, "events.item")
                 events = []
                 for i, event in enumerate(parser):
                     events.append(event)
-                    # Emits progress every DEFAULT_CHUNK_SIZE to see advancement in large files
                     if (i + 1) % constants.DEFAULT_CHUNK_SIZE == 0:
                         logger.debug(f"Loaded {i + 1} events...")
-                data["ocel:events"] = events
+                data["events"] = events
             
             logger.info(
-                f"OCEL loaded (ijson): {len(events)} events, "
-                f"{len(data['ocel:objects'])} objects"
+                f"OCEL loaded (ijson): {len(data['events'])} events, "
+                f"{len(data['objects'])} objects"
             )
             return data
         
@@ -163,8 +162,8 @@ class SmartOCELLoader:
         if self.strategy == constants.LoadStrategy.PM4PY:
             ocel = self._load_pm4py()
             chunk = []
-            for event_id, event in ocel.events.items():
-                chunk.append(event)
+            for _, event in ocel.events.iterrows():
+                chunk.append(event.to_dict())
                 if len(chunk) >= chunk_size:
                     yield chunk
                     chunk = []
@@ -177,7 +176,7 @@ class SmartOCELLoader:
                 
                 with open(self.ocel_path, "rb") as f:
                     chunk = []
-                    for i, event in enumerate(ijson.items(f, "ocel:events.item")):
+                    for i, event in enumerate(ijson.items(f, "events.item")):
                         chunk.append(event)
                         if len(chunk) >= chunk_size:
                             yield chunk

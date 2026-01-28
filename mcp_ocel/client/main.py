@@ -1,5 +1,6 @@
 """Standalone entrypoint for the MCP client CLI."""
 
+from dotenv import load_dotenv
 import sys
 from pathlib import Path
 
@@ -10,6 +11,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from mcp_ocel.client.cli import main
 
-
 if __name__ == "__main__":
+    load_dotenv()
     main()

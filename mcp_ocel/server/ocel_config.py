@@ -48,16 +48,39 @@ class OCELConfig:
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in {filepath}: {e}")
         
-        required_fields = ["ocel:event-types", "ocel:object-types", "ocel:attribute-names"]
-        missing = [f for f in required_fields if f not in data]
-        if missing:
+        # OCEL 2.0 format with camelCase keys (eventTypes, objectTypes, events, objects)
+        if "eventTypes" not in data and "objectTypes" not in data:
             raise ValueError(
-                f"Incomplete OCEL 2.0. Missing fields: {missing}"
+                "Invalid OCEL 2.0 format. Expected keys: eventTypes, objectTypes, events, objects"
             )
         
-        event_types = data.get("ocel:event-types", [])
-        object_types = data.get("ocel:object-types", [])
-        attribute_names = data.get("ocel:attribute-names", {})
+        event_types_data = data.get("eventTypes", [])
+        object_types_data = data.get("objectTypes", [])
+        
+        # Extract event type names from the structure
+        if event_types_data and isinstance(event_types_data[0], dict):
+            event_types = [et.get("name", "") for et in event_types_data if et.get("name")]
+        else:
+            event_types = event_types_data
+        
+        # Extract object type names from the structure
+        if object_types_data and isinstance(object_types_data[0], dict):
+            object_types = [ot.get("name", "") for ot in object_types_data if ot.get("name")]
+        else:
+            object_types = object_types_data
+        
+        # Build attribute names from event types and object types
+        attribute_names: Dict[str, List[str]] = {}
+        for et in event_types_data:
+            if isinstance(et, dict) and "attributes" in et:
+                attr_list = [a.get("name", "") for a in et.get("attributes", []) if isinstance(a, dict)]
+                if attr_list:
+                    attribute_names[et.get("name", "")] = attr_list
+        for ot in object_types_data:
+            if isinstance(ot, dict) and "attributes" in ot:
+                attr_list = [a.get("name", "") for a in ot.get("attributes", []) if isinstance(a, dict)]
+                if attr_list:
+                    attribute_names[ot.get("name", "")] = attr_list
         
         logger.info(
             f"OCEL configuration loaded: "

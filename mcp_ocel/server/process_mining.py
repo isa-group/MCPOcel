@@ -121,7 +121,7 @@ class ProcessMiningEngine:
         if hasattr(self.ocel_data, "events") and hasattr(self.ocel_data, "objects"):
             self.format = "pm4py"
             logger.debug("Detected format: PM4PY")
-        elif isinstance(self.ocel_data, dict) and "ocel:events" in self.ocel_data:
+        elif isinstance(self.ocel_data, dict) and "events" in self.ocel_data:
             self.format = "dict"
             logger.debug("Detected format: dict (ijson)")
         else:
@@ -205,7 +205,7 @@ class ProcessMiningEngine:
             with open(temp_path, "w") as f:
                 json.dump(self.ocel_data, f)
             
-            ocel = pm4py.read_ocel(temp_path)
+            ocel = pm4py.read_ocel2_json(temp_path)
             result = self._discover_dfg_pm4py_with_ocel(ocel, object_type)
             return result
         except Exception as e:
@@ -310,7 +310,7 @@ class ProcessMiningEngine:
             with open(temp_path, "w") as f:
                 json.dump(self.ocel_data, f)
             
-            ocel = pm4py.read_ocel(temp_path)
+            ocel = pm4py.read_ocel2_json(temp_path)
             return self._discover_petri_net_pm4py_with_ocel(ocel, object_type)
         except Exception as e:
             logger.error(f"Error in dict-based Petri net discovery: {e}")
@@ -363,12 +363,13 @@ class ProcessMiningEngine:
     def _variants_pm4py(
         self, object_type: Optional[str] = None, limit: int = 10
     ) -> List[Dict[str, Any]]:
-        """Extracts variants using PM4PY."""
+        """Extracts variants using PM4PY DataFrames."""
         # Default to top-10 to align with the public API and avoid massive outputs.
         variants = {}
         
-        for event_id, event in self.ocel_data.events.items():
-            activity = event.get("ocel:activity", "unknown")
+        for _, event in self.ocel_data.events.iterrows():
+            event_id = str(event.get("ocel:eid", ""))
+            activity = str(event.get("ocel:activity", "unknown"))
             
             # TODO: Improve to full object-centric sequences
             if activity not in variants:
@@ -399,8 +400,8 @@ class ProcessMiningEngine:
         # Default to top-10 to align with the public API and avoid massive outputs.
         variants = {}
         
-        for event in self.ocel_data.get("ocel:events", []):
-            activity = event.get("ocel:activity", "unknown")
+        for event in self.ocel_data.get("events", []):
+            activity = event.get("type", "unknown")
             
             if activity not in variants:
                 variants[activity] = {
@@ -412,7 +413,7 @@ class ProcessMiningEngine:
             variants[activity]["frequency"] += 1
             # Limit samples to 3 IDs to illustrate without inflating the payload.
             if len(variants[activity]["sample_events"]) < 3:
-                variants[activity]["sample_events"].append(event.get("ocel:eid"))
+                variants[activity]["sample_events"].append(event.get("id"))
         
         sorted_variants = sorted(
             variants.values(),
@@ -438,19 +439,14 @@ class ProcessMiningEngine:
             return self._stats_dict()
     
     def _stats_pm4py(self) -> Dict[str, Any]:
-        """Statistics using PM4PY."""
+        """Statistics using PM4PY DataFrames."""
         try:
-            stats = pm4py.ocel_statistics.get_ocpn_stats(self.ocel_data)
             logger.info("OCEL statistics obtained")
             return {
                 "total_events": len(self.ocel_data.events),
                 "total_objects": len(self.ocel_data.objects),
-                "object_types": len(set(
-                    obj.get("ocel:type") for obj in self.ocel_data.objects.values()
-                )),
-                "event_types": len(set(
-                    event.get("ocel:activity") for event in self.ocel_data.events.values()
-                )),
+                "object_types": self.ocel_data.objects["ocel:type"].nunique(),
+                "event_types": self.ocel_data.events["ocel:activity"].nunique(),
             }
         except Exception as e:
             logger.error(f"Error obtaining PM4PY statistics: {e}")
@@ -459,16 +455,16 @@ class ProcessMiningEngine:
     def _stats_dict(self) -> Dict[str, Any]:
         """Statistics using dict."""
         event_types = set(
-            event.get("ocel:activity") for event in self.ocel_data.get("ocel:events", [])
+            event.get("type") for event in self.ocel_data.get("events", [])
         )
         object_types = set(
-            obj.get("ocel:type") for obj in self.ocel_data.get("ocel:objects", {}).values()
+            obj.get("type") for obj in self.ocel_data.get("objects", [])
         )
         
         logger.info("OCEL statistics obtained (dict)")
         return {
-            "total_events": len(self.ocel_data.get("ocel:events", [])),
-            "total_objects": len(self.ocel_data.get("ocel:objects", {})),
+            "total_events": len(self.ocel_data.get("events", [])),
+            "total_objects": len(self.ocel_data.get("objects", [])),
             "object_types": len(object_types),
             "event_types": len(event_types),
         }

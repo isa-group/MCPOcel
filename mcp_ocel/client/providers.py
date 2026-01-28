@@ -105,7 +105,7 @@ class GeminiProvider(BaseProvider):
             Text chunks from Gemini response.
         """
         prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
-        response = self.client.models.generate_content(
+        response = self.client.models.generate_content_stream(
             model=f"models/{model}" if not model.startswith("models/") else model,
             contents=prompt
         )

@@ -78,33 +78,37 @@ def _ocel_to_dict(ocel_data: OCELData, config: OCELConfig) -> Dict[str, Any]:
     Returns:
         Dict conforming to OCEL 2.0 JSON schema.
     """
-    result = {
-        "ocel:global-log": {
-            "ocel:attribute-names": config.attribute_names,
-            "ocel:object-types": config.object_types,
-        },
-        "ocel:events": [],
-        "ocel:objects": {},
+    result: Dict[str, Any] = {
+        "eventTypes": [{"name": et} for et in config.event_types],
+        "objectTypes": [{"name": ot} for ot in config.object_types],
+        "events": [],
+        "objects": [],
     }
     
     try:
         if hasattr(ocel_data, "events"):
+            # PM4Py format - extract from DataFrames
             events_df = ocel_data.events
             for _, row in events_df.iterrows():
                 event = {
-                    "ocel:eid": str(row.get("ocel:eid", "")),
-                    "ocel:activity": str(row.get("ocel:activity", "")),
-                    "ocel:timestamp": str(row.get("ocel:timestamp", "")),
+                    "id": str(row.get("ocel:eid", "")),
+                    "type": str(row.get("ocel:activity", "")),
+                    "time": str(row.get("ocel:timestamp", "")),
+                    "attributes": [],
+                    "relationships": [],
                 }
-                result["ocel:events"].append(event)
+                result["events"].append(event)
         
         if hasattr(ocel_data, "objects"):
             objects_df = ocel_data.objects
             for _, row in objects_df.iterrows():
-                oid = str(row.get("ocel:oid", ""))
-                result["ocel:objects"][oid] = {
-                    "ocel:type": str(row.get("ocel:type", "")),
+                obj = {
+                    "id": str(row.get("ocel:oid", "")),
+                    "type": str(row.get("ocel:type", "")),
+                    "attributes": [],
+                    "relationships": [],
                 }
+                result["objects"].append(obj)
     except Exception as e:
         logger.warning(f"Error converting OCEL to dict: {e}")
     
@@ -192,7 +196,7 @@ def trace_object_lifecycle(object_id: str) -> TraceLifecycleResponseDict:
     showing related activities, involved objects, and verifiable references.
     
     Args:
-        object_id: OCEL object ID (ocel:oid)
+        object_id: OCEL object ID
     """
     query_engine: Optional[OCELQueryEngine] = _ocel_state.get("query_engine")
     mining_engine: Optional[ProcessMiningEngine] = _ocel_state.get("mining_engine")
@@ -295,7 +299,7 @@ def find_orphaned_objects() -> OrphanedObjectsResponseDict:
     if hasattr(ocel_data, "objects"):
         total = len(ocel_data.objects)
     else:
-        total = len(ocel_data.get("ocel:objects", {}))
+        total = len(ocel_data.get("objects", []))
     
     response = ResponseBuilder.build_orphaned_response(orphaned, total)
     return response.to_dict()
@@ -310,37 +314,57 @@ def list_available_tools() -> ListToolsResponseDict:
     """
     tools_info: List[ToolInfoDict] = []
     
+    # Tools that return temporal metrics in seconds
+    temporal_tools = {
+        "get_performance_metrics", "detect_bottlenecks",
+        "get_process_variants", "check_conformance", "discover_dfg"
+    }
+    
     # Get tools from the MCP server registry
     try:
-        # Access FastMCP's internal tool registry
-        if hasattr(mcp, '_tool_manager') and hasattr(mcp._tool_manager, 'tools'):
-            for tool_name, tool in mcp._tool_manager.tools.items():
-                tool_info = {
-                    "name": tool_name,
-                    "description": tool.description if hasattr(tool, 'description') else "",
-                    "parameters": {},
-                    "metadata": {},
+        if hasattr(mcp, '_tool_manager') and hasattr(mcp._tool_manager, 'list_tools'):
+            tools = mcp._tool_manager.list_tools()
+            for tool in tools:
+                params_schema = tool.parameters if hasattr(tool, 'parameters') else {}
+                properties = params_schema.get("properties", {})
+                required = params_schema.get("required", [])
+                
+                # Build clean inputSchema (MCP standard format)
+                input_schema = {
+                    "type": "object",
+                    "properties": {},
+                    "required": required,
                 }
                 
-                # Extract parameters from the tool's input schema
-                if hasattr(tool, 'parameters') and tool.parameters:
-                    tool_info["parameters"] = tool.parameters
-                elif hasattr(tool, 'inputSchema'):
-                    tool_info["parameters"] = tool.inputSchema
+                for param_name, param_info in properties.items():
+                    input_schema["properties"][param_name] = {
+                        "type": param_info.get("type", "string"),
+                        "description": param_info.get("description", ""),
+                    }
+                    # Add title if present
+                    if "title" in param_info:
+                        input_schema["properties"][param_name]["title"] = param_info["title"]
+                
+                # Get first line of description only
+                desc = tool.description.strip().split("\n")[0] if tool.description else ""
+                
+                tool_info: ToolInfoDict = {
+                    "name": tool.name,
+                    "description": desc,
+                    "inputSchema": input_schema,
+                }
                 
                 # Add metadata for temporal tools
-                temporal_tools = [
-                    "get_performance_metrics", "detect_bottlenecks",
-                    "get_process_variants", "check_conformance"
-                ]
-                if tool_name in temporal_tools:
-                    tool_info["metadata"]["time_unit"] = "seconds"
-                    tool_info["metadata"]["time_unit_description"] = "All temporal values in SI seconds"
+                if tool.name in temporal_tools:
+                    tool_info["metadata"] = {
+                        "time_unit": "seconds",
+                    }
                 
                 tools_info.append(tool_info)
+        else:
+            raise Exception("ToolManager not available")
     except Exception as e:
         logger.warning(f"Error accessing tool registry: {e}")
-        # Fallback: return static list of known tools
         tools_info = _get_static_tools_list()
     
     return {
@@ -803,9 +827,9 @@ def get_ocel_info() -> str:
         except Exception:
             start_date = end_date = "N/A"
     else:
-        events = ocel_data.get("ocel:events", [])
+        events = ocel_data.get("events", [])
         total_events = len(events)
-        total_objects = len(ocel_data.get("ocel:objects", {}))
+        total_objects = len(ocel_data.get("objects", []))
         start_date = end_date = "N/A"
     
     info = {
@@ -853,17 +877,21 @@ def get_schema_section(section: str) -> str:
         "events": {
             "section": "events",
             "schema": {
-                "ocel:eid": "string - Unique event identifier",
-                "ocel:activity": "string - Activity/event type name",
-                "ocel:timestamp": "datetime - ISO 8601 timestamp",
+                "id": "string - Unique event identifier",
+                "type": "string - Activity/event type name",
+                "time": "datetime - ISO 8601 timestamp",
+                "attributes": "object - Event attributes",
+                "relationships": "array - Related objects [{objectId, qualifier}]",
             },
             "description": "OCEL 2.0 event structure",
         },
         "objects": {
             "section": "objects",
             "schema": {
-                "ocel:oid": "string - Unique object identifier",
-                "ocel:type": "string - Object type name",
+                "id": "string - Unique object identifier",
+                "type": "string - Object type name",
+                "attributes": "object - Object attributes",
+                "relationships": "array - Related objects [{objectId, qualifier}]",
             },
             "description": "OCEL 2.0 object structure",
         },
@@ -899,6 +927,9 @@ def run_server(
     if debug:
         os.environ["OCEL_DEBUG"] = "true"
     
+    mcp.settings.host = host
+    mcp.settings.port = port
+    
     if transport == "stdio":
         print(f"Starting MCP Server in STDIO mode")
         print(f"OCEL file: {os.getenv('OCEL_FILE', constants.DEFAULT_OCEL_PATH)}")
@@ -906,11 +937,7 @@ def run_server(
     else:
         print(f"Starting MCP Server on http://{host}:{port}/mcp")
         print(f"OCEL file: {os.getenv('OCEL_FILE', constants.DEFAULT_OCEL_PATH)}")
-        mcp.run(
-            transport=transport,
-            host=host,
-            port=port,
-        )
+        mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ class Chunk:
     """A chunk of OCEL data with metadata."""
     id: str
     content: str
-    path: str  # JSON path (e.g., "ocel:events[0:100]")
+    path: str  # JSON path (e.g., "events[0:100]")
     chunk_type: str  # "metadata", "event_type", "object_type", "events", "objects"
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -56,75 +56,38 @@ class OCELChunker:
         chunks: List[Chunk] = []
         chunk_id = 0
 
-        # 1. Metadata chunk (version, global-log, etc.)
-        metadata_keys = ["ocel:version", "ocel:ordering", "ocel:global-log"]
-        metadata = {k: data.get(k) for k in metadata_keys if k in data}
-        if metadata:
-            chunks.append(Chunk(
-                id=f"chunk_{chunk_id}",
-                content=json.dumps(metadata, indent=2),
-                path="metadata",
-                chunk_type="metadata",
-            ))
-            chunk_id += 1
-
-        # 2. Event types (one chunk per type or grouped)
-        event_types = data.get("ocel:event-types") or data.get("eventTypes") or []
+        # 1. Event types (one chunk per type or grouped)
+        event_types = data.get("eventTypes", [])
         if event_types:
             if isinstance(event_types, list):
+                # Extract names if list of dicts
+                type_names = [et.get("name", et) if isinstance(et, dict) else et for et in event_types]
                 chunks.append(Chunk(
                     id=f"chunk_{chunk_id}",
-                    content=f"Event Types: {json.dumps(event_types)}",
-                    path="ocel:event-types",
+                    content=f"Event Types: {json.dumps(type_names)}",
+                    path="eventTypes",
                     chunk_type="event_types",
                     metadata={"count": len(event_types)},
                 ))
-            elif isinstance(event_types, dict):
-                for et_name, et_def in event_types.items():
-                    chunks.append(Chunk(
-                        id=f"chunk_{chunk_id}",
-                        content=f"Event Type '{et_name}': {json.dumps(et_def, indent=2)}",
-                        path=f"ocel:event-types.{et_name}",
-                        chunk_type="event_type",
-                        metadata={"name": et_name},
-                    ))
-                    chunk_id += 1
+                chunk_id += 1
 
-        # 3. Object types (one chunk per type or grouped)
-        object_types = data.get("ocel:object-types") or data.get("objectTypes") or []
+        # 2. Object types (one chunk per type or grouped)
+        object_types = data.get("objectTypes", [])
         if object_types:
             if isinstance(object_types, list):
+                # Extract names if list of dicts
+                type_names = [ot.get("name", ot) if isinstance(ot, dict) else ot for ot in object_types]
                 chunks.append(Chunk(
                     id=f"chunk_{chunk_id}",
-                    content=f"Object Types: {json.dumps(object_types)}",
-                    path="ocel:object-types",
+                    content=f"Object Types: {json.dumps(type_names)}",
+                    path="objectTypes",
                     chunk_type="object_types",
                     metadata={"count": len(object_types)},
                 ))
-            elif isinstance(object_types, dict):
-                for ot_name, ot_def in object_types.items():
-                    chunks.append(Chunk(
-                        id=f"chunk_{chunk_id}",
-                        content=f"Object Type '{ot_name}': {json.dumps(ot_def, indent=2)}",
-                        path=f"ocel:object-types.{ot_name}",
-                        chunk_type="object_type",
-                        metadata={"name": ot_name},
-                    ))
-                    chunk_id += 1
+                chunk_id += 1
 
-        # 4. Attribute names
-        attr_names = data.get("ocel:attribute-names") or {}
-        if attr_names:
-            chunks.append(Chunk(
-                id=f"chunk_{chunk_id}",
-                content=f"Attribute Names: {json.dumps(attr_names, indent=2)}",
-                path="ocel:attribute-names",
-                chunk_type="attributes",
-            ))
-            chunk_id += 1
-
-        # 5. Events (chunked in batches)
-        events = data.get("ocel:events") or []
+        # 3. Events (chunked in batches)
+        events = data.get("events", [])
         if isinstance(events, list) and events:
             for i in range(0, len(events), EVENTS_PER_CHUNK):
                 batch = events[i:i + EVENTS_PER_CHUNK]
@@ -138,18 +101,17 @@ class OCELChunker:
                 chunks.append(Chunk(
                     id=f"chunk_{chunk_id}",
                     content=content,
-                    path=f"ocel:events[{i}:{i + len(batch)}]",
+                    path=f"events[{i}:{i + len(batch)}]",
                     chunk_type="events",
                     metadata={"start": i, "end": i + len(batch), "count": len(batch)},
                 ))
                 chunk_id += 1
 
-        # 6. Objects (chunked in batches)
-        objects = data.get("ocel:objects") or {}
-        if isinstance(objects, dict) and objects:
-            obj_items = list(objects.items())
-            for i in range(0, len(obj_items), OBJECTS_PER_CHUNK):
-                batch = dict(obj_items[i:i + OBJECTS_PER_CHUNK])
+        # 4. Objects (chunked in batches)
+        objects = data.get("objects", [])
+        if isinstance(objects, list) and objects:
+            for i in range(0, len(objects), OBJECTS_PER_CHUNK):
+                batch = objects[i:i + OBJECTS_PER_CHUNK]
                 if len(json.dumps(batch)) > self.max_chunk_size:
                     summary = self._summarize_objects(batch, i, i + len(batch))
                     content = summary
@@ -159,7 +121,7 @@ class OCELChunker:
                 chunks.append(Chunk(
                     id=f"chunk_{chunk_id}",
                     content=content,
-                    path=f"ocel:objects[{i}:{i + len(batch)}]",
+                    path=f"objects[{i}:{i + len(batch)}]",
                     chunk_type="objects",
                     metadata={"start": i, "end": i + len(batch), "count": len(batch)},
                 ))
@@ -174,12 +136,13 @@ class OCELChunker:
         object_refs = set()
 
         for e in events:
-            act = e.get("ocel:activity") or e.get("ocel:type-name", "unknown")
+            act = e.get("type", "unknown")
             activities[act] = activities.get(act, 0) + 1
-            if ts := e.get("ocel:timestamp"):
+            if ts := e.get("time"):
                 timestamps.append(str(ts))
-            for oid in e.get("ocel:omap", []):
-                object_refs.add(oid)
+            for rel in e.get("relationships", []):
+                if obj_id := rel.get("objectId"):
+                    object_refs.add(obj_id)
 
         return (
             f"Events batch [{start}:{end}]\n"
@@ -189,17 +152,18 @@ class OCELChunker:
             f"Sample object IDs: {list(object_refs)[:10]}"
         )
 
-    def _summarize_objects(self, objects: Dict, start: int, end: int) -> str:
+    def _summarize_objects(self, objects: List[Dict], start: int, end: int) -> str:
         """Create a searchable summary of objects batch."""
         types = {}
-        for oid, obj in objects.items():
-            otype = obj.get("ocel:type", "unknown")
+        for obj in objects:
+            otype = obj.get("type", "unknown")
             types[otype] = types.get(otype, 0) + 1
 
+        obj_ids = [obj.get("id", "") for obj in objects]
         return (
             f"Objects batch [{start}:{end}]\n"
             f"Types: {json.dumps(types)}\n"
-            f"Object IDs: {list(objects.keys())[:20]}{'...' if len(objects) > 20 else ''}"
+            f"Object IDs: {obj_ids[:20]}{'...' if len(obj_ids) > 20 else ''}"
         )
 
 

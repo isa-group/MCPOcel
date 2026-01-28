@@ -267,13 +267,21 @@ class ToolParameterDict(TypedDict, total=False):
     """Parameter definition for a tool."""
     type: str
     description: str
+    title: str
+
+
+class InputSchemaDict(TypedDict, total=False):
+    """MCP standard inputSchema format."""
+    type: str
+    properties: Dict[str, ToolParameterDict]
+    required: List[str]
 
 
 class ToolInfoDict(TypedDict, total=False):
-    """Information about an MCP tool."""
+    """Information about an MCP tool (MCP standard format)."""
     name: str
     description: str
-    parameters: Dict[str, ToolParameterDict]
+    inputSchema: InputSchemaDict
     metadata: NotRequired[Dict[str, Any]]
 
 
