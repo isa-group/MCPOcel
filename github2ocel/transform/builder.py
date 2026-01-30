@@ -1,155 +1,256 @@
 import uuid
 import json
 import logging
-from typing import Dict, List, Optional, Any, Union, Tuple, Sequence
+from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
 from pathlib import Path
 
-# Local logger
 logger = logging.getLogger(__name__)
-
-# SCHEMA KEYS (Matching your JSON Schema)
-EVT_TYPES = "eventTypes"
-OBJ_TYPES_KEY = "objectTypes"
-OBJECTS = "objects"
-EVENTS = "events"
-
-# SCHEMA DEFINITIONS
-OBJECT_SCHEMA_DEFS: Dict[str, List[str]] = {
-    "Repository": ["name", "full_name", "visibility"],
-    "Issue": ["number", "state", "title", "created_at", "closed_at"],
-    "PullRequest": ["number", "merged", "merged_at", "source"],
-    "Commit": ["sha", "message", "source"],
-    "WorkflowRun": ["run_id", "name", "conclusion", "duration_seconds"],
-    "User": ["login"],
-    "Branch": ["name"],
-    "File": ["path"],
-    "Label": ["name", "color"],
-    "Release": ["tag_name", "name", "prerelease"]
-}
-
-# Type validation hints
-ATTRIBUTE_TYPE_HINTS: Dict[str, Union[type, Tuple[type, ...]]] = {
-    "number": int, "merged": bool, "duration_seconds": (int, float),
-    "additions": int, "deletions": int, "files_changed": int,
-    "state": str, "conclusion": str, "color": str, "name": str
-}
 
 class OCELBuilder:
     """
-    OCEL Builder aligned with custom JSON Schema.
-    Ensures type safety, referential integrity, and deterministic export.
+    OCEL 2.0 Builder that generates standard-compliant files.
+    Compatible with existing mappers using rel() method.
     """
+
     def __init__(self):
         self.data = {
-            EVT_TYPES: [],
-            OBJ_TYPES_KEY: [],
-            OBJECTS: {},
-            EVENTS: []
+            "ocel:global-log": {
+                "ocel:version": "2.0",
+                "ocel:ordering": "timestamp",
+                "ocel:attribute-names": []
+            },
+            "ocel:global-event": {},              # event_type -> attributes
+            "ocel:global-object": {},             # object_type -> attributes
+            "ocel:events": {},                    # event_id -> event
+            "ocel:objects": {},                   # object_id -> object
+            "ocel:object-relationships": []       # object_relationships -> object
         }
-        self._init_object_types()
+        self._all_attributes = set()
 
-    def _init_object_types(self) -> None:
-        """Initialize static object types based on definitions."""
-        for obj_type, attrs in sorted(OBJECT_SCHEMA_DEFS.items()):
-            self.data[OBJ_TYPES_KEY].append({
-                "name": obj_type,
-                "attributes": [{"name": a, "type": "string"} for a in sorted(attrs)]
-            })
+    def rel(self, object_id: str, qualifier: str) -> Dict[str, str]:
+        """
+        Helper for creating relationships.
+        Maintains compatibility with existing mappers.
+        """
+        safe_id = str(object_id).strip()
+        return {"objectId": str(safe_id), "qualifier": str(qualifier)}
 
-    def _validate_attribute_types(self, attributes: Dict[str, Any]) -> None:
-        """Log warnings if attribute types do not match expectations."""
+    def _get_ocel_type(self, value: Any) -> str:
+        """Infer OCEL type from Python value."""
+        if isinstance(value, bool):
+            return "boolean"
+        if isinstance(value, int):
+            return "integer"
+        if isinstance(value, float):
+            return "float"
+        if isinstance(value, str):
+            return "string"
+        return "string"
+
+    def _register_attribute(self, attr_name: str):
+        """Track all attribute names for global-log."""
+        self._all_attributes.add(attr_name)
+
+    def _register_event_type(self, activity: str, attributes: Dict[str, Any]):
+        """Register event type in global-event metadata."""
+        if activity not in self.data["ocel:global-event"]:
+            self.data["ocel:global-event"][activity] = []
+
+        existing_attrs = {
+            a["ocel:name"] 
+            for a in self.data["ocel:global-event"][activity]
+        }
+
+        for attr_name, value in attributes.items():
+            self._register_attribute(attr_name)
+
+            if attr_name not in existing_attrs:
+                self.data["ocel:global-event"][activity].append({
+                    "ocel:name": attr_name,
+                    "ocel:type": self._get_ocel_type(value)
+                })
+
+    def _register_object_type(self, obj_type: str, attributes: Dict[str, Any]):
+        """Register object type in global-object metadata."""
+        if obj_type not in self.data["ocel:global-object"]:
+            self.data["ocel:global-object"][obj_type] = []
+
+        existing_attrs = {
+            a["ocel:name"]
+            for a in self.data["ocel:global-object"][obj_type]
+        }
+
+        for attr_name, value in attributes.items():
+            self._register_attribute(attr_name)
+
+            if attr_name not in existing_attrs:
+                self.data["ocel:global-object"][obj_type].append({
+                    "ocel:name": attr_name,
+                    "ocel:type": self._get_ocel_type(value)
+                })
+
+    def add_object(self, obj_id: str, obj_type: str, attributes: Dict[str, Any]):
+        """
+        Add or update an object with temporal attribute tracking.
+
+        Args:
+            obj_id: Unique object identifier
+            obj_type: Object type (e.g., "Issue", "Commit")
+            attributes: Dictionary of attribute name -> value
+        """
+        self._register_object_type(obj_type, attributes)
+
+        # Get current timestamp
+        now_iso = datetime.now().isoformat()
+        if not now_iso.endswith("Z"):
+            now_iso += "Z"
+
+
+        # Create or update object
+        if obj_id not in self.data["ocel:objects"]:
+            self.data["ocel:objects"][obj_id] = {
+                "ocel:oid": obj_id,
+                "ocel:type": obj_type,
+                "ocel:ovmap": {}
+            }
+
+        obj = self.data["ocel:objects"][obj_id]
+
+        # Add attributes with timestamp
         for key, value in attributes.items():
-            if key in ATTRIBUTE_TYPE_HINTS:
-                expected = ATTRIBUTE_TYPE_HINTS[key]
-                if not isinstance(value, expected):
-                    # Format expected type name for clarity
-                    if isinstance(expected, tuple):
-                        expected_name = ", ".join(t.__name__ for t in expected)
-                    else:
-                        expected_name = getattr(expected, "__name__", str(expected))
+            if key not in obj["ocel:ovmap"]:
+                obj["ocel:ovmap"][key] = []
+            """
+            # Check if this exact value already exists (avoid duplicates)
+            existing_values = [
+                entry["ocel:value"]
+                for entry in obj["ocel:ovmap"][key]
+            ]
 
-                    logger.warning(
-                        "Type mismatch for '%s': expected %s, got %s (Value: %s)",
-                        key, expected_name, type(value).__name__, value
-                    )
+            if value not in existing_values:
+                obj["ocel:ovmap"][key].append({
+                    "ocel:time": now_iso,
+                    "ocel:value": value
+                })
+            """
+            # 2. Evitar redundancia: Solo registrar si el valor cambia
+            last_entry = obj["ocel:ovmap"][key][-1] if obj["ocel:ovmap"][key] else None
+            if last_entry is None or last_entry["ocel:value"] != value:
+                obj["ocel:ovmap"][key].append({
+                    "ocel:time": now_iso,
+                    "ocel:value": value
+                })
 
-    def add_object(self, obj_id: str, obj_type: str, attributes: Dict[str, Any]) -> None:
-        """Adds a unique object to the log."""
-        if obj_id in self.data[OBJECTS]:
-            return
+    def add_event(
+        self,
+        activity: str,
+        timestamp: str,
+        relationships: List[Dict[str, str]],
+        attributes: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Add an event to the OCEL log.
 
-        self._validate_attribute_types(attributes)
+        Args:
+            activity: Event activity/type (e.g., "IssueOpened")
+            timestamp: ISO 8601 timestamp
+            relationships: List of {objectId, qualifier} dicts
+            attributes: Optional event attributes
 
-        now_iso = datetime.now().isoformat() + "Z"
-        formatted_attrs = [
-            {"name": k, "value": str(v), "time": now_iso}
-            for k, v in attributes.items()
-        ]
-
-        self.data[OBJECTS][obj_id] = {
-            "id": obj_id,
-            "type": obj_type,
-            "attributes": formatted_attrs,
-            "relationships": []
-        }
-
-    def _register_event_type(self, activity: str, attributes: Dict[str, Any]) -> None:
-        """Registers event attributes dynamically in the schema header."""
-        target = next((et for et in self.data[EVT_TYPES] if et["name"] == activity), None)
-        if not target:
-            target = {"name": activity, "attributes": []}
-            self.data[EVT_TYPES].append(target)
-
-        existing_attrs = {a["name"] for a in target["attributes"]}
-        for k in attributes.keys():
-            if k not in existing_attrs:
-                target["attributes"].append({"name": k, "type": "string"})
-
-    def add_event(self, activity: str, timestamp: str, related_objects: Sequence[str],
-                  attributes: Optional[Dict[str, Any]] = None) -> str:
-        """Adds an event and links it to objects. Returns the event UUID."""
+        Returns:
+            Generated event ID
+        """
         event_id = str(uuid.uuid4())
         event_attrs = attributes or {}
 
-        self._validate_attribute_types(event_attrs)
         self._register_event_type(activity, event_attrs)
 
-        formatted_attrs = [{"name": k, "value": str(v)} for k, v in event_attrs.items()]
+        # Normalize timestamp
+        if not timestamp.endswith("Z"):
+            timestamp = f"{timestamp}Z"
 
-        # Ensure relationships follow the (objectId, qualifier) schema
-        relationships = [
-            {"objectId": str(oid), "qualifier": "related"}
-            for oid in list(related_objects)
-        ]
+        # Build ocel:omap (list of object IDs)
+        omap = []
+        vmap = dict(event_attrs)
 
-        self.data[EVENTS].append({
-            "id": event_id,
-            "type": activity,
-            "time": timestamp if "Z" in timestamp else f"{timestamp}Z",
-            "attributes": formatted_attrs,
-            "relationships": relationships
-        })
-        return event_id
+        for rel in relationships:
+            obj_id = rel["objectId"]
+            qualifier = rel["qualifier"]
 
-    def export_json(self, filename: Union[str, Path], pretty: bool = True) -> None:
-        """Finalizes the OCEL structure and writes it to a JSON file."""
+            # Add to omap (avoiding duplicates)
+            if obj_id not in omap:
+                omap.append(obj_id)
 
-        # Build final dictionary using defined constants
-        final_output = {
-            EVT_TYPES: self.data[EVT_TYPES],
-            OBJ_TYPES_KEY: self.data[OBJ_TYPES_KEY],
-            EVENTS: self.data[EVENTS],
-            OBJECTS: list(self.data[OBJECTS].values())
+            # Store qualifier as special attribute
+            # This preserves semantic information in OCEL 2.0
+            qualifier_key = f"ocel:qualifier:{obj_id}"
+            vmap[qualifier_key] = qualifier
+
+        # Create event
+        self.data["ocel:events"][event_id] = {
+            "ocel:eid": event_id,
+            "ocel:activity": activity,
+            "ocel:timestamp": timestamp,
+            "ocel:omap": omap,
+            "ocel:vmap": vmap
         }
 
-        # Deterministic sort: Primary by time, Secondary by ID to break ties
-        final_output[EVENTS].sort(key=lambda x: (x["time"], x["id"]))
+        return event_id
 
+    def add_object_relationship(self, source_id: str, target_id: str, qualifier: str):
+        """Establece un vínculo directo entre dos objetos (OCEL 2.0 Standard)"""
+        self.data["ocel:object-relationships"].append({
+            "ocel:sourceId": str(source_id),
+            "ocel:targetId": str(target_id),
+            "ocel:qualifier": str(qualifier)
+        })
+
+    def export_json(self, filename: Union[str, Path], pretty: bool = True):
+        """
+        Export OCEL 2.0 file.
+
+        Args:
+            filename: Output file path
+            pretty: Whether to format with indentation
+        """
         output_path = Path(filename)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(final_output, f, indent=2 if pretty else None, ensure_ascii=False)
+        # Update global attribute names
+        self.data["ocel:global-log"]["ocel:attribute-names"] = sorted(
+            list(self._all_attributes)
+        )
 
-        logger.info(f"Export successful. {len(final_output[EVENTS])} events saved to: {output_path}")
+        # Build final structure with lists instead of dicts
+        final_data = {
+            "ocel:global-log": self.data["ocel:global-log"],
+            "ocel:global-event": self.data["ocel:global-event"],
+            "ocel:global-object": self.data["ocel:global-object"],
+            "ocel:events": list(self.data["ocel:events"].values()),
+            "ocel:objects": list(self.data["ocel:objects"].values()),
+            "ocel:object-relationships": self.data.get("ocel:object-relationships", [])
+        }
+
+        # Sort events by timestamp
+        final_data["ocel:events"].sort(
+            key=lambda e: (e["ocel:timestamp"], e["ocel:eid"])
+        )
+
+        # Write to file
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(final_data, f, indent=2 if pretty else None, ensure_ascii=False)
+
+        logger.info(
+            f"OCEL 2.0 exported: {len(final_data['ocel:events'])} events, "
+            f"{len(final_data['ocel:objects'])} objects → {output_path}"
+        )
+
+    def get_stats(self) -> Dict[str, int]:
+        """Get current statistics."""
+        return {
+            "objects": len(self.data["ocel:objects"]),
+            "events": len(self.data["ocel:events"]),
+            "event_types": len(self.data["ocel:global-event"]),
+            "object_types": len(self.data["ocel:global-object"])
+        }

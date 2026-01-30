@@ -29,6 +29,8 @@ query($owner: String!, $repo: String!, $cursor: String, $pageSize: Int!) {
         comments(first: 20) {
           nodes {
             createdAt
+            lastEditedAt
+            body
             author { login }
           }
         }

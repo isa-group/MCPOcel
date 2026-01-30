@@ -14,11 +14,13 @@ from shared.logger.logging_config import setup_logging, get_logger, LoggingConfi
 from shared.logger import get_logger, setup_logging
 from github2ocel.config.settings import APIConfig, LoggingConfig
 from github2ocel.transform.builder import OCELBuilder
-from github2ocel.transform.mappers import (
+from github2ocel.transform.rest_mapper import (
     process_workflow_run,
-    process_issue_node,
     process_commit_rest,
     process_release
+)
+from github2ocel.transform.graphql_mapper import (
+    process_issue_node
 )
 from github2ocel.extractor.rest import fetch_workflow_runs, fetch_commits_rest, fetch_releases
 from github2ocel.extractor.graphql import fetch_github_data
@@ -36,81 +38,88 @@ def main():
     setup_logging(log_config)
     api_config = APIConfig.from_env()
 
-    OWNER = os.getenv("GITHUB_OWNER", "statuscompliance")
-    REPO = os.getenv("GITHUB_REPO", "status-backend")
+    OWNER = os.getenv("GITHUB_OWNER")
+    REPO = os.getenv("GITHUB_REPO")
     TOKEN = os.getenv("GITHUB_TOKEN")
 
-    if not TOKEN:
-        logger.critical("GitHub Token missing. Check your .env file.")
-        return
+    if not all([OWNER, REPO, TOKEN]):
+        logger.critical("Configuration missing (OWNER/REPO/TOKEN). Check .env.")
+        sys.exit(1)
 
-    errors_occurred = False
-
-    logger.info(f"--- Starting OCEL Pipeline for {OWNER}/{REPO} ---")
-
-
+    logger.info(f"--- Pipeline Start: {OWNER}/{REPO} ---")
 
     builder = OCELBuilder()
     repo_id = f"repo_{OWNER}_{REPO}"
-    builder.add_object(repo_id, "Repository", {"name": REPO})
+    builder.add_object(repo_id, "Repository", {
+        "name": REPO,
+        "full_name": f"{OWNER}/{REPO}",
+        "visibility": "public"
+    })
 
-    # GraphQL (Issues & PRs)
+    errors = False
+
+    # 1. GraphQL: Rich Structure (Issues & PRs)
     try:
-        nodes = fetch_github_data(OWNER, REPO, TOKEN, api_config, pages=None)
+        nodes = fetch_github_data(OWNER, REPO, TOKEN, api_config)
         for node in nodes:
             process_issue_node(node, builder, repo_id)
+        logger.info(f"Successfully processed {len(nodes)} GraphQL nodes.")
     except Exception:
-        logger.exception("Error in GraphQL extraction phase")
-        errors_occurred = True
+        logger.exception("GraphQL phase failed")
+        errors = True
 
-    # REST Releases
+    # 2. REST: Commits & Files
     try:
+        commits = fetch_commits_rest(OWNER, REPO, TOKEN, api_config, max_detailed_total=50)
+        for commit in commits:
+            process_commit_rest(commit, builder, repo_id)
+        logger.info(f"Successfully processed {len(commits)} detailed commits.")
+    except Exception:
+        logger.exception("Commits phase failed")
+        errors = True
+
+    # 3. REST: DevOps (Workflows & Releases)
+    try:
+        runs = fetch_workflow_runs(OWNER, REPO, TOKEN, api_config)
+        for run in runs:
+            if run.get("status") == "completed":
+                process_workflow_run(run, builder, repo_id)
+
         releases = fetch_releases(OWNER, REPO, TOKEN, api_config)
         for rel in releases:
             process_release(rel, builder, repo_id)
     except Exception:
-        logger.exception("Error in Releases extraction phase")
-        errors_occurred = True
+        logger.exception("DevOps phase failed")
+        errors = True
 
-    # REST Commits (With Conventional Commits)
-    try:
-        commits = fetch_commits_rest(OWNER, REPO, TOKEN, api_config, pages=None, max_detailed_total=50)
-        for commit in commits:
-            process_commit_rest(commit, builder, repo_id)
-    except Exception:
-        logger.exception("Error in Commits extraction phase")
-        errors_occurred = True
-
-    # REST Workflows
-    try:
-        runs = fetch_workflow_runs(OWNER, REPO, TOKEN, api_config, pages=None)
-        for run in runs:
-            if run.get("status") == "completed":
-                process_workflow_run(run, builder, repo_id)
-    except Exception:
-        logger.exception("Error in Workflow extraction phase")
-        errors_occurred = True
-
-    if errors_occurred:
-        logger.error("Data extraction encountered errors. Skipping export to protect data integrity.")
-        return
+    if errors:
+        logger.error("Pipeline aborted due to extraction errors.")
+        sys.exit(1)
 
     # Export & Validation
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"github_ocel_{timestamp}.json"
-    output_path = STORAGE_DIR / filename
-
+    output_path = STORAGE_DIR / f"github_ocel_{REPO}_{timestamp}.json"
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-
-    logger.info(f"--- QUERIES FINISHED ---")
-    logger.info(f"Target file: {output_path}")
 
     try:
         builder.export_json(output_path)
+
+        # Summary Metrics
+        stats = builder.get_stats()
+        obj_count = stats['objects']
+        evt_count = stats['events']
+
+        logger.info(f"Log generated: {obj_count} objects, {evt_count} events.")
+
         if validate_ocel(output_path):
-            logger.info("Pipeline finished: OCEL 2.0 file is valid and ready for analysis.")
+            logger.info("VALIDATION SUCCESS: OCEL 2.0 file is ready.")
+        if not validate_ocel(output_path):
+            logger.critical("OCEL validation failed. File is NOT standard-compliant.")
+            sys.exit(2)
+
     except Exception:
-        logger.exception("Error during export/validation")
+        logger.exception("Export/Validation failed")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
