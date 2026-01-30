@@ -20,10 +20,20 @@ github2ocel/storage/*.ocel
 storage/
 # Allow all .gitkeep files in any directory
 !**/.gitkeep
+*.db
+personal/*
 
+# --- IDEs y Editores ---
+
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+.history/
 github2ocel/logs/*.log
 logs/
-personal/
+
 # PyCharm / IntelliJ
 .idea/
 *.iws
