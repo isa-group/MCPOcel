@@ -108,7 +108,7 @@ class ProcessMiningEngine:
         Initializes the process mining engine.
 
         Args:
-            ocel_data: Loaded OCEL (PM4PY, dict, or DuckDB).
+            ocel_data: Loaded OCEL (PM4PY or dict).
         """
         if pm4py is None:
             raise ImportError("PM4PY is not available")

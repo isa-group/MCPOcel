@@ -28,7 +28,7 @@ class OCELQueryEngine:
         Initializes the query engine.
 
         Args:
-            ocel_data: Loaded OCEL (PM4PY, dict, or DuckDB connection).
+            ocel_data: Loaded OCEL (PM4PY or dict).
         """
         self.ocel_data = ocel_data
         self._detect_format()
