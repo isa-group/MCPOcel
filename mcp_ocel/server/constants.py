@@ -8,8 +8,7 @@ from typing import Final
 # Threshold (MB) to load into memory with PM4PY without exhausting RAM on typical laptops.
 FILE_SIZE_SMALL: Final[int] = 100
 
-# Between 100MB-1GB we prioritize ijson streaming to avoid memory spikes;
-# above 1GB we switch to DuckDB.
+# Between 100MB-1GB we prioritize ijson streaming to avoid memory spikes
 FILE_SIZE_MEDIUM: Final[int] = 1000
 
 DEFAULT_OCEL_PATH: Final[str] = "./log.json"

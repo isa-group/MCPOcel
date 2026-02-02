@@ -1,5 +1,5 @@
 """Smart OCEL loader with adaptive strategy.
-Automatically selects: PM4PY (< 100MB), ijson (100MB-1GB), DuckDB (> 1GB).
+Automatically selects: PM4PY (< 100MB), ijson (100MB-1GB).
 """
 
 import os
@@ -57,7 +57,6 @@ class SmartOCELLoader:
         Returns:
             - If PM4PY: pm4py.OCEL (native object)
             - If ijson: dict with events and objects
-            - If DuckDB: DuckDB connection
             
         Raises:
             Exception: If loading fails.
