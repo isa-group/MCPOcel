@@ -9,12 +9,10 @@ from config.settings import APIConfig
 # Add parent directory to path for shared module access
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.logger.logging_config import setup_logging, get_logger, LoggingConfig
+from shared.ocel.builder import OCELBuilder
+from shared.ocel.validator import validate_ocel
 
-# internal
-from shared.logger import get_logger, setup_logging
-from github2ocel.config.settings import APIConfig, LoggingConfig
-from github2ocel.transform.builder import OCELBuilder
-from github2ocel.transform.rest_mapper import (
+from transform.mappers import (
     process_workflow_run,
     process_commit_rest,
     process_release
@@ -25,6 +23,8 @@ from github2ocel.transform.graphql_mapper import (
 from github2ocel.extractor.rest import fetch_workflow_runs, fetch_commits_rest, fetch_releases
 from github2ocel.extractor.graphql import fetch_github_data
 from github2ocel.validate.validate_ocel import validate_ocel
+from extractor.rest import fetch_workflow_runs, fetch_commits_rest, fetch_releases
+from extractor.graphql import fetch_github_data
 
 logger = get_logger(__name__)
 

@@ -40,29 +40,3 @@ class ErrorType(str, Enum):
     CONFIG_ERROR = "config_error"
     GRAPHVIZ_NOT_FOUND = "graphviz_not_found"
 
-
-OCEL2_KEYS: Final[dict] = {
-    "log": {
-        "eventTypes",
-        "objectTypes",
-        "events",
-        "objects",
-    },
-    "event": {
-        "id",
-        "type",
-        "time",
-        "attributes",
-        "relationships",
-    },
-    "object": {
-        "id",
-        "type",
-        "attributes",
-        "relationships",
-    },
-    "relationship": {
-        "objectId",
-        "qualifier",
-    },
-}

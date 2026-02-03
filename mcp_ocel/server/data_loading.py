@@ -10,6 +10,7 @@ import pm4py
 from . import constants
 from .typing_ocel import OCELData, EventStreamGenerator
 from shared.logger.logging_config import get_logger
+from shared.ocel.constants import EVT_TYPES, OBJ_TYPES_KEY, EVENTS, OBJECTS
 
 logger = get_logger(__name__)
 
@@ -104,37 +105,37 @@ class SmartOCELLoader:
             logger.info(f"Loading OCEL with ijson (streaming) from: {self.ocel_path}")
             
             data: Dict[str, Any] = {
-                "eventTypes": [],
-                "objectTypes": [],
-                "events": [],
-                "objects": [],
+                EVT_TYPES: [],
+                OBJ_TYPES_KEY: [],
+                EVENTS: [],
+                OBJECTS: [],
             }
             
             # First pass: load metadata (eventTypes, objectTypes)
             with open(self.ocel_path, "rb") as f:
                 parser = ijson.kvitems(f, "")
                 for key, value in parser:
-                    if key == "eventTypes":
-                        data["eventTypes"] = value
-                    elif key == "objectTypes":
-                        data["objectTypes"] = value
-                    elif key == "objects":
-                        data["objects"] = value
+                    if key == EVT_TYPES:
+                        data[EVT_TYPES] = value
+                    elif key == OBJ_TYPES_KEY:
+                        data[OBJ_TYPES_KEY] = value
+                    elif key == OBJECTS:
+                        data[OBJECTS] = value
                         break
 
             # Second pass: stream events
             with open(self.ocel_path, "rb") as f:
-                parser = ijson.items(f, "events.item")
+                parser = ijson.items(f, f"{EVENTS}.item")
                 events = []
                 for i, event in enumerate(parser):
                     events.append(event)
                     if (i + 1) % constants.DEFAULT_CHUNK_SIZE == 0:
                         logger.debug(f"Loaded {i + 1} events...")
-                data["events"] = events
+                data[EVENTS] = events
             
             logger.info(
-                f"OCEL loaded (ijson): {len(data['events'])} events, "
-                f"{len(data['objects'])} objects"
+                f"OCEL loaded (ijson): {len(data[EVENTS])} events, "
+                f"{len(data[OBJECTS])} objects"
             )
             return data
         

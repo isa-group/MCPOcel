@@ -15,9 +15,10 @@ from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 
 from . import constants
-from .ocel_config import OCELConfig, get_cached_config
+from shared.ocel.config import get_cached_config
+from shared.ocel.converter import ocel_to_dict
 from shared.logger.logging_config import get_logger, setup_logging
-from .data_loading import load_ocel
+from .data_loading import SmartOCELLoader
 from .ocel_query_engine import OCELQueryEngine
 from .process_mining import ProcessMiningEngine
 from .visualization_engine import VisualizationEngine
@@ -58,7 +59,7 @@ def _get_retrieval_engine() -> Optional[Type[Any]]:
     global _retrieval_engine
     if _retrieval_engine is None:
         try:
-            from mcp_ocel.server.retrieval import OCELRetrievalEngine
+            from .retrieval import OCELRetrievalEngine
             _retrieval_engine = OCELRetrievalEngine
             logger.info("Adaptive retrieval engine loaded (SQLite FTS5 + BM25)")
         except ImportError as e:
@@ -80,54 +81,6 @@ _ocel_initialized = False
 
 # Flag to track if shutdown is in progress
 _shutdown_in_progress = False
-
-
-def _ocel_to_dict(ocel_data: OCELData, config: OCELConfig) -> Dict[str, Any]:
-    """Convert pm4py OCEL object to dict format for indexing.
-    
-    Args:
-        ocel_data: Loaded OCEL data (PM4PY or dict format).
-        config: OCEL configuration with attribute names and object types.
-        
-    Returns:
-        Dict conforming to OCEL 2.0 JSON schema.
-    """
-    result: Dict[str, Any] = {
-        "eventTypes": [{"name": et} for et in config.event_types],
-        "objectTypes": [{"name": ot} for ot in config.object_types],
-        "events": [],
-        "objects": [],
-    }
-    
-    try:
-        if hasattr(ocel_data, "events"):
-            # PM4Py format - extract from DataFrames
-            events_df = ocel_data.events
-            for _, row in events_df.iterrows():
-                event = {
-                    "id": str(row.get("ocel:eid", "")),
-                    "type": str(row.get("ocel:activity", "")),
-                    "time": str(row.get("ocel:timestamp", "")),
-                    "attributes": [],
-                    "relationships": [],
-                }
-                result["events"].append(event)
-        
-        if hasattr(ocel_data, "objects"):
-            objects_df = ocel_data.objects
-            for _, row in objects_df.iterrows():
-                obj = {
-                    "id": str(row.get("ocel:oid", "")),
-                    "type": str(row.get("ocel:type", "")),
-                    "attributes": [],
-                    "relationships": [],
-                }
-                result["objects"].append(obj)
-    except Exception as e:
-        logger.warning(f"Error converting OCEL to dict: {e}")
-    
-    return result
-
 
 def _cleanup_resources() -> None:
     """
@@ -220,7 +173,8 @@ async def ocel_lifespan():
     try:
         # Load OCEL and configuration
         ocel_config = get_cached_config(ocel_path)
-        ocel_data = load_ocel(ocel_path)
+        loader = SmartOCELLoader(ocel_path)
+        ocel_data = loader.load()
         
         # Initialize engines
         query_engine = OCELQueryEngine(ocel_data)
@@ -235,7 +189,7 @@ async def ocel_lifespan():
             try:
                 with _ocel_lock:
                     retrieval_engine = RetrievalClass()
-                    ocel_dict = _ocel_to_dict(ocel_data, ocel_config)
+                    ocel_dict = ocel_to_dict(ocel_data, ocel_config)
                     num_chunks = retrieval_engine.index_ocel(ocel_dict)
                     info = retrieval_engine.get_info()
                     logger.info(
