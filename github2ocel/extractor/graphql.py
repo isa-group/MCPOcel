@@ -23,15 +23,34 @@ query($owner: String!, $repo: String!, $cursor: String, $pageSize: Int!) {
         createdAt
         closedAt
         author { login }
-        labels(first: 20) {
+        assignees(first: 5) {
+          nodes { login }
+        }
+        labels(first: 10) {
           nodes { name color }
         }
-        comments(first: 20) {
+        comments(first: 10) {
           nodes {
             createdAt
             lastEditedAt
             body
             author { login }
+          }
+        }
+        timelineItems(
+          first: 50,
+          itemTypes: [ASSIGNED_EVENT, UNASSIGNED_EVENT]
+        ) {
+          nodes {
+            __typename
+            ... on AssignedEvent {
+              createdAt
+              assignee { ... on User { login } }
+            }
+            ... on UnassignedEvent {
+              createdAt
+              assignee { ... on User { login } }
+            }
           }
         }
       }
@@ -58,20 +77,98 @@ query($owner: String!, $repo: String!, $cursor: String, $pageSize: Int!) {
         merged
         mergedAt
         author { login }
-        labels(first: 20) {
+        assignees(first: 5) {
+          nodes { login }
+        }
+        labels(first: 10) {
           nodes { name color }
         }
-        reviews(first: 20) {
+        reviewRequests(first: 5) {
+          nodes {
+            requestedReviewer {
+              ... on User { login }
+            }
+          }
+        }
+        reviews(first: 10) {
           nodes {
             state
             submittedAt
             author { login }
+            comments(first: 10) {
+              nodes {
+                id
+                body
+                createdAt
+                author { login }
+              }
+            }
           }
         }
-        comments(first: 20) {
+        reviewThreads(first: 20) {
           nodes {
-            createdAt
-            author { login }
+            id
+            isResolved
+            resolvedBy { login }
+            comments(first: 50) {
+              nodes {
+                id
+                body
+                createdAt
+                author { login }
+              }
+            }
+          }
+        }
+        statusCheckRollup {
+          contexts(first: 50) {
+            nodes {
+              ... on CheckRun {
+                __typename
+                id
+                name
+                status
+                conclusion
+                startedAt
+                completedAt
+                detailsUrl
+              }
+            }
+          }
+        }
+        milestone {
+          id
+          title
+          state
+          dueOn
+        }
+        timelineItems(
+          first: 50,
+          itemTypes: [
+            ASSIGNED_EVENT,
+            UNASSIGNED_EVENT,
+            REVIEW_REQUESTED_EVENT,
+            REVIEW_REQUEST_REMOVED_EVENT
+          ]
+        ) {
+          nodes {
+            __typename
+            ... on AssignedEvent {
+              createdAt
+              assignee { ... on User { login } }
+            }
+            ... on UnassignedEvent {
+              createdAt
+              assignee { ... on User { login } }
+            }
+            ... on ReviewRequestedEvent {
+              createdAt
+              requestedReviewer { ... on User { login } }
+            }
+            ... on ReviewRequestRemovedEvent {
+              createdAt
+              requestedReviewer { ... on User { login } }
+            }
           }
         }
       }

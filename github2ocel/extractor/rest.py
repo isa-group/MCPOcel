@@ -47,6 +47,8 @@ def _rest_get(
 
     # SAFETY: If the blockage lasts longer than 5 minutes, we abort.
     MAX_SLEEP_ALLOWED = 300.0
+    MAX_RATE_LIMIT_RETRIES = 3
+    rate_limit_retries = 0
 
     # Network error handling / Timeouts / 5xx
     for attempt in range(1, api_config.max_retries + 1):
@@ -65,9 +67,15 @@ def _rest_get(
 
                 # Rate Limit Case (403/429)
                 if response.status_code in (403, 429):
+                    rate_limit_retries += 1
+                    if rate_limit_retries > MAX_RATE_LIMIT_RETRIES:
+                        logger.error("Max rate limit retries exceeded")
+                        response.raise_for_status()
+
                     sleep_seconds = _calculate_sleep_time(response)
 
                     if sleep_seconds <= 0:
+                        # sleep_seconds = 2 ** rate_limit_retries
                         logger.error("Rate limit hit but no reset time found. Aborting request.")
                         response.raise_for_status()
 
@@ -153,7 +161,8 @@ def fetch_commits_rest(
         api_config: APIConfig,
         pages: Optional[int] = None,
         per_page: int = 30,
-        max_detailed_total: int = 20,
+        max_detailed_total: Optional[int] = None,
+        since: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Fetch commits list and then fetch DETAILS for each commit.
@@ -175,11 +184,12 @@ def fetch_commits_rest(
             break
 
         try:
+            list_params["page"] = current_page
             response = _rest_get(
                 endpoint_list,
                 token,
                 api_config,
-                params={"per_page": per_page, "page": current_page},
+                params=list_params,
             )
             commits_summary = response.json()
 
@@ -192,6 +202,7 @@ def fetch_commits_rest(
                     break
 
                 sha = summary["sha"]
+                # TODO: add logic to skip the commit if it already exists (database or cache)
                 endpoint_detail = f"/repos/{owner}/{repo}/commits/{sha}"
 
                 try:
@@ -203,7 +214,7 @@ def fetch_commits_rest(
                     time.sleep(0.1)
 
                 except Exception as e:
-                    logger.warning(f"Skipping commit {sha} due to error: {e}")
+                    logger.warning(f"Error fetching details for commit {sha}: {e}")
                     continue
             current_page += 1
             logger.info(f"Fetched {detailed_fetched} detailed commits so far (Page {current_page - 1})...")
@@ -214,6 +225,7 @@ def fetch_commits_rest(
 
     logger.info("Fetched %d detailed commits", len(all_commits))
     return all_commits
+
 
 def fetch_releases(
     owner: str,
