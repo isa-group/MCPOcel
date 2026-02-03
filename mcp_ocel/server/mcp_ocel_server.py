@@ -5,6 +5,8 @@ Uses FastMCP with streamable-http transport for process-separated client/server.
 
 import os
 import json
+import asyncio
+import threading
 from typing import Any, Dict, List, Optional, Type
 from contextlib import asynccontextmanager
 
@@ -63,8 +65,16 @@ def _get_retrieval_engine() -> Optional[Type[Any]]:
     return _retrieval_engine
 
 
-# Global state for OCEL data (initialized in lifespan)
+# Global state for OCEL data (initialized once at server startup, shared across all client sessions)
+# With streamable-http transport, multiple clients connect via different sessions but all share
+# the same _ocel_state for memory efficiency and index reuse.
 _ocel_state: Dict[str, Any] = {}
+
+# Lock for synchronizing concurrent access to critical sections (e.g., retrieval engine indexing)
+_ocel_lock = threading.RLock()
+
+# Flag to track if OCEL has been initialized
+_ocel_initialized = False
 
 
 def _ocel_to_dict(ocel_data: OCELData, config: OCELConfig) -> Dict[str, Any]:
@@ -142,18 +152,20 @@ async def ocel_lifespan(server: FastMCP):
         viz_engine = VisualizationEngine(ocel_data, mining_engine)
         
         # Initialize retrieval engine (adaptive: SQLite FTS5 / Hybrid / BM25)
+        # Uses lock to ensure indexing completes before any client requests can be served
         retrieval_engine = None
         RetrievalClass = _get_retrieval_engine()
         if RetrievalClass and RetrievalClass is not False:
             try:
-                retrieval_engine = RetrievalClass()
-                ocel_dict = _ocel_to_dict(ocel_data, ocel_config)
-                num_chunks = retrieval_engine.index_ocel(ocel_dict)
-                info = retrieval_engine.get_info()
-                logger.info(
-                    f"OCEL indexed with {info['strategy'].upper()} strategy - "
-                    f"{num_chunks} chunks - {info['ocel_size_mb']}MB"
-                )
+                with _ocel_lock:
+                    retrieval_engine = RetrievalClass()
+                    ocel_dict = _ocel_to_dict(ocel_data, ocel_config)
+                    num_chunks = retrieval_engine.index_ocel(ocel_dict)
+                    info = retrieval_engine.get_info()
+                    logger.info(
+                        f"OCEL indexed with {info['strategy'].upper()} strategy - "
+                        f"{num_chunks} chunks - {info['ocel_size_mb']}MB"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to initialize retrieval engine: {e}")
         
@@ -516,12 +528,14 @@ def search_ocel(
         }
     
     try:
-        if chunk_types and "schema" in chunk_types:
-            results = retrieval_engine.search_schema(query, top_k=top_k)
-        elif chunk_types and "data" in chunk_types:
-            results = retrieval_engine.search_data(query, top_k=top_k)
-        else:
-            results = retrieval_engine.search(query, top_k=top_k)
+        # Use lock to synchronize concurrent searches (thread-safe access to retrieval engine)
+        with _ocel_lock:
+            if chunk_types and "schema" in chunk_types:
+                results = retrieval_engine.search_schema(query, top_k=top_k)
+            elif chunk_types and "data" in chunk_types:
+                results = retrieval_engine.search_data(query, top_k=top_k)
+            else:
+                results = retrieval_engine.search(query, top_k=top_k)
         
         formatted_results = []
         for result in results:
@@ -905,6 +919,38 @@ def get_schema_section(section: str) -> str:
 
 
 # ============================================================================
+# Server initialization functions
+# ============================================================================
+
+async def _initialize_ocel_eager() -> None:
+    """
+    Eagerly initialize OCEL data at server startup (before accepting client connections).
+    
+    This function ensures:
+    - OCEL is loaded exactly ONCE, not per client session
+    - All query engines and indices are initialized before FastMCP starts
+    - Multiple clients share the same _ocel_state (memory efficient, index reuse)
+    - Fail-fast: if OCEL file is missing or invalid, server fails at startup
+    
+    Called by run_server() before mcp.run(), ensuring eager-loading instead of lazy-loading.
+    """
+    global _ocel_initialized
+    
+    logger.info("Starting eager OCEL initialization...")
+    
+    try:
+        # Execute the lifespan context manager to initialize _ocel_state
+        # We manually manage the context to ensure it completes before accepting connections
+        async with ocel_lifespan(mcp):
+            # At this point, _ocel_state is fully populated
+            logger.info("Eager initialization complete - OCEL ready for client connections")
+            _ocel_initialized = True
+    except Exception as e:
+        logger.error(f"Eager initialization failed: {e}")
+        raise
+
+
+# ============================================================================
 # Server runner functions
 # ============================================================================
 
@@ -916,7 +962,12 @@ def run_server(
     transport: str = "streamable-http",
 ) -> None:
     """
-    Run the MCP server.
+    Run the MCP server with eager OCEL initialization.
+    
+    Architecture:
+    - Eagerly loads OCEL at startup (before listening for connections)
+    - All client sessions share the same _ocel_state for efficiency
+    - Synchronized access prevents race conditions with threading.RLock()
     
     Args:
         host: Host to bind (default: 127.0.0.1)
@@ -932,6 +983,16 @@ def run_server(
     
     mcp.settings.host = host
     mcp.settings.port = port
+    
+    # Initialize OCEL BEFORE starting the server. This ensures:
+    # 1. Fail-fast if file is missing or invalid
+    # 2. All client connections share the same _ocel_state
+    try:
+        logger.info("Initializing OCEL before server startup...")
+        asyncio.run(_initialize_ocel_eager())
+    except Exception as e:
+        logger.error(f"Failed to initialize OCEL. Server will not start: {e}")
+        raise
     
     if transport == "stdio":
         print(f"Starting MCP Server in STDIO mode")
