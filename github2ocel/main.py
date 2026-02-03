@@ -12,15 +12,18 @@ from shared.logger.logging_config import setup_logging, get_logger, LoggingConfi
 from shared.ocel.builder import OCELBuilder
 from shared.ocel.validator import validate_ocel
 
-from transform.mappers import (
-    process_workflow_run,
-    process_commit_rest,
-    process_release
+# internal
+from shared.logger import get_logger, setup_logging
+from github2ocel.config.settings import APIConfig, LoggingConfig
+from github2ocel.transform.builder import OCELBuilder
+
+from github2ocel.transform.rest_mapper import (
+    run_rest_transformation
 )
 from github2ocel.transform.graphql_mapper import (
-    process_issue_node
+    process_issue_node,
 )
-from github2ocel.extractor.rest import fetch_workflow_runs, fetch_commits_rest, fetch_releases
+from github2ocel.extractor.rest import fetch_workflow_runs, fetch_commits_rest, fetch_releases, fetch_deployments
 from github2ocel.extractor.graphql import fetch_github_data
 from github2ocel.validate.validate_ocel import validate_ocel
 from extractor.rest import fetch_workflow_runs, fetch_commits_rest, fetch_releases
@@ -50,7 +53,7 @@ def main():
     logger.info(f"--- Pipeline Start: {OWNER}/{REPO} ---")
 
     db_path = STORAGE_DIR / f"staging_{REPO}.db"
-    with SQLiteOCELBuilder(db_path=db_path) as builder:
+    with OCELBuilder(db_path=db_path) as builder:
         repo_id = f"repo_{OWNER}_{REPO}"
         builder.add_object(repo_id, "Repository", {
             "name": REPO,
@@ -71,28 +74,24 @@ def main():
             logger.exception("GraphQL phase failed")
             errors = True
 
-        # 2. REST: Commits & Files
+        # last_week = (datetime.now() - timedelta(days=7)).isoformat() + "Z"# Llamada al fetchertry:
         try:
-            commits = fetch_commits_rest(OWNER, REPO, TOKEN, api_config, max_detailed_total=50)
-            for commit in commits:
-                process_commit_rest(commit, builder, repo_id)
-            logger.info(f"Successfully processed {len(commits)} detailed commits.")
-        except Exception:
-            logger.exception("Commits phase failed")
-            errors = True
+            # 2. REST Phase (Data collection)
+            rest_data = {
+                "commits": fetch_commits_rest(
+                    OWNER, REPO, TOKEN, api_config,
+                    since=None, # last_week
+                    max_detailed_total=50),
+                "runs": fetch_workflow_runs(OWNER, REPO, TOKEN, api_config),
+                "releases": fetch_releases(OWNER, REPO, TOKEN, api_config),
+                "deployments": fetch_deployments(OWNER, REPO, TOKEN, api_config)
+            }
 
-        # 3. REST: DevOps (Workflows & Releases)
-        try:
-            runs = fetch_workflow_runs(OWNER, REPO, TOKEN, api_config)
-            for run in runs:
-                if run.get("status") == "completed":
-                    process_workflow_run(run, builder, repo_id)
+            # 3. REST Transformation (One single call!)
+            run_rest_transformation(rest_data, builder, repo_id)
 
-            releases = fetch_releases(OWNER, REPO, TOKEN, api_config)
-            for rel in releases:
-                process_release(rel, builder, repo_id)
         except Exception:
-            logger.exception("DevOps phase failed")
+            logger.exception("REST phase failed")
             errors = True
 
         if errors:
