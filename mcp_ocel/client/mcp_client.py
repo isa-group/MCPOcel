@@ -33,7 +33,6 @@ class OcelInfo:
 
 class MCPClientError(Exception):
     """Error communicating with the MCP server."""
-    pass
 
 
 class MCPClient:

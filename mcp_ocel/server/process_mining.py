@@ -5,7 +5,6 @@ Exposes: DFG discovery, Petri net discovery, variants, and statistics.
 
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
-from datetime import datetime
 import hashlib
 
 from shared.logger.logging_config import get_logger
@@ -724,7 +723,7 @@ class ProcessMiningEngine:
             
             # Basic fitness calculation based on replay
             # Note: Full token-based replay for OCEL is complex; we use simplified metrics
-            total_events = len(ocel.events)
+            len(ocel.events)
             total_objects = len(ocel.objects)
             
             # Count objects with complete traces (start to end activities)

@@ -6,7 +6,6 @@ Generates inline SVG (recommended) or base64 PNG.
 import base64
 import shutil
 from typing import Any, Dict, Optional
-from io import BytesIO
 
 from shared.logger.logging_config import get_logger
 from .typing_ocel import OCELData, VisualizationDict, DFGDict, PetriNetDict, OCELStatsDict

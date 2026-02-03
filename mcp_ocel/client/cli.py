@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import tiktoken
 
-from .mcp_client import MCPClient, MCPClientError, OcelInfo, DEFAULT_URL
+from .mcp_client import MCPClient, MCPClientError, DEFAULT_URL
 from .providers import ProviderError, build_provider
 
 DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
