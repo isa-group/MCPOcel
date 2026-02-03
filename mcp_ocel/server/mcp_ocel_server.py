@@ -47,17 +47,17 @@ logger = get_logger(__name__)
 
 
 def _get_retrieval_engine() -> Optional[Type[Any]]:
-    """Lazy-load the retrieval engine to avoid import overhead.
+    """Load the adaptive retrieval engine (SQLite FTS5 + BM25).
     
     Returns:
-        The OCELRetrievalEngine class if available, False if import failed, None otherwise.
+        The OCELRetrievalEngine class if available, False if import failed.
     """
     global _retrieval_engine
     if _retrieval_engine is None:
         try:
             from mcp_ocel.server.retrieval import OCELRetrievalEngine
             _retrieval_engine = OCELRetrievalEngine
-            logger.info("Hybrid retrieval engine loaded successfully")
+            logger.info("Adaptive retrieval engine loaded (SQLite FTS5 + BM25)")
         except ImportError as e:
             logger.warning(f"Retrieval engine not available: {e}")
             _retrieval_engine = False
@@ -142,15 +142,19 @@ async def ocel_lifespan(server: FastMCP):
         mining_engine = ProcessMiningEngine(ocel_data)
         viz_engine = VisualizationEngine(ocel_data, mining_engine)
         
-        # Initialize retrieval engine (optional)
+        # Initialize retrieval engine (adaptive: SQLite FTS5 / Hybrid / BM25)
         retrieval_engine = None
         RetrievalClass = _get_retrieval_engine()
         if RetrievalClass and RetrievalClass is not False:
             try:
                 retrieval_engine = RetrievalClass()
                 ocel_dict = _ocel_to_dict(ocel_data, ocel_config)
-                retrieval_engine.index_ocel(ocel_dict)
-                logger.info("OCEL indexed for hybrid search")
+                num_chunks = retrieval_engine.index_ocel(ocel_dict)
+                info = retrieval_engine.get_info()
+                logger.info(
+                    f"OCEL indexed with {info['strategy'].upper()} strategy - "
+                    f"{num_chunks} chunks - {info['ocel_size_mb']}MB"
+                )
             except Exception as e:
                 logger.warning(f"Failed to initialize retrieval engine: {e}")
         
