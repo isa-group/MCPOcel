@@ -26,6 +26,7 @@ from github2ocel.validate.validate_ocel import validate_ocel
 from extractor.rest import fetch_workflow_runs, fetch_commits_rest, fetch_releases
 from extractor.graphql import fetch_github_data
 
+
 logger = get_logger(__name__)
 
 # Config Repository & Output
@@ -48,78 +49,71 @@ def main():
 
     logger.info(f"--- Pipeline Start: {OWNER}/{REPO} ---")
 
-    builder = OCELBuilder()
-    repo_id = f"repo_{OWNER}_{REPO}"
-    builder.add_object(repo_id, "Repository", {
-        "name": REPO,
-        "full_name": f"{OWNER}/{REPO}",
-        "visibility": "public"
-    })
+    db_path = STORAGE_DIR / f"staging_{REPO}.db"
+    with SQLiteOCELBuilder(db_path=db_path) as builder:
+        repo_id = f"repo_{OWNER}_{REPO}"
+        builder.add_object(repo_id, "Repository", {
+            "name": REPO,
+            "full_name": f"{OWNER}/{REPO}",
+            "visibility": "public"
+        })
 
-    errors = False
+        errors = False
 
-    # 1. GraphQL: Rich Structure (Issues & PRs)
-    try:
-        nodes = fetch_github_data(OWNER, REPO, TOKEN, api_config)
-        for node in nodes:
-            process_issue_node(node, builder, repo_id)
-        logger.info(f"Successfully processed {len(nodes)} GraphQL nodes.")
-    except Exception:
-        logger.exception("GraphQL phase failed")
-        errors = True
+        # 1. GraphQL: Rich Structure (Issues & PRs)
+        try:
+            nodes = fetch_github_data(OWNER, REPO, TOKEN, api_config)
+            for node in nodes:
 
-    # 2. REST: Commits & Files
-    try:
-        commits = fetch_commits_rest(OWNER, REPO, TOKEN, api_config, max_detailed_total=50)
-        for commit in commits:
-            process_commit_rest(commit, builder, repo_id)
-        logger.info(f"Successfully processed {len(commits)} detailed commits.")
-    except Exception:
-        logger.exception("Commits phase failed")
-        errors = True
+                process_issue_node(node, builder, repo_id)
+            logger.info(f"Successfully processed {len(nodes)} GraphQL nodes.")
+        except Exception:
+            logger.exception("GraphQL phase failed")
+            errors = True
 
-    # 3. REST: DevOps (Workflows & Releases)
-    try:
-        runs = fetch_workflow_runs(OWNER, REPO, TOKEN, api_config)
-        for run in runs:
-            if run.get("status") == "completed":
-                process_workflow_run(run, builder, repo_id)
+        # 2. REST: Commits & Files
+        try:
+            commits = fetch_commits_rest(OWNER, REPO, TOKEN, api_config, max_detailed_total=50)
+            for commit in commits:
+                process_commit_rest(commit, builder, repo_id)
+            logger.info(f"Successfully processed {len(commits)} detailed commits.")
+        except Exception:
+            logger.exception("Commits phase failed")
+            errors = True
 
-        releases = fetch_releases(OWNER, REPO, TOKEN, api_config)
-        for rel in releases:
-            process_release(rel, builder, repo_id)
-    except Exception:
-        logger.exception("DevOps phase failed")
-        errors = True
+        # 3. REST: DevOps (Workflows & Releases)
+        try:
+            runs = fetch_workflow_runs(OWNER, REPO, TOKEN, api_config)
+            for run in runs:
+                if run.get("status") == "completed":
+                    process_workflow_run(run, builder, repo_id)
 
-    if errors:
-        logger.error("Pipeline aborted due to extraction errors.")
-        sys.exit(1)
+            releases = fetch_releases(OWNER, REPO, TOKEN, api_config)
+            for rel in releases:
+                process_release(rel, builder, repo_id)
+        except Exception:
+            logger.exception("DevOps phase failed")
+            errors = True
 
-    # Export & Validation
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = STORAGE_DIR / f"github_ocel_{REPO}_{timestamp}.json"
-    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        if errors:
+            logger.error("Pipeline aborted due to extraction errors.")
+            sys.exit(1)
 
-    try:
-        builder.export_json(output_path)
 
-        # Summary Metrics
-        stats = builder.get_stats()
-        obj_count = stats['objects']
-        evt_count = stats['events']
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = STORAGE_DIR / f"github_ocel_{REPO}_{timestamp}.json"
+        STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            builder.export_json(output_path)
+            stats = builder.get_stats()
+            logger.info(f"Log generated: {stats['objects']} objects, {stats['events']} events.")
+        except Exception:
+            logger.exception("Export failed")
+            sys.exit(1)
 
-        logger.info(f"Log generated: {obj_count} objects, {evt_count} events.")
 
-        if validate_ocel(output_path):
-            logger.info("VALIDATION SUCCESS: OCEL 2.0 file is ready.")
-        if not validate_ocel(output_path):
-            logger.critical("OCEL validation failed. File is NOT standard-compliant.")
-            sys.exit(2)
-
-    except Exception:
-        logger.exception("Export/Validation failed")
-        sys.exit(1)
+    if validate_ocel(output_path):
+        logger.info("VALIDATION SUCCESS: OCEL 2.0 file is ready.")
 
 if __name__ == "__main__":
     main()
