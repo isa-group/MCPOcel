@@ -1,21 +1,16 @@
-"""Smart OCEL loader with adaptive strategy.
-Automatically selects: PM4PY (< 100MB), ijson (100MB-1GB).
+"""OCEL loader using PM4PY.
+Loads OCEL files with PM4PY for analysis and process mining.
 """
-
-import os
-from typing import Any, Dict
-
 import pm4py
 
 from . import constants
 from .typing_ocel import OCELData, EventStreamGenerator
 from shared.logger.logging_config import get_logger
-from shared.ocel.constants import EVT_TYPES, OBJ_TYPES_KEY, EVENTS, OBJECTS
 
 logger = get_logger(__name__)
 
-class SmartOCELLoader:
-    """Smart loader that adapts strategy based on file size."""
+class OCELLoader:
+    """OCEL loader using PM4PY."""
     
     def __init__(self, ocel_path: str):
         """
@@ -27,49 +22,20 @@ class SmartOCELLoader:
         Raises:
             FileNotFoundError: If file does not exist.
         """
+        import os
         if not os.path.exists(ocel_path):
             raise FileNotFoundError(f"OCEL file not found: {ocel_path}")
         
         self.ocel_path = ocel_path
         self.file_size_mb = os.path.getsize(ocel_path) / (1024 ** 2)
-        self.strategy = self._select_strategy()
         
         logger.info(
-            f"OCEL loader initialized: {self.file_size_mb:.2f}MB "
-            f"(strategy: {self.strategy.value})"
+            f"OCEL loader initialized: {self.file_size_mb:.2f}MB"
         )
-    
-    def _select_strategy(self) -> constants.LoadStrategy:
-        """Selects strategy based on file size.
-        
-        Returns:
-            LoadStrategy enum value based on file size thresholds.
-        """
-        if self.file_size_mb < constants.FILE_SIZE_SMALL:
-            return constants.LoadStrategy.PM4PY
-        else:
-            return constants.LoadStrategy.IJSON
     
     def load(self) -> OCELData:
         """
-        Loads OCEL using selected strategy.
-        
-        Returns:
-            - If PM4PY: pm4py.OCEL (native object)
-            - If ijson: dict with events and objects
-            
-        Raises:
-            Exception: If loading fails.
-        """
-        logger.debug(f"Loading OCEL with strategy: {self.strategy.value}")
-        
-        if self.strategy == constants.LoadStrategy.PM4PY:
-            return self._load_pm4py()
-        else:
-            return self._load_ijson()
-    
-    def _load_pm4py(self) -> OCELData:
-        """Loads OCEL using PM4PY (for small files).
+        Loads OCEL using PM4PY.
         
         Returns:
             PM4PY OCEL object.
@@ -89,63 +55,6 @@ class SmartOCELLoader:
             logger.error(f"Error loading OCEL with PM4PY: {e}")
             raise
     
-    def _load_ijson(self) -> OCELData:
-        """
-        Loads OCEL with ijson in streaming mode (for medium files).
-        
-        Returns:
-            Dict with OCEL 2.0 structure (eventTypes, objectTypes, events, objects).
-            
-        Raises:
-            Exception: If loading fails.
-        """
-        try:
-            import ijson
-            
-            logger.info(f"Loading OCEL with ijson (streaming) from: {self.ocel_path}")
-            
-            data: Dict[str, Any] = {
-                EVT_TYPES: [],
-                OBJ_TYPES_KEY: [],
-                EVENTS: [],
-                OBJECTS: [],
-            }
-            
-            # First pass: load metadata (eventTypes, objectTypes)
-            with open(self.ocel_path, "rb") as f:
-                parser = ijson.kvitems(f, "")
-                for key, value in parser:
-                    if key == EVT_TYPES:
-                        data[EVT_TYPES] = value
-                    elif key == OBJ_TYPES_KEY:
-                        data[OBJ_TYPES_KEY] = value
-                    elif key == OBJECTS:
-                        data[OBJECTS] = value
-                        break
-
-            # Second pass: stream events
-            with open(self.ocel_path, "rb") as f:
-                parser = ijson.items(f, f"{EVENTS}.item")
-                events = []
-                for i, event in enumerate(parser):
-                    events.append(event)
-                    if (i + 1) % constants.DEFAULT_CHUNK_SIZE == 0:
-                        logger.debug(f"Loaded {i + 1} events...")
-                data[EVENTS] = events
-            
-            logger.info(
-                f"OCEL loaded (ijson): {len(data[EVENTS])} events, "
-                f"{len(data[OBJECTS])} objects"
-            )
-            return data
-        
-        except ImportError:
-            logger.warning("ijson not installed, falling back to PM4PY")
-            return self._load_pm4py()
-        except Exception as e:
-            logger.error(f"Error loading OCEL with ijson: {e}")
-            raise
-    
     def stream_events(
         self, chunk_size: int = constants.DEFAULT_CHUNK_SIZE
     ) -> EventStreamGenerator:
@@ -158,34 +67,15 @@ class SmartOCELLoader:
         Yields:
             List of event dictionaries.
         """
-        if self.strategy == constants.LoadStrategy.PM4PY:
-            ocel = self._load_pm4py()
-            chunk = []
-            for _, event in ocel.events.iterrows():
-                chunk.append(event.to_dict())
-                if len(chunk) >= chunk_size:
-                    yield chunk
-                    chunk = []
-            if chunk:
+        ocel = self.load()
+        chunk = []
+        for _, event in ocel.events.iterrows():
+            chunk.append(event.to_dict())
+            if len(chunk) >= chunk_size:
                 yield chunk
-        
-        elif self.strategy == constants.LoadStrategy.IJSON:
-            try:
-                import ijson
-                
-                with open(self.ocel_path, "rb") as f:
-                    chunk = []
-                    for i, event in enumerate(ijson.items(f, "events.item")):
-                        chunk.append(event)
-                        if len(chunk) >= chunk_size:
-                            yield chunk
-                            chunk = []
-                            logger.debug(f"Generated chunk with {chunk_size} events")
-                    if chunk:
-                        yield chunk
-            except ImportError:
-                logger.warning("ijson not installed for streaming")
-                raise
+                chunk = []
+        if chunk:
+            yield chunk
 
 
 def load_ocel(ocel_path: str) -> OCELData:
@@ -196,11 +86,11 @@ def load_ocel(ocel_path: str) -> OCELData:
         ocel_path: Path to OCEL file.
         
     Returns:
-        Loaded OCEL data (PM4PY OCEL object or dict structure).
+        Loaded OCEL data (PM4PY OCEL object).
         
     Raises:
         FileNotFoundError: If the file does not exist.
         Exception: If loading fails.
     """
-    loader = SmartOCELLoader(ocel_path)
+    loader = OCELLoader(ocel_path)
     return loader.load()
