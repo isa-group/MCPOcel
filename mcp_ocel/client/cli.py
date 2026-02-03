@@ -17,7 +17,7 @@ from .mcp_client import MCPClient, MCPClientError, OcelInfo, DEFAULT_URL
 from .providers import ProviderError, build_provider
 
 DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
-DEFAULT_MODEL = os.getenv("LLM_MODEL", "GPT-4o")
+DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 print(f"Provider: {DEFAULT_PROVIDER}, Model: {DEFAULT_MODEL}")
 
 # Global cache for available tools (fetched once from server)
