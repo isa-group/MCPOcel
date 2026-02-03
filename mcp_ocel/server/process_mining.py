@@ -100,32 +100,18 @@ class ProcessMiningEngine:
     """Domain-agnostic process mining wrapper with PM4PY."""
     
     ocel_data: OCELData
-    format: str
     
     def __init__(self, ocel_data: OCELData) -> None:
         """
         Initializes the process mining engine.
 
         Args:
-            ocel_data: Loaded OCEL (PM4PY or dict).
+            ocel_data: Loaded OCEL (PM4PY object).
         """
         if pm4py is None:
             raise ImportError("PM4PY is not available")
         
         self.ocel_data = ocel_data
-        self._detect_format()
-    
-    def _detect_format(self) -> None:
-        """Detects the OCEL format."""
-        if hasattr(self.ocel_data, "events") and hasattr(self.ocel_data, "objects"):
-            self.format = "pm4py"
-            logger.debug("Detected format: PM4PY")
-        elif isinstance(self.ocel_data, dict) and "events" in self.ocel_data:
-            self.format = "dict"
-            logger.debug("Detected format: dict (ijson)")
-        else:
-            self.format = "unknown"
-            logger.warning("Unknown OCEL format - some operations may not work")
     
     def discover_dfg(
         self, object_type: Optional[str] = None, use_cache: bool = True
@@ -147,11 +133,7 @@ class ProcessMiningEngine:
                 return cached
         
         logger.info(f"Discovering OC-DFG (object_type={object_type})")
-        
-        if self.format == "pm4py":
-            result = self._discover_dfg_pm4py(object_type)
-        else:
-            result = self._discover_dfg_dict(object_type)
+        result = self._discover_dfg(object_type)
         
         # Store in cache
         if use_cache and result[0]:
@@ -159,7 +141,7 @@ class ProcessMiningEngine:
         
         return result
     
-    def _discover_dfg_pm4py(
+    def _discover_dfg(
         self, object_type: Optional[str] = None
     ) -> Tuple[Dict, Dict]:
         """Discovers a DFG using PM4PY."""
@@ -194,50 +176,6 @@ class ProcessMiningEngine:
             logger.error(f"Error discovering DFG: {e}")
             raise
     
-    def _discover_dfg_dict(
-        self, object_type: Optional[str] = None
-    ) -> Tuple[Dict, Dict]:
-        """Discovers a DFG using dict input (converted to PM4PY)."""
-        logger.warning("DFG discovery with dict input: converting to PM4PY")
-        try:
-            temp_path = "/tmp/temp_ocel.json"
-            with open(temp_path, "w") as f:
-                json.dump(self.ocel_data, f)
-            
-            ocel = pm4py.read_ocel2_json(temp_path)
-            result = self._discover_dfg_pm4py_with_ocel(ocel, object_type)
-            return result
-        except Exception as e:
-            logger.error(f"Error in DFG dict workflow: {e}")
-            return {}, {}
-    
-    def _discover_dfg_pm4py_with_ocel(
-        self, ocel: Any, object_type: Optional[str] = None
-    ) -> Tuple[Dict, Dict]:
-        """Helper for DFG discovery with PM4PY OCEL objects."""
-        try:
-            if object_type:
-                filtered = pm4py.ocel_filter_object_types(ocel, [object_type])
-                dfg = pm4py.discover_ocel_dfg(filtered)
-            else:
-                dfg = pm4py.discover_ocel_dfg(ocel)
-            
-            dfg_dict = {
-                "edges": [
-                    {
-                        "source": str(edge[0]),
-                        "target": str(edge[1]),
-                        "frequency": int(freq),
-                    }
-                    for edge, freq in dfg[0].items()
-                ],
-            }
-            
-            return dfg_dict, {}
-        except Exception as e:
-            logger.error(f"Error in PM4PY DFG discovery: {e}")
-            return {}, {}
-    
     def discover_petri_net(
         self, object_type: Optional[str] = None, use_cache: bool = True
     ) -> PetriNetDict:
@@ -258,11 +196,7 @@ class ProcessMiningEngine:
                 return cached
         
         logger.info(f"Discovering OC-PN (object_type={object_type})")
-        
-        if self.format == "pm4py":
-            result = self._discover_petri_net_pm4py(object_type)
-        else:
-            result = self._discover_petri_net_dict(object_type)
+        result = self._discover_petri_net(object_type)
         
         # Store in cache
         if use_cache and result:
@@ -270,7 +204,7 @@ class ProcessMiningEngine:
         
         return result
     
-    def _discover_petri_net_pm4py(
+    def _discover_petri_net(
         self, object_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """Discovers a Petri net using PM4PY."""
@@ -299,46 +233,6 @@ class ProcessMiningEngine:
             logger.error(f"Error discovering Petri net: {e}")
             raise
     
-    def _discover_petri_net_dict(
-        self, object_type: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Discovers a Petri net using dict input (converted to PM4PY)."""
-        logger.warning("Petri net discovery with dict input: converting to PM4PY")
-        try:
-            temp_path = "/tmp/temp_ocel_pn.json"
-            with open(temp_path, "w") as f:
-                json.dump(self.ocel_data, f)
-            
-            ocel = pm4py.read_ocel2_json(temp_path)
-            return self._discover_petri_net_pm4py_with_ocel(ocel, object_type)
-        except Exception as e:
-            logger.error(f"Error in dict-based Petri net discovery: {e}")
-            return {}
-    
-    def _discover_petri_net_pm4py_with_ocel(
-        self, ocel: Any, object_type: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Helper for Petri net discovery with PM4PY OCEL objects."""
-        try:
-            if object_type:
-                filtered = pm4py.ocel_filter_object_types(ocel, [object_type])
-                petri_net, im, fm = pm4py.discover_ocel_petri_net(filtered)
-            else:
-                petri_net, im, fm = pm4py.discover_ocel_petri_net(ocel)
-            
-            pn_dict = {
-                "places": len(petri_net.places),
-                "transitions": len(petri_net.transitions),
-                "arcs": len(petri_net.arcs),
-                "initial_marking": str(im),
-                "final_marking": str(fm),
-            }
-            
-            return pn_dict
-        except Exception as e:
-            logger.error(f"Error in PM4PY Petri net discovery: {e}")
-            return {}
-    
     def extract_process_variants(
         self, object_type: Optional[str] = None, limit: int = 10
     ) -> List[VariantDict]:
@@ -353,20 +247,20 @@ class ProcessMiningEngine:
             List of VariantDict ordered by frequency.
         """
         logger.info(f"Extracting process variants (limit={limit})")
-        
-        if self.format == "pm4py":
-            return self._variants_pm4py(object_type, limit)
-        else:
-            return self._variants_dict(object_type, limit)
+        return self._variants(object_type, limit)
     
-    def _variants_pm4py(
+    def _variants(
         self, object_type: Optional[str] = None, limit: int = 10
     ) -> List[Dict[str, Any]]:
         """Extracts variants using PM4PY DataFrames."""
         # Default to top-10 to align with the public API and avoid massive outputs.
+        ocel = self.ocel_data
+        if object_type:
+            ocel = pm4py.ocel_filter_object_types(ocel, [object_type])
+        
         variants = {}
         
-        for _, event in self.ocel_data.events.iterrows():
+        for _, event in ocel.events.iterrows():
             event_id = str(event.get("ocel:eid", ""))
             activity = str(event.get("ocel:activity", "unknown"))
             
@@ -392,37 +286,6 @@ class ProcessMiningEngine:
         logger.info(f"Variants extracted: {len(sorted_variants)}")
         return sorted_variants
     
-    def _variants_dict(
-        self, object_type: Optional[str] = None, limit: int = 10
-    ) -> List[Dict[str, Any]]:
-        """Extracts variants using dict input."""
-        # Default to top-10 to align with the public API and avoid massive outputs.
-        variants = {}
-        
-        for event in self.ocel_data.get("events", []):
-            activity = event.get("type", "unknown")
-            
-            if activity not in variants:
-                variants[activity] = {
-                    "activity_sequence": [activity],
-                    "frequency": 0,
-                    "sample_events": [],
-                }
-            
-            variants[activity]["frequency"] += 1
-            # Limit samples to 3 IDs to illustrate without inflating the payload.
-            if len(variants[activity]["sample_events"]) < 3:
-                variants[activity]["sample_events"].append(event.get("id"))
-        
-        sorted_variants = sorted(
-            variants.values(),
-            key=lambda x: x["frequency"],
-            reverse=True,
-        )[:limit]
-        
-        logger.info(f"Variants extracted: {len(sorted_variants)}")
-        return sorted_variants
-    
     def get_ocel_statistics(self) -> OCELStatsDict:
         """
         Retrieves general OCEL statistics.
@@ -431,13 +294,9 @@ class ProcessMiningEngine:
             OCELStatsDict with totals for events, objects, types, and distributions.
         """
         logger.debug("Fetching OCEL statistics")
-        
-        if self.format == "pm4py":
-            return self._stats_pm4py()
-        else:
-            return self._stats_dict()
+        return self._stats()
     
-    def _stats_pm4py(self) -> Dict[str, Any]:
+    def _stats(self) -> Dict[str, Any]:
         """Statistics using PM4PY DataFrames."""
         try:
             logger.info("OCEL statistics obtained")
@@ -450,23 +309,6 @@ class ProcessMiningEngine:
         except Exception as e:
             logger.error(f"Error obtaining PM4PY statistics: {e}")
             return {}
-    
-    def _stats_dict(self) -> Dict[str, Any]:
-        """Statistics using dict."""
-        event_types = set(
-            event.get("type") for event in self.ocel_data.get("events", [])
-        )
-        object_types = set(
-            obj.get("type") for obj in self.ocel_data.get("objects", [])
-        )
-        
-        logger.info("OCEL statistics obtained (dict)")
-        return {
-            "total_events": len(self.ocel_data.get("events", [])),
-            "total_objects": len(self.ocel_data.get("objects", [])),
-            "object_types": len(object_types),
-            "event_types": len(event_types),
-        }
     
     # ========================================================================
     # NEW METHODS: Object-Centric Variants, Performance, Conformance
@@ -487,10 +329,6 @@ class ProcessMiningEngine:
             List of VariantDict with sequence, frequency, and sample objects.
         """
         logger.info(f"Extracting object-centric variants (object_type={object_type}, limit={limit})")
-        
-        if self.format != "pm4py":
-            logger.warning("Object-centric variants require PM4PY format")
-            return self.extract_process_variants(object_type, limit)
         
         try:
             ocel = self.ocel_data
@@ -555,10 +393,6 @@ class ProcessMiningEngine:
             PerformanceMetricsDict with activity transition times in seconds.
         """
         logger.info(f"Calculating performance metrics (object_type={object_type})")
-        
-        if self.format != "pm4py":
-            logger.warning("Performance metrics require PM4PY format")
-            return {"error": "PM4PY format required", "time_unit": "seconds"}
         
         try:
             import numpy as np
@@ -710,16 +544,13 @@ class ProcessMiningEngine:
         """
         logger.info(f"Checking conformance (object_type={object_type})")
         
-        if self.format != "pm4py":
-            return {"error": "PM4PY format required for conformance checking"}
-        
         try:
             ocel = self.ocel_data
             if object_type:
                 ocel = pm4py.ocel_filter_object_types(ocel, [object_type])
             
             # Discover Petri net for conformance
-            petri_net, im, fm = pm4py.discover_ocel_petri_net(ocel)
+            petri_net, _, _ = pm4py.discover_ocel_petri_net(ocel)
             
             # Basic fitness calculation based on replay
             # Note: Full token-based replay for OCEL is complex; we use simplified metrics
@@ -787,9 +618,6 @@ class ProcessMiningEngine:
             ObjectInteractionsResultDict with interaction matrix and patterns.
         """
         logger.info("Analyzing object interactions")
-        
-        if self.format != "pm4py":
-            return {"error": "PM4PY format required"}
         
         try:
             # Build co-occurrence matrix
@@ -861,33 +689,26 @@ class ProcessMiningEngine:
         try:
             attributes = []
             
-            if self.format == "pm4py":
-                events_df = self.ocel_data.events
+            events_df = self.ocel_data.events
+            
+            # Check event columns for potential resource attributes
+            resource_keywords = ["resource", "user", "actor", "agent", "org", "role", "worker", "employee"]
+            
+            for col in events_df.columns:
+                col_lower = col.lower()
+                # Skip OCEL reserved columns
+                if col.startswith("ocel:"):
+                    continue
                 
-                # Check event columns for potential resource attributes
-                resource_keywords = ["resource", "user", "actor", "agent", "org", "role", "worker", "employee"]
-                
-                for col in events_df.columns:
-                    col_lower = col.lower()
-                    # Skip OCEL reserved columns
-                    if col.startswith("ocel:"):
-                        continue
-                    
-                    # Check if column name suggests resource
-                    if any(kw in col_lower for kw in resource_keywords):
+                # Check if column name suggests resource
+                if any(kw in col_lower for kw in resource_keywords):
+                    attributes.append(col)
+                # Also include any string columns that might be resources
+                elif events_df[col].dtype == "object":
+                    unique_ratio = events_df[col].nunique() / len(events_df)
+                    # If low cardinality, might be resource
+                    if 0.01 < unique_ratio < 0.3:
                         attributes.append(col)
-                    # Also include any string columns that might be resources
-                    elif events_df[col].dtype == "object":
-                        unique_ratio = events_df[col].nunique() / len(events_df)
-                        # If low cardinality, might be resource
-                        if 0.01 < unique_ratio < 0.3:
-                            attributes.append(col)
-            else:
-                # Dict format: check event attributes
-                sample_event = self.ocel_data.get("ocel:events", [{}])[0]
-                for key in sample_event.keys():
-                    if not key.startswith("ocel:"):
-                        attributes.append(key)
             
             logger.info(f"Found {len(attributes)} potential resource attributes")
             return list(set(attributes))
@@ -909,9 +730,6 @@ class ProcessMiningEngine:
             SocialNetworkResultDict with network nodes and edges.
         """
         logger.info(f"Discovering social network (attribute={resource_attribute})")
-        
-        if self.format != "pm4py":
-            return {"error": "PM4PY format required"}
         
         try:
             events_df = self.ocel_data.events

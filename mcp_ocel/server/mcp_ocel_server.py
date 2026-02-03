@@ -18,7 +18,7 @@ from . import constants
 from shared.ocel.config import get_cached_config
 from shared.ocel.converter import ocel_to_dict
 from shared.logger.logging_config import get_logger, setup_logging
-from .data_loading import SmartOCELLoader
+from .data_loading import OCELLoader
 from .ocel_query_engine import OCELQueryEngine
 from .process_mining import ProcessMiningEngine
 from .visualization_engine import VisualizationEngine
@@ -113,13 +113,13 @@ def _cleanup_resources() -> None:
             logger.error(f"Error during cleanup: {e}")
 
 
-def _signal_handler(signum: int, frame: Any) -> None:
+def _signal_handler(signum: int, _frame: Any) -> None:
     """
     Handle termination signals (SIGTERM, SIGINT, etc.) gracefully.
     
     Args:
         signum: Signal number
-        frame: Current stack frame
+        _frame: Current stack frame (unused but required by signal handler protocol)
     """
     signal_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
     logger.info(f"Received signal {signal_name} ({signum}), initiating graceful shutdown...")
@@ -173,7 +173,7 @@ async def ocel_lifespan():
     try:
         # Load OCEL and configuration
         ocel_config = get_cached_config(ocel_path)
-        loader = SmartOCELLoader(ocel_path)
+        loader = OCELLoader(ocel_path)
         ocel_data = loader.load()
         
         # Initialize engines
@@ -974,7 +974,7 @@ async def _initialize_ocel_eager() -> None:
     try:
         # Execute the lifespan context manager to initialize _ocel_state
         # We manually manage the context to ensure it completes before accepting connections
-        async with ocel_lifespan(mcp):
+        async with ocel_lifespan():
             # At this point, _ocel_state is fully populated
             logger.info("Eager initialization complete - OCEL ready for client connections")
             _ocel_initialized = True

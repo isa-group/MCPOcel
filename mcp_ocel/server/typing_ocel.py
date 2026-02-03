@@ -15,10 +15,10 @@ from datetime import datetime
 # Type Aliases for External Dependencies
 # =============================================================================
 
-# PM4PY OCEL object or dict-based OCEL - treated as Any since external
+# PM4PY OCEL object - treated as Any since external
 OCELData = Any
 
-# Event stream generator type for ijson streaming
+# Event stream generator type for chunked event iteration
 EventStreamGenerator = Generator[List[Dict[str, Any]], None, None]
 
 # Logging module type
