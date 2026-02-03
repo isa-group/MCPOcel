@@ -7,6 +7,8 @@ import os
 import json
 import asyncio
 import threading
+import signal
+import sys
 from typing import Any, Dict, List, Optional, Type
 from contextlib import asynccontextmanager
 
@@ -76,6 +78,9 @@ _ocel_lock = threading.RLock()
 # Flag to track if OCEL has been initialized
 _ocel_initialized = False
 
+# Flag to track if shutdown is in progress
+_shutdown_in_progress = False
+
 
 def _ocel_to_dict(ocel_data: OCELData, config: OCELConfig) -> Dict[str, Any]:
     """Convert pm4py OCEL object to dict format for indexing.
@@ -124,8 +129,79 @@ def _ocel_to_dict(ocel_data: OCELData, config: OCELConfig) -> Dict[str, Any]:
     return result
 
 
+def _cleanup_resources() -> None:
+    """
+    Cleanup and close all OCEL resources gracefully.
+    
+    This function is called during server shutdown to ensure:
+    - Retrieval engine (SQLite) connections are properly closed
+    - All data structures are cleaned up
+    - Logging is flushed
+    """
+    global _ocel_state, _shutdown_in_progress
+    
+    _shutdown_in_progress = True
+    logger.info("Starting graceful shutdown...")
+    
+    with _ocel_lock:
+        try:
+            if retrieval_engine := _ocel_state.get("retrieval_engine"):
+                try:
+                    if hasattr(retrieval_engine, "close"):
+                        retrieval_engine.close()
+                    logger.info("Retrieval engine closed")
+                except Exception as e:
+                    logger.warning(f"Error closing retrieval engine: {e}")
+
+            _ocel_state.clear()
+            logger.info("OCEL state cleared")
+            
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+
+
+def _signal_handler(signum: int, frame: Any) -> None:
+    """
+    Handle termination signals (SIGTERM, SIGINT, etc.) gracefully.
+    
+    Args:
+        signum: Signal number
+        frame: Current stack frame
+    """
+    signal_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
+    logger.info(f"Received signal {signal_name} ({signum}), initiating graceful shutdown...")
+    
+    _cleanup_resources()
+    
+    logger.info("Shutdown complete, exiting...")
+    sys.exit(0)
+
+
+def _setup_signal_handlers() -> None:
+    """
+    Register signal handlers for graceful shutdown.
+    
+    Handles:
+    - SIGINT (Ctrl+C)
+    - SIGTERM (kill signal)
+    - SIGHUP (terminal hangup)
+    """
+    signals_to_handle = [signal.SIGINT, signal.SIGTERM]
+    
+    # Add SIGHUP handler only on Unix systems
+    if hasattr(signal, 'SIGHUP'):
+        signals_to_handle.append(signal.SIGHUP)
+    
+    for sig in signals_to_handle:
+        try:
+            signal.signal(sig, _signal_handler)
+            logger.debug(f"Registered signal handler for signal {sig}")
+        except Exception as e:
+            logger.warning(f"Could not register handler for signal {sig}: {e}")
+
+
 @asynccontextmanager
-async def ocel_lifespan(server: FastMCP):
+async def ocel_lifespan():
     """
     Initialize OCEL resources when the server starts.
     This runs once when the server boots up.
@@ -189,7 +265,10 @@ async def ocel_lifespan(server: FastMCP):
         logger.error(f"Error initializing server: {e}")
         raise
     finally:
-        logger.info("Server shutting down")
+        if not _shutdown_in_progress:
+            _cleanup_resources()
+        else:
+            logger.info("Server shutdown already in progress")
 
 
 # Create the MCP server with lifespan
@@ -984,6 +1063,9 @@ def run_server(
     mcp.settings.host = host
     mcp.settings.port = port
     
+    # Setup graceful shutdown handlers BEFORE initializing OCEL
+    _setup_signal_handlers()
+    
     # Initialize OCEL BEFORE starting the server. This ensures:
     # 1. Fail-fast if file is missing or invalid
     # 2. All client connections share the same _ocel_state
@@ -994,14 +1076,24 @@ def run_server(
         logger.error(f"Failed to initialize OCEL. Server will not start: {e}")
         raise
     
-    if transport == "stdio":
-        print(f"Starting MCP Server in STDIO mode")
-        print(f"OCEL file: {os.getenv('OCEL_FILE', constants.DEFAULT_OCEL_PATH)}")
-        mcp.run(transport="stdio")
-    else:
-        print(f"Starting MCP Server on http://{host}:{port}/mcp")
-        print(f"OCEL file: {os.getenv('OCEL_FILE', constants.DEFAULT_OCEL_PATH)}")
-        mcp.run(transport=transport)
+    try:
+        if transport == "stdio":
+            print(f"Starting MCP Server in STDIO mode")
+            print(f"OCEL file: {os.getenv('OCEL_FILE', constants.DEFAULT_OCEL_PATH)}")
+            mcp.run(transport="stdio")
+        else:
+            print(f"Starting MCP Server on http://{host}:{port}/mcp")
+            print(f"OCEL file: {os.getenv('OCEL_FILE', constants.DEFAULT_OCEL_PATH)}")
+            mcp.run(transport=transport)
+    except KeyboardInterrupt:
+        # Redundant check in case signal handler wasn't called
+        logger.info("KeyboardInterrupt caught, initiating graceful shutdown...")
+        _cleanup_resources()
+    except Exception as e:
+        logger.error(f"Server error: {e}")
+        _cleanup_resources()
+        raise
+
 
 
 if __name__ == "__main__":
