@@ -436,6 +436,7 @@ class OCELChunker:
             max_chunk_size: Maximum characters per chunk before summarization.
                           Default is 1000 chars. Larger values = fewer, denser chunks.
         """
+        self.max_chunk_size = max_chunk_size
 
     def chunk_ocel(self, data: Dict[str, Any]) -> List[Chunk]:
         """Chunk an OCEL JSON into retrievable pieces.
@@ -638,11 +639,11 @@ class OCELRetrievalEngine:
         self._indexed = True
         return len(chunks)
     
-    def index_from_file(self, ocel_path: Path, force: bool = False) -> int:
+    def index_from_file(self, ocel_path: Path) -> int:
         """Index OCEL from file path."""
         with open(ocel_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return self.index_ocel(data, force=force)
+        return self.index_ocel(data)
     
     def search(self, query: str, top_k: int = 5) -> List[SearchResultItemDict]:
         """Search indexed OCEL data across all chunk types.
