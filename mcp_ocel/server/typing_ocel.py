@@ -18,8 +18,60 @@ from datetime import datetime
 # PM4PY OCEL object or dict-based OCEL - treated as Any since external
 OCELData = Any
 
+# Event stream generator type for ijson streaming
+EventStreamGenerator = Generator[List[Dict[str, Any]], None, None]
+
 # Logging module type
 Logger = Any
+
+
+# =============================================================================
+# Base OCEL Dataclasses
+# =============================================================================
+
+@dataclass
+class EventReference:
+    """Reference to a single event with core attributes."""
+    id: str
+    type: str
+    timestamp: str
+    related_objects: List[str]
+    attributes: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Converts to dictionary."""
+        return asdict(self)
+
+
+@dataclass
+class ObjectReference:
+    """Reference to a single object with core attributes."""
+    id: str
+    type: str
+    attributes: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Converts to dictionary."""
+        return asdict(self)
+
+
+@dataclass
+class AnomalyReport:
+    """Anomaly detection result."""
+    anomaly_type: str
+    description: str
+    severity: str  # "low", "medium", "high"
+    affected_entities: List[str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Converts to dictionary."""
+        return asdict(self)
+
+
+# Type aliases
+EventDict = Dict[str, Any]
+ObjectDict = Dict[str, Any]
+ObjectTypeStatsDict = Dict[str, Any]
 
 
 # =============================================================================
@@ -494,8 +546,6 @@ class ChatMessageDict(TypedDict):
 # Generator Types
 # =============================================================================
 
-EventStreamGenerator = Generator[List[Dict[str, Any]], None, None]
-
 class EventReferenceDict(TypedDict):
     """Verifiable reference to an OCEL event."""
     event_id: str
@@ -513,8 +563,8 @@ class ObjectReferenceDict(TypedDict):
 
 
 @dataclass
-class ObjectReference:
-    """Reference to an object within an event."""
+class MCPObjectReference:
+    """MCP-specific reference to an object within an event with role."""
     object_id: str
     object_type: str
     role: Optional[str] = None
@@ -528,12 +578,12 @@ class ObjectReference:
 
 
 @dataclass
-class EventReference:
-    """Verifiable reference to an OCEL event."""
+class MCPEventReference:
+    """MCP-specific verifiable reference to an OCEL event with hash."""
     event_id: str
     activity: str
     timestamp: str
-    involved_objects: List[ObjectReference]
+    involved_objects: List[MCPObjectReference]
 
     def to_dict(self) -> EventReferenceDict:
         return {

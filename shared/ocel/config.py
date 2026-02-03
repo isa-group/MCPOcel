@@ -1,5 +1,7 @@
 """Dynamic OCEL 2.0 schema configuration.
+
 Automatically loads and caches schema without domain hardcoding.
+Extracts event types, object types, and attribute names from OCEL JSON files.
 """
 
 import json
@@ -8,10 +10,14 @@ import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from . import constants
 from shared.logger.logging_config import get_logger
+from .constants import EVT_TYPES, OBJ_TYPES_KEY, EVENTS, OBJECTS
 
 logger = get_logger(__name__)
+
+# Default OCEL path constant
+DEFAULT_OCEL_PATH: str = "./log.json"
+
 
 @dataclass
 class OCELConfig:
@@ -49,13 +55,13 @@ class OCELConfig:
             raise ValueError(f"Invalid JSON in {filepath}: {e}")
         
         # OCEL 2.0 format with camelCase keys (eventTypes, objectTypes, events, objects)
-        if "eventTypes" not in data and "objectTypes" not in data:
+        if EVT_TYPES not in data and OBJ_TYPES_KEY not in data:
             raise ValueError(
-                "Invalid OCEL 2.0 format. Expected keys: eventTypes, objectTypes, events, objects"
+                f"Invalid OCEL 2.0 format. Expected keys: {EVT_TYPES}, {OBJ_TYPES_KEY}, {EVENTS}, {OBJECTS}"
             )
         
-        event_types_data = data.get("eventTypes", [])
-        object_types_data = data.get("objectTypes", [])
+        event_types_data = data.get(EVT_TYPES, [])
+        object_types_data = data.get(OBJ_TYPES_KEY, [])
         
         # Extract event type names from the structure
         if event_types_data and isinstance(event_types_data[0], dict):
@@ -119,7 +125,7 @@ class OCELConfig:
     def from_param_or_env(
         cls,
         ocel_path: Optional[str] = None,
-        env_var: str = "OCEL_FILE",
+        env_var: str = "OCEL_FILE"
     ) -> "OCELConfig":
         """
         Loads with priority: parameter > environment variable > default.
@@ -142,15 +148,10 @@ class OCELConfig:
         if env_path:
             logger.debug(f"Using environment variable {env_var}: {env_path}")
             return cls.from_ocel_json(env_path)
-
-        default_path = constants.DEFAULT_OCEL_PATH
-        if os.path.exists(default_path):
-            logger.debug(f"Using default path: {default_path}")
-            return cls.from_ocel_json(default_path)
         
         raise ValueError(
             f"No valid OCEL configuration found. "
-            f"Provide ocel_path, define {env_var}, or ensure {default_path} exists."
+            f"Provide ocel_path or define {env_var}"
         )
     
     def cache_key(self) -> str:
