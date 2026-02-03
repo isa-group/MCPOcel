@@ -2,6 +2,33 @@ import os
 from typing import Optional
 from dataclasses import dataclass
 
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+# LOGGING CONFIG
+@dataclass
+class LoggingConfig:
+    level: str = "INFO"
+    """Logging configuration"""
+    log_file: Path = BASE_DIR / "logs" / "extractor.log"
+    format: str = (
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
+    @classmethod
+    def from_env(cls) -> "LoggingConfig":
+        raw_level = os.getenv("LOG_LEVEL", "INFO").upper()
+        allowed_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        level = raw_level if raw_level in allowed_levels else "INFO"
+
+        env_log_path = os.getenv("LOG_FILE", "logs/github_extractor.log")
+        log_file = BASE_DIR / env_log_path
+
+        return cls(
+            level=level,
+            log_file=log_file
+        )
+
+# API CONFIG
 @dataclass(frozen=True)
 class APIConfig:
     """GitHub API configuration"""

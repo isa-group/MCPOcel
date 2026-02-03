@@ -102,5 +102,5 @@ def map_management_context(node: Dict[str, Any], builder: OCELBuilder, obj_id: s
             "title": milestone["title"],
             "due_on": milestone.get("dueOn")
         })
-        # Vinculamos el Issue/PR al Milestone
+        # Link Issue/PR to Milestone
         builder.add_object_relationship(obj_id, m_id, "belongs_to_milestone")

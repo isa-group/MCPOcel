@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 
 class OCELBuilder:
     """
-    OCEL 2.0 Builder optimizado para grandes volúmenes de datos con persistencia en SQLite.
-    Incluye manejo de batches, logging opcional y exportación streaming.
+    OCEL 2.0 Builder optimised for large volumes of data with persistence in SQLite.
+    Includes batch handling, optional logging, and streaming export.
     """
     def __init__(self, db_path: Optional[Union[str, Path]] = None, log_level: int = logging.INFO):
         self.db_path = Path(db_path) if db_path else Path("ocel_staging.db")
@@ -83,7 +83,7 @@ class OCELBuilder:
     # Helpers
     @staticmethod
     def _normalize_timestamp(ts: str) -> str:
-        """Normaliza cualquier ISO8601 a UTC-Z"""
+        """Normalises any ISO8601 to UTC-Z"""
         try:
             dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -98,7 +98,7 @@ class OCELBuilder:
 
     # Core methods
     def add_object(self, obj_id: str, obj_type: str, attributes: Dict[str, Any]):
-        """Inserta o actualiza un objeto con OVMap versionado, batch commit implícito"""
+        """Insert or update an object with versioned OVMap, implicit batch commit"""
         now_iso = self._normalize_timestamp(datetime.now(timezone.utc).isoformat())
         with self.conn:
             cursor = self.conn.cursor()
@@ -132,7 +132,7 @@ class OCELBuilder:
     def add_event(self, activity: str, timestamp: str,
                   relationships: List[Dict[str, str]],
                   attributes: Optional[Dict[str, Any]] = None) -> str:
-        """Registra un evento y relaciones, batch commit implícito"""
+        """Record an event and relationships, implicit batch commit"""
         event_id = str(uuid.uuid4())
         vmap = attributes.copy() if attributes else {}
         ts = self._normalize_timestamp(timestamp)
@@ -185,7 +185,7 @@ class OCELBuilder:
 
     # Export
     def export_json(self, filename: Union[str, Path]):
-        """Exportación streaming completa: log, events, objects y relationships."""
+        """Complete streaming export: log, events, objects, and relationships."""
         with open(filename, "w", encoding="utf-8") as f:
             # 1. Metadata
             f.write('{\n  "ocel:global-log": {\n')
@@ -247,7 +247,7 @@ class OCELBuilder:
                 first = False
             f.write('\n  ]\n}') # Close JSON
 
-        logger.info(f"Exportación completa a {filename} con {self.get_stats()} elementos.")
+        logger.info(f"Complete streaming export: log, events, objects, and relationships.")
 
     # Close
     def close(self):
