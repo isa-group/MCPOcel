@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any
 
-from .mappers.issues_prs import process_base_node, map_main_events
+from .mappers.issues_prs import process_base_node, map_main_events, map_management_context, map_review_threads
 from .mappers.lifecycle import map_lifecycle_events
 from .mappers.timeline import map_timeline_events
 from .utils.ensure import get_node_type, is_pull_request
@@ -24,15 +24,11 @@ def process_issue_node(node: Dict[str, Any], builder: Any, repo_id: str) -> None
         if not node.get("createdAt"):
             raise KeyError("createdAt")
 
-        # 1. Milestones
-        if node.get("milestone"):
-            m_data = node["milestone"]
-            m_id = f"milestone_{m_data['id']}"
-            builder.add_object(m_id, "Milestone", {"title": m_data["title"]})
-            builder.add_object_relationship(obj_id, m_id, "belongs_to")
-
-        # 2. Create the object (Issue or PR)
+        # 1. Create the object (Issue or PR)
         obj_id, is_pr = process_base_node(node, builder, repo_id)
+
+        # 2. Issue/PR to Milestone
+        map_management_context(node, builder, obj_id)
 
         # 3. Record main events (Open/Close/Merge)
         map_main_events(node, builder, repo_id, obj_id, is_pr)
@@ -43,7 +39,10 @@ def process_issue_node(node: Dict[str, Any], builder: Any, repo_id: str) -> None
         # 5. Process workflow (Assignments, Review Requests)
         map_timeline_events(node, builder, obj_id)
 
-        # 6. DevOps (Only PRs)
+        # 6. Reviews thread
+        map_review_threads(node, builder, obj_id)
+
+        # . DevOps (Only PRs)
         if is_pr:
             map_devops_events(node, builder, obj_id)
 

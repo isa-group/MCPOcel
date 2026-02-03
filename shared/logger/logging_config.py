@@ -6,27 +6,7 @@ from dataclasses import dataclass
 from os import getenv
 from pathlib import Path
 
-@dataclass
-class LoggingConfig:
-    """Logging configuration"""
-
-    level: str = "INFO"
-    log_file: Path = Path(__file__).resolve(
-    ).parent.parent.parent / "logs" / "extractor.log"
-    format: str = (
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-
-    @classmethod
-    def from_env(cls) -> "LoggingConfig":
-        raw_level = getenv("LOG_LEVEL", "INFO").upper()
-        allowed_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-        level = raw_level if raw_level in allowed_levels else "INFO"
-
-        return cls(
-            level=level,
-            log_file=Path(getenv("LOG_FILE", "logs/github_extractor.log"))
-        )
+from shared.config.logging import LoggingConfig
 
 
 def setup_logging(config: Optional[LoggingConfig] = None) -> None:
