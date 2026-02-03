@@ -1,6 +1,9 @@
 {
     "name": "ISA-Group MCP Ocel's devcontainer",
-    "image": "mcr.microsoft.com/devcontainers/base:debian",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "remoteUser": "root",
     "features": {
         "ghcr.io/devcontainers/features/docker-in-docker:2": {
             "installDockerComposeSwitch": false,
