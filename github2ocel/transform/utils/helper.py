@@ -1,46 +1,84 @@
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# Conventional Commit Parser
-CC_PATTERN = re.compile(
+# 1. Structural Pattern (The "Learner"):
+CC_STRUCTURAL_PATTERN = re.compile(
     r"^(?P<type>\w+)"  # Type (feat, fix...)
     r"(?:\((?P<scope>[^)]+)\))?"  # Scope opcional
     r"(?P<breaking>!)?"  # Breaking change flag
-    r":\s+(?P<desc>.+)$"  # Descripción
+    r":\s+(?P<subject>.+)$"  # Descripción
+)
+# 2. Normative Set (The "Judge"): Focuses on compliance
+STRICT_TYPES = {
+    "feat", "fix", "docs", "style", "refactor", "perf",
+    "test", "build", "ci", "chore", "revert"
+}
+import re
+import logging
+from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
+
+# 1. Structural Pattern (The "Learner")
+# Captures the components regardless of the type name
+CC_STRUCTURAL_PATTERN = re.compile(
+    r"^(?P<type>\w+)(?:\((?P<scope>[^)]+)\))?(?P<breaking>!)?:\s+(?P<subject>.+)$"
 )
 
+# 2. Normative Set (The "Judge")
+STRICT_TYPES = {
+    "feat", "fix", "docs", "style", "refactor", "perf",
+    "test", "build", "ci", "chore", "revert"
+}
 
-def parse_commit_message(message: Optional[str]) -> Dict[str, Any]:
+def parse_commit_message(message: str) -> Dict[str, Any]:
     """
-    Extract Conventional Commit info from commit message.
-    Handles None and non-string inputs gracefully.
+    Parses commit messages using a two-tier approach:
+    1. Structural extraction (Flexibility)
+    2. Semantic validation (Compliance)
     """
+    # Defensive check: return empty structure if message is invalid
     if not message or not isinstance(message, str):
         return {
             "is_conventional": False,
-            "message_short": "",
-            "message_full": ""
+            "is_strict_compliance": False,
+            "commit_type": "none",
+            "scope": None,
+            "is_breaking": False,
+            "subject": ""
         }
 
-    short = message.split("\n", 1)[0].strip()
-    match = CC_PATTERN.match(short)
+    first_line = message.split("\n")[0].strip()
+    match = CC_STRUCTURAL_PATTERN.match(first_line)
 
+    # Default state (Non-conventional)
     data = {
-        "message_short": short,
-        "message_full": message,
-        "is_conventional": bool(match)
+        "is_conventional": False,
+        "is_strict_compliance": False,
+        "commit_type": "other",
+        "scope": None,
+        "is_breaking": False,
+        "subject": first_line # Fallback to the whole line
     }
 
     if match:
-        data.update({
-            "type": match.group("type").lower(),
-            "scope": match.group("scope") or "",  # Evitar None
-            "breaking": bool(match.group("breaking"))
-        })
+        groups = match.groupdict()
+        data["is_conventional"] = True
+        data["commit_type"] = groups["type"].lower()
+        data["scope"] = groups["scope"]
+        data["is_breaking"] = bool(groups["breaking"])
+        data["subject"] = groups["subject"].strip()
+
+        # Tier 2: Validation against the strict spec
+        data["is_strict_compliance"] = data["commit_type"] in STRICT_TYPES
+
+    if match and not data["is_strict_compliance"]:
+        logger.debug(f"Non-standard conventional type: {data['commit_type']}")
+
 
     return data
 
@@ -78,14 +116,14 @@ def safe_timestamp(timestamp: Optional[str],
     Returns:
         Valid ISO 8601 timestamp with Z suffix
     """
-    if timestamp:
+    if timestamp and isinstance(timestamp, str):
         return timestamp if timestamp.endswith("Z") else f"{timestamp}Z"
 
-    if fallback:
+    if fallback and isinstance(fallback, str):
         return fallback if fallback.endswith("Z") else f"{fallback}Z"
 
     if use_now:
-        return datetime.now().isoformat() + "Z"
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     raise ValueError("No valid timestamp available")
 
