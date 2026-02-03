@@ -4,7 +4,7 @@ Five MVP tools: lifecycle, timerange, statistics, anomalies, orphaned objects.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Dict, List
 
 from .typing_ocel import (
     EventReference,

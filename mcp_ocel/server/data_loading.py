@@ -3,8 +3,7 @@ Automatically selects: PM4PY (< 100MB), ijson (100MB-1GB).
 """
 
 import os
-import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict
 
 import pm4py
 

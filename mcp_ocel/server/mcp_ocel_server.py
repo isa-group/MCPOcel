@@ -20,7 +20,6 @@ from .visualization_engine import VisualizationEngine
 from .response_builder import ResponseBuilder
 from .typing_ocel import (
     OCELData,
-    ToolResponse,
     TraceLifecycleResponseDict,
     TimeRangeQueryResponseDict,
     StatisticsResponseDict,
