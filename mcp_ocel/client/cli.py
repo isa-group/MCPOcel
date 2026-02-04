@@ -285,8 +285,8 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
                 print(f"Estimated prompt tokens: {prompt_tokens}")
                 
                 if not args.force:
-                    confirm = input("Send? [y/N]: ").strip().lower()
-                    if confirm not in {"y", "yes"}:
+                    confirm = input("Send? [Y/n]: ").strip().lower()
+                    if confirm.lower() in {"n", "no"}:
                         print("Cancelled.")
                         messages.pop()
                         continue
