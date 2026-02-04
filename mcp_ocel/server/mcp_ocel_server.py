@@ -7,8 +7,6 @@ Tools are registered from the tools module.
 
 import os
 import threading
-import signal
-import sys
 from typing import Any, Dict, Optional, Type
 from contextlib import asynccontextmanager
 
@@ -18,6 +16,7 @@ from . import constants
 from shared.ocel.config import get_cached_config
 from shared.ocel.converter import ocel_to_dict
 from shared.logger.logging_config import get_logger, setup_logging
+from shared.lifecycle import register_shutdown_callback, install_signal_handlers
 from .data_loading import OCELLoader
 from .ocel_query_engine import OCELQueryEngine
 from .process_mining import ProcessMiningEngine
@@ -59,9 +58,6 @@ _ocel_lock = threading.RLock()
 # Flag to track if OCEL has been initialized
 _ocel_initialized = False
 
-# Flag to track if shutdown is in progress
-_shutdown_in_progress = False
-
 def _cleanup_resources() -> None:
     """
     Cleanup and close all OCEL resources gracefully.
@@ -71,10 +67,9 @@ def _cleanup_resources() -> None:
     - All data structures are cleaned up
     - Logging is flushed
     """
-    global _ocel_state, _shutdown_in_progress
+    global _ocel_state
     
-    _shutdown_in_progress = True
-    logger.info("Starting graceful shutdown...")
+    logger.info("Starting OCEL resource cleanup...")
     
     with _ocel_lock:
         try:
@@ -91,46 +86,6 @@ def _cleanup_resources() -> None:
             
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
-
-
-def _signal_handler(signum: int, _frame: Any) -> None:
-    """
-    Handle termination signals (SIGTERM, SIGINT, etc.) gracefully.
-    
-    Args:
-        signum: Signal number
-        _frame: Current stack frame (unused but required by signal handler protocol)
-    """
-    signal_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
-    logger.info(f"Received signal {signal_name} ({signum}), initiating graceful shutdown...")
-    
-    _cleanup_resources()
-    
-    logger.info("Shutdown complete, exiting...")
-    sys.exit(0)
-
-
-def _setup_signal_handlers() -> None:
-    """
-    Register signal handlers for graceful shutdown.
-    
-    Handles:
-    - SIGINT (Ctrl+C)
-    - SIGTERM (kill signal)
-    - SIGHUP (terminal hangup)
-    """
-    signals_to_handle = [signal.SIGINT, signal.SIGTERM]
-    
-    # Add SIGHUP handler only on Unix systems
-    if hasattr(signal, 'SIGHUP'):
-        signals_to_handle.append(signal.SIGHUP)
-    
-    for sig in signals_to_handle:
-        try:
-            signal.signal(sig, _signal_handler)
-            logger.debug(f"Registered signal handler for signal {sig}")
-        except Exception as e:
-            logger.warning(f"Could not register handler for signal {sig}: {e}")
 
 
 def _initialize_ocel_state(ocel_path: str, debug: bool = False) -> None:
@@ -222,10 +177,7 @@ async def ocel_lifespan(_app: FastMCP):
         logger.error(f"Error initializing server: {e}")
         raise
     finally:
-        if not _shutdown_in_progress:
-            _cleanup_resources()
-        else:
-            logger.info("Server shutdown already in progress")
+        _cleanup_resources()
 
 
 # Create the MCP server with lifespan
@@ -287,6 +239,7 @@ def run_server(
     - Eagerly loads OCEL at startup (before listening for connections)
     - All client sessions share the same _ocel_state for efficiency
     - Synchronized access prevents race conditions with threading.RLock()
+    - Graceful shutdown via registered cleanup callback and signal handlers
     
     Args:
         host: Host to bind (default: 127.0.0.1)
@@ -303,8 +256,11 @@ def run_server(
     mcp.settings.host = host
     mcp.settings.port = port
     
-    # Setup graceful shutdown handlers BEFORE initializing OCEL
-    _setup_signal_handlers()
+    # Register cleanup callback with the global shutdown manager BEFORE initializing OCEL
+    register_shutdown_callback(_cleanup_resources)
+    
+    # Install signal handlers (must be called from main thread)
+    install_signal_handlers()
     
     # Initialize OCEL BEFORE starting the server. This ensures:
     # 1. Fail-fast if file is missing or invalid
@@ -326,7 +282,6 @@ def run_server(
             print(f"OCEL file: {os.getenv('OCEL_FILE', constants.DEFAULT_OCEL_PATH)}")
             mcp.run(transport=transport)
     except KeyboardInterrupt:
-        # Redundant check in case signal handler wasn't called
         logger.info("KeyboardInterrupt caught, initiating graceful shutdown...")
         _cleanup_resources()
     except Exception as e:

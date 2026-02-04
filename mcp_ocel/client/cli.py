@@ -16,6 +16,7 @@ import tiktoken
 
 from .mcp_client import MCPClient, MCPClientError, DEFAULT_URL
 from .providers import ProviderError, build_provider, ToolCall
+from shared.lifecycle import register_shutdown_callback, install_signal_handlers
 
 DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
@@ -24,6 +25,33 @@ print(f"Provider: {DEFAULT_PROVIDER} | Model: {DEFAULT_MODEL}")
 
 # Global cache for available tools (fetched once from server)
 _cached_tools: Optional[List[Dict[str, Any]]] = None
+
+# Global reference to the MCP client for graceful shutdown
+_mcp_client_ref: Optional[MCPClient] = None
+
+
+def _client_cleanup() -> None:
+    """
+    Cleanup callback for client shutdown.
+    
+    Disposes of the MCP client connection if it exists.
+    Called when SIGINT, SIGTERM, or other termination signal is received.
+    
+    Note: Does NOT create new resources (e.g., event loops) during shutdown.
+    If the client exists but cannot be disposed (no event loop), best-effort attempt only.
+    """
+    global _mcp_client_ref
+    
+    if _mcp_client_ref is not None:
+        try:
+            try:
+                loop = asyncio.get_running_loop()
+                # If we're in an async context, schedule the disconnect
+                asyncio.run_coroutine_threadsafe(_mcp_client_ref.disconnect(), loop).result(timeout=2)
+            except:
+                pass
+        finally:
+            _mcp_client_ref = None
 
 
 class ThinkingAnimation:
@@ -268,9 +296,14 @@ async def enrich_context_with_search(client: MCPClient, user_query: str) -> Opti
 
 async def interactive_chat_async(args: argparse.Namespace) -> None:
     """Main interactive chat loop (async version) with native tool calling."""
+    global _mcp_client_ref
+    
     print(f"Connecting to MCP server at {args.url}...")
     
     async with MCPClient(args.url) as mcp_client:
+        # Store global reference for cleanup
+        _mcp_client_ref = mcp_client
+        
         # Get OCEL metadata from MCP server
         meta = await fetch_metadata_from_server(mcp_client)
         print(f"  Object Types: {meta.object_types}")
@@ -331,7 +364,12 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
                 print(f"Estimated prompt tokens: {prompt_tokens}")
                 
                 if not args.force:
-                    confirm = input("Send? [Y/n]: ").strip().lower()
+                    try:
+                        confirm = input("Send? [Y/n]: ").strip().lower()
+                    except (KeyboardInterrupt, EOFError):
+                        print("\nCancelled.")
+                        messages.pop()
+                        continue
                     if confirm.lower() in {"n", "no"}:
                         print("Cancelled.")
                         messages.pop()
@@ -390,6 +428,13 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
+    
+    # Register cleanup callback with the global shutdown manager
+    register_shutdown_callback(_client_cleanup)
+    
+    # Install signal handlers (must be called from main thread)
+    install_signal_handlers()
+    
     asyncio.run(interactive_chat_async(args))
 
 
