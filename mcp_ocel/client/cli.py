@@ -7,6 +7,8 @@ import asyncio
 import json
 import os
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -21,6 +23,46 @@ print(f"Provider: {DEFAULT_PROVIDER} | Model: {DEFAULT_MODEL}")
 
 # Global cache for available tools (fetched once from server)
 _cached_tools: Optional[List[Dict[str, Any]]] = None
+
+
+class ThinkingAnimation:
+    """Animates thinking dots while waiting for LLM response."""
+    
+    def __init__(self):
+        self.running = False
+        self.thread: Optional[threading.Thread] = None
+        self.dots_frames = [
+            ".",
+            "..",
+            "...",
+            " ..",
+            "  .",
+            "",
+        ]
+        self.frame_index = 0
+    
+    def start(self):
+        """Start the animation thread."""
+        self.running = True
+        self.frame_index = 0
+        self.thread = threading.Thread(target=self._animate, daemon=True)
+        self.thread.start()
+    
+    def stop(self):
+        """Stop the animation thread."""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1)
+        # Clear the line by printing backspaces and spaces
+        print("\r" + " " * 15 + "\r", end="", flush=True)
+    
+    def _animate(self):
+        """Animation loop running in separate thread."""
+        while self.running:
+            frame = self.dots_frames[self.frame_index % len(self.dots_frames)]
+            print(f"\rAssistant> {frame}", end="", flush=True)
+            self.frame_index += 1
+            time.sleep(0.5)  # Update every 0.5 seconds for smoother animation
 
 
 @dataclass
@@ -94,7 +136,7 @@ When you need data, call the appropriate tool - the system will execute it and p
 4. **Performance**: Calculate throughput times per 'Object Type'. All times are in SECONDS.
 
 ### OUTPUT FORMAT
-- Strict Markdown.
+- Strict console output only - no markdown, HTML, or code blocks.
 - When citing specific flows, refer to the Object Types defined in the Context above.
 - If generating SQL/Python, ensure compatibility with the OCEL 2.0 relational schema (event_map, object_map).
 - Use the available tools to get data before answering questions.
@@ -178,16 +220,16 @@ async def execute_tool_calls(
     """
     results = []
     for tc in tool_calls:
-        print(f"  → Calling tool: {tc.name}")
+        print(f"→ Calling tool: {tc.name}")
         try:
             result = await client.call_tool(tc.name, tc.arguments)
             result_str = json.dumps(result, indent=2, ensure_ascii=False)
             results.append(provider.build_tool_result_message(tc, result_str))
-            print(f"    ✓ Done")
+            print(f"  ✓ Done")
         except MCPClientError as e:
             error_str = json.dumps({"error": str(e)})
             results.append(provider.build_tool_result_message(tc, error_str))
-            print(f"    ✗ Error: {e}")
+            print(f"  ✗ Error: {e}")
     return results
 
 
@@ -297,22 +339,25 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
                 
                 while iteration < max_tool_iterations:
                     iteration += 1
-                    
-                    print("Assistant> ", end="", flush=True)
+
+                    animation = ThinkingAnimation()
+                    animation.start()
+
                     try:
                         response = provider.chat_with_tools(messages, args.model, available_tools)
                     except Exception as exc:
-                        print(f"\nError from provider: {exc}")
+                        animation.stop()
+                        print(f"Error from provider: {exc}")
                         break
+                    finally:
+                        animation.stop()
                     
                     # Print any content
                     if response.content:
                         print(response.content)
-                    
+
                     # Check if there are tool calls
-                    if response.tool_calls:
-                        print("\n[Executing tool calls...]")
-                        
+                    if response.tool_calls:                        
                         # Add assistant message with tool calls to history
                         assistant_msg = provider.build_assistant_tool_call_message(
                             response.content, response.tool_calls
