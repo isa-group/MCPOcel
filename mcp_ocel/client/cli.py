@@ -19,6 +19,7 @@ from .providers import ProviderError, build_provider, ToolCall
 
 DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
+MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "20"))
 print(f"Provider: {DEFAULT_PROVIDER} | Model: {DEFAULT_MODEL}")
 
 # Global cache for available tools (fetched once from server)
@@ -126,6 +127,8 @@ The following metadata describes the active dataset. USE ONLY these exact names 
 ### AVAILABLE TOOLS
 You have access to MCP tools for querying and analyzing the OCEL data.
 When you need data, call the appropriate tool - the system will execute it and provide results.
+If a query may return very large data, make multiple tool calls instead of one.
+Limit tool-calling rounds per user query to {max_tool_calls}.
 
 **IMPORTANT: All temporal metrics (performance, bottlenecks) are returned in SECONDS (SI unit).**
 
@@ -159,6 +162,7 @@ def format_system_prompt(meta: OcelMetadata) -> str:
         total_events=meta.total_events,
         start_date=meta.start_date,
         end_date=meta.end_date,
+        max_tool_calls=MAX_TOOL_CALLS,
     )
 
 
@@ -333,11 +337,9 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
                         messages.pop()
                         continue
 
-                # Tool calling loop - continue until LLM stops calling tools
-                max_tool_iterations = 10
                 iteration = 0
-                
-                while iteration < max_tool_iterations:
+                # Continue until no more available tool calls or max iterations reached
+                while iteration < MAX_TOOL_CALLS:
                     iteration += 1
 
                     animation = ThinkingAnimation()
@@ -378,8 +380,8 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
                             messages.append({"role": "assistant", "content": response.content})
                         break
                 
-                if iteration >= max_tool_iterations:
-                    print(f"\n[Warning: Reached max tool iterations ({max_tool_iterations})]")
+                if iteration >= MAX_TOOL_CALLS:
+                    print(f"\n[Warning: Reached max tool iterations ({MAX_TOOL_CALLS})]")
 
         except Exception as e:
             print(f"\nError: {e}")
