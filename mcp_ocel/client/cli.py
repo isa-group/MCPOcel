@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import json
 import os
-import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -14,11 +13,11 @@ from typing import Any, Dict, List, Optional
 import tiktoken
 
 from .mcp_client import MCPClient, MCPClientError, DEFAULT_URL
-from .providers import ProviderError, build_provider
+from .providers import ProviderError, build_provider, ToolCall
 
 DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
-print(f"Provider: {DEFAULT_PROVIDER}, Model: {DEFAULT_MODEL}")
+print(f"Provider: {DEFAULT_PROVIDER} | Model: {DEFAULT_MODEL}")
 
 # Global cache for available tools (fetched once from server)
 _cached_tools: Optional[List[Dict[str, Any]]] = None
@@ -82,16 +81,11 @@ The following metadata describes the active dataset. USE ONLY these exact names 
 - **Log Stats**: {total_objects:,} objects, {total_events:,} events.
 - **Time Range**: {start_date} to {end_date}.
 
-### AVAILABLE MCP TOOLS
-You can request additional information by responding with a tool call in this format:
-```tool
-{{"tool": "tool_name", "params": {{"param1": "value1"}}}}
-```
+### AVAILABLE TOOLS
+You have access to MCP tools for querying and analyzing the OCEL data.
+When you need data, call the appropriate tool - the system will execute it and provide results.
 
 **IMPORTANT: All temporal metrics (performance, bottlenecks) are returned in SECONDS (SI unit).**
-
-Available tools:
-{available_tools_section}
 
 ### ANALYSIS GUIDELINES
 1. **Multiplicity First**: Do not assume a single Case ID. Analyze how events link multiple objects (1:n, m:n relations).
@@ -103,22 +97,19 @@ Available tools:
 - Strict Markdown.
 - When citing specific flows, refer to the Object Types defined in the Context above.
 - If generating SQL/Python, ensure compatibility with the OCEL 2.0 relational schema (event_map, object_map).
-- If you need more context, use search_ocel or get_schema_section first.
+- Use the available tools to get data before answering questions.
 """
 
-def format_system_prompt(meta: OcelMetadata, tools: List[Dict[str, Any]]) -> str:
+def format_system_prompt(meta: OcelMetadata) -> str:
     """
-    Format the system prompt with real OCEL metadata and available tools.
+    Format the system prompt with real OCEL metadata.
     
     Args:
         meta: OCEL metadata from server.
-        tools: List of tool definitions in MCP standard format.
         
     Returns:
         Complete system prompt.
     """
-    tools_json = json.dumps(tools, indent=2) if tools else "No tools available."
-    
     return SYSTEM_PROMPT_TEMPLATE.format(
         object_types_list=meta.object_types if meta.object_types else ["(no object types loaded)"],
         event_types_list=meta.event_types if meta.event_types else ["(no event types loaded)"],
@@ -126,7 +117,6 @@ def format_system_prompt(meta: OcelMetadata, tools: List[Dict[str, Any]]) -> str
         total_events=meta.total_events,
         start_date=meta.start_date,
         end_date=meta.end_date,
-        available_tools_section=tools_json,
     )
 
 
@@ -173,49 +163,32 @@ async def fetch_metadata_from_server(client: MCPClient) -> OcelMetadata:
     )
 
 
-def extract_tool_calls(text: str) -> List[Dict[str, Any]]:
-    """Extract tool calls from LLM response.
-    
-    Args:
-        text: LLM response text.
-        
-    Returns:
-        List of parsed tool call dictionaries.
-    """
-    tool_calls: List[Dict[str, Any]] = []
-    # Match ```tool ... ``` blocks
-    pattern = r"```tool\s*\n?(.*?)\n?```"
-    matches = re.findall(pattern, text, re.DOTALL)
-    for match in matches:
-        try:
-            call = json.loads(match.strip())
-            if "tool" in call:
-                tool_calls.append(call)
-        except json.JSONDecodeError:
-            pass
-    return tool_calls
-
-
-async def execute_tool_call(client: MCPClient, tool_call: Dict[str, Any]) -> str:
-    """Execute a tool call and return the result.
+async def execute_tool_calls(
+    client: MCPClient, provider: Any, tool_calls: List[ToolCall]
+) -> List[Dict[str, Any]]:
+    """Execute tool calls via the MCP client.
     
     Args:
         client: Connected MCPClient instance.
-        tool_call: Tool call dictionary with 'tool' and 'params' keys.
+        provider: LLM provider instance (for building result messages).
+        tool_calls: List of ToolCall objects from the LLM.
         
     Returns:
-        Formatted result string.
+        List of provider-specific tool result messages.
     """
-    tool_name = tool_call.get("tool", "")
-    params = tool_call.get("params", {})
-
-    try:
-        # Call any MCP tool directly
-        result = await client.call_tool(tool_name, params)
-        return f"**Tool: {tool_name}**\n```json\n{json.dumps(result, indent=2)}\n```"
-
-    except MCPClientError as e:
-        return f"Tool error: {e}"
+    results = []
+    for tc in tool_calls:
+        print(f"  → Calling tool: {tc.name}")
+        try:
+            result = await client.call_tool(tc.name, tc.arguments)
+            result_str = json.dumps(result, indent=2, ensure_ascii=False)
+            results.append(provider.build_tool_result_message(tc, result_str))
+            print(f"    ✓ Done")
+        except MCPClientError as e:
+            error_str = json.dumps({"error": str(e)})
+            results.append(provider.build_tool_result_message(tc, error_str))
+            print(f"    ✗ Error: {e}")
+    return results
 
 
 async def enrich_context_with_search(client: MCPClient, user_query: str) -> Optional[str]:
@@ -248,7 +221,7 @@ async def enrich_context_with_search(client: MCPClient, user_query: str) -> Opti
 
 
 async def interactive_chat_async(args: argparse.Namespace) -> None:
-    """Main interactive chat loop (async version)."""
+    """Main interactive chat loop (async version) with native tool calling."""
     print(f"Connecting to MCP server at {args.url}...")
     
     async with MCPClient(args.url) as mcp_client:
@@ -264,9 +237,8 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
         available_tools = await fetch_available_tools(mcp_client)
         print(f"  Tools available: {len(available_tools)}")
         
-        # Build system prompt with tools in MCP format
-        system_prompt = format_system_prompt(meta, available_tools)
-        print(system_prompt)
+        # Build system prompt (tools are passed separately to OpenAI)
+        system_prompt = format_system_prompt(meta)
 
         try:
             provider = build_provider(args.provider)
@@ -274,11 +246,10 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
             print(f"Provider error: {exc}")
             sys.exit(1)
 
-        # Only system prompt - no full schema (retrieval-based)
-        base_messages: List[Dict[str, str]] = [
+        # Initialize message history
+        messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ]
-        history: List[Dict[str, str]] = base_messages.copy()
 
         print(f"\nProvider: {args.provider} | Model: {args.model}")
         print("Type :quit or Ctrl+C to exit.\n")
@@ -304,70 +275,66 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
                 else:
                     enriched_query = user_text
 
-                messages = history + [{"role": "user", "content": enriched_query}]
-                prompt_tokens = estimate_tokens(messages, args.model)
+                # Add user message
+                messages.append({"role": "user", "content": enriched_query})
+                
+                prompt_tokens = estimate_tokens(
+                    [{"role": m["role"], "content": m.get("content", "")} for m in messages],
+                    args.model
+                )
                 print(f"Estimated prompt tokens: {prompt_tokens}")
+                
                 if not args.force:
                     confirm = input("Send? [y/N]: ").strip().lower()
                     if confirm not in {"y", "yes"}:
                         print("Cancelled.")
+                        messages.pop()
                         continue
 
-                print("Assistant> ", end="", flush=True)
-                chunks: List[str] = []
-                try:
-                    for chunk in provider.stream_chat(messages, args.model):
-                        chunks.append(chunk)
-                        print(chunk, end="", flush=True)
-                    print()
-                except KeyboardInterrupt:
-                    print("\nInterrupted.")
-                    continue
-                except Exception as exc:
-                    print(f"\nError from provider: {exc}")
-                    continue
-
-                assistant_reply = "".join(chunks)
-
-                # Check for tool calls in the response
-                tool_calls = extract_tool_calls(assistant_reply)
-                if tool_calls:
-                    print("\n[Executing tool calls...]")
-                    tool_results = []
-                    for tc in tool_calls:
-                        print(f"  → {tc.get('tool', 'unknown')}")
-                        result = await execute_tool_call(mcp_client, tc)
-                        tool_results.append(result)
-                        print(f"    ✓ Done")
-
-                    # Add tool results to context and continue conversation
-                    tool_context = "\n\n".join(tool_results)
-                    history.extend([
-                        {"role": "user", "content": user_text},
-                        {"role": "assistant", "content": assistant_reply},
-                        {"role": "user", "content": f"Tool results:\n{tool_context}\n\nPlease continue your analysis with this information."},
-                    ])
-
-                    # Auto-continue with tool results
-                    messages = history.copy()
-                    print("\nAssistant> ", end="", flush=True)
-                    chunks = []
+                # Tool calling loop - continue until LLM stops calling tools
+                max_tool_iterations = 10
+                iteration = 0
+                
+                while iteration < max_tool_iterations:
+                    iteration += 1
+                    
+                    print("Assistant> ", end="", flush=True)
                     try:
-                        for chunk in provider.stream_chat(messages, args.model):
-                            chunks.append(chunk)
-                            print(chunk, end="", flush=True)
-                        print()
+                        response = provider.chat_with_tools(messages, args.model, available_tools)
                     except Exception as exc:
-                        print(f"\nError: {exc}")
+                        print(f"\nError from provider: {exc}")
+                        break
+                    
+                    # Print any content
+                    if response.content:
+                        print(response.content)
+                    
+                    # Check if there are tool calls
+                    if response.tool_calls:
+                        print("\n[Executing tool calls...]")
+                        
+                        # Add assistant message with tool calls to history
+                        assistant_msg = provider.build_assistant_tool_call_message(
+                            response.content, response.tool_calls
+                        )
+                        messages.append(assistant_msg)
+                        
+                        # Execute tools and add results to history
+                        tool_results = await execute_tool_calls(
+                            mcp_client, provider, response.tool_calls
+                        )
+                        messages.extend(tool_results)
+                        
+                        # Continue loop to let LLM process tool results
                         continue
-
-                    followup_reply = "".join(chunks)
-                    history.append({"role": "assistant", "content": followup_reply})
-                else:
-                    history.extend([
-                        {"role": "user", "content": user_text},
-                        {"role": "assistant", "content": assistant_reply},
-                    ])
+                    else:
+                        # No more tool calls, add final response and exit loop
+                        if response.content:
+                            messages.append({"role": "assistant", "content": response.content})
+                        break
+                
+                if iteration >= max_tool_iterations:
+                    print(f"\n[Warning: Reached max tool iterations ({max_tool_iterations})]")
 
         except Exception as e:
             print(f"\nError: {e}")
