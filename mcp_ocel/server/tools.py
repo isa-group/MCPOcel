@@ -192,7 +192,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             response = ResponseBuilder.build_lifecycle_response(
                 object_id, references
             )
-            return response
+            return response.to_dict()
 
         except ValueError as e:
             return {"error": str(e)}
@@ -223,7 +223,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             response = ResponseBuilder.build_timerange_response(
                 start_datetime, end_datetime, references
             )
-            return response
+            return response.to_dict()
 
         except ValueError as e:
             return {"error": str(e)}
@@ -246,7 +246,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
             stats = query_engine.get_statistics_by_object_type()
             response = ResponseBuilder.build_statistics_response(stats)
-            return response
+            return response.to_dict()
 
         except Exception as e:
             logger.error(f"Error in get_statistics_by_object_type: {e}")
@@ -267,7 +267,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
             anomalies = query_engine.detect_anomalies()
             response = ResponseBuilder.build_anomalies_response(anomalies)
-            return response
+            return response.to_dict()
 
         except Exception as e:
             logger.error(f"Error in detect_anomalies: {e}")
@@ -293,7 +293,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             response = ResponseBuilder.build_orphaned_response(
                 orphaned, total_objects
             )
-            return response
+            return response.to_dict()
 
         except Exception as e:
             logger.error(f"Error in find_orphaned_objects: {e}")
@@ -334,7 +334,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         Args:
             query: Search query text.
             top_k: Number of results to return (default: 5).
-            chunk_types: Optional list of chunk types to filter by.
+            chunk_types: Optional list of chunk types to filter by. Valid values: ["event_types", "object_types", "events", "objects", "schema", "data"]. Use "schema" for event/object type definitions, "data" for actual events/objects.
 
         Returns:
             Dict with search results and relevance scores.
@@ -406,9 +406,9 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                         logger.warning(f"Could not generate DFG visualization: {e}")
 
             response = ResponseBuilder.build_dfg_response(
-                dfg, freq, object_type, visualization
+                dfg, visualization
             )
-            return response
+            return response.to_dict()
 
         except Exception as e:
             logger.error(f"Error in discover_dfg: {e}")
@@ -447,7 +447,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             response = ResponseBuilder.build_petri_net_response(
                 pn_dict, object_type, visualization
             )
-            return response
+            return response.to_dict()
 
         except Exception as e:
             logger.error(f"Error in discover_petri_net: {e}")
@@ -474,7 +474,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
             variants = mining_engine.extract_process_variants(object_type, limit)
             response = ResponseBuilder.build_variants_response(variants, object_type)
-            return response
+            return response.to_dict()
 
         except Exception as e:
             logger.error(f"Error in get_process_variants: {e}")
@@ -497,8 +497,8 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 return {"error": "Process mining engine not initialized"}
 
             metrics = mining_engine.get_performance_metrics(object_type)
-            response = ResponseBuilder.build_performance_response(metrics, object_type)
-            return response
+            response = ResponseBuilder.build_performance_response(metrics)
+            return response.to_dict()
 
         except Exception as e:
             logger.error(f"Error in get_performance_metrics: {e}")
@@ -527,9 +527,9 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 object_type, threshold_percentile
             )
             response = ResponseBuilder.build_bottlenecks_response(
-                bottlenecks, object_type
+                bottlenecks
             )
-            return response
+            return response.to_dict()
 
         except Exception as e:
             logger.error(f"Error in detect_bottlenecks: {e}")
@@ -555,7 +555,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             response = ResponseBuilder.build_conformance_response(
                 conformance, object_type
             )
-            return response
+            return response.to_dict()
 
         except Exception as e:
             logger.error(f"Error in check_conformance: {e}")
@@ -576,7 +576,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
             interactions = mining_engine.analyze_object_interactions()
             response = ResponseBuilder.build_interactions_response(interactions)
-            return response
+            return response.to_dict()
 
         except Exception as e:
             logger.error(f"Error in analyze_object_interactions: {e}")
@@ -627,9 +627,9 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
             social_network = mining_engine.discover_social_network(resource_attribute)
             response = ResponseBuilder.build_social_network_response(
-                social_network, resource_attribute
+                social_network
             )
-            return response
+            return response.to_dict()
 
         except Exception as e:
             logger.error(f"Error in discover_social_network: {e}")
