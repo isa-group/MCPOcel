@@ -7,8 +7,8 @@ from datetime import datetime
 from typing import Dict, List
 
 from .typing_ocel import (
-    EventReference,
-    ObjectReference,
+    MCPEventReference as EventReference,
+    MCPObjectReference as ObjectReference,
     AnomalyReport,
     OCELData,
     ObjectTypeStatsDict,

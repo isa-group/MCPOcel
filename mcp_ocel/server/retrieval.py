@@ -147,15 +147,17 @@ class SQLiteFTS5Retriever:
         Returns:
             List of (Chunk, score) tuples sorted by relevance (highest score first).
             Score is normalized to [0, 1] range where 1 is best match.
-        
-        Raises:
-            sqlite3.OperationalError: If query syntax is invalid.
         """
         if not self._indexed or self.conn is None:
             return []
         
+        # Escape FTS5 special characters by wrapping in quotes
+        # Double any existing quotes for proper escaping
+        escaped_query = query.replace('"', '""')
+        fts_query = f'"{escaped_query}"'
+        
         type_filter = ""
-        params = [query]
+        params = [fts_query]
         
         if chunk_types:
             placeholders = ",".join("?" * len(chunk_types))
@@ -173,7 +175,6 @@ class SQLiteFTS5Retriever:
         
         cursor = self.conn.execute(sql, params)
         results = []
-        
         for row in cursor.fetchall():
             chunk = Chunk(
                 id=row["id"],

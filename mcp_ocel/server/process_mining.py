@@ -119,6 +119,9 @@ class ProcessMiningEngine:
         """
         Discovers an object-centric Directly Follows Graph (DFG).
 
+        Results are cached by (object_type) to avoid redundant PM4PY calls.
+        Use `use_cache=False` to force recomputation.
+
         Args:
             object_type: Object type filter (None = all).
             use_cache: Whether to use cached results (default: True).
@@ -144,29 +147,63 @@ class ProcessMiningEngine:
     def _discover_dfg(
         self, object_type: Optional[str] = None
     ) -> Tuple[Dict, Dict]:
-        """Discovers a DFG using PM4PY."""
+        """Discovers an Object-Centric DFG using PM4PY."""
         try:
             if object_type:
-                filtered = pm4py.ocel_filter_object_types(
+                filtered = pm4py.filter_ocel_object_types(
                     self.ocel_data, [object_type]
                 )
-                dfg = pm4py.discover_ocel_dfg(filtered)
+                ocdfg = pm4py.discover_ocdfg(filtered)
             else:
-                dfg = pm4py.discover_ocel_dfg(self.ocel_data)
+                ocdfg = pm4py.discover_ocdfg(self.ocel_data)
+            
+            # Extract edges from ocdfg result
+            # edges structure: {"event_couples": {obj_type: {(src,tgt): set}}, "unique_objects": {...}, ...}
+            edges_data = ocdfg.get("edges", {})
+            event_couples = edges_data.get("event_couples", {})
+            
+            # start_activities structure: {"events": {obj_type: {activity: set_of_events}}, ...}
+            start_activities_raw = ocdfg.get("start_activities", {})
+            
+            # Aggregate edge frequencies across all object types
+            # Structure: event_couples[obj_type][(src_act, tgt_act)] = set of event pairs
+            edge_counts: Dict[Tuple[str, str], int] = {}
+            
+            for _, edges_dict in event_couples.items():
+                if isinstance(edges_dict, dict):
+                    for edge_tuple, event_set in edges_dict.items():
+                        count = len(event_set) if isinstance(event_set, set) else 1
+                        edge_counts[edge_tuple] = edge_counts.get(edge_tuple, 0) + count
+            
+            edges_list = []
+            for (src, tgt), freq in edge_counts.items():
+                edges_list.append({
+                    "source": str(src),
+                    "target": str(tgt),
+                    "frequency": freq,
+                })
+            
+            # Calculate start activity frequencies from events sub-dict
+            # Structure: {"events": {obj_type: {activity: set_of_event_ids}}}
+            start_list = []
+            start_events = start_activities_raw.get("events", {})
+            activity_counts: Dict[str, int] = {}
+            
+            for _, activities_dict in start_events.items():
+                if isinstance(activities_dict, dict):
+                    for activity, event_set in activities_dict.items():
+                        count = len(event_set) if isinstance(event_set, set) else 1
+                        activity_counts[activity] = activity_counts.get(activity, 0) + count
+            
+            for activity, freq in activity_counts.items():
+                start_list.append({
+                    "activity": str(activity),
+                    "frequency": freq,
+                })
             
             dfg_dict = {
-                "edges": [
-                    {
-                        "source": str(edge[0]),
-                        "target": str(edge[1]),
-                        "frequency": int(freq),
-                    }
-                    for edge, freq in dfg[0].items()
-                ],
-                "start_activities": [
-                    {"activity": str(act), "frequency": int(freq)}
-                    for act, freq in (dfg[1] if len(dfg) > 1 else {}).items()
-                ],
+                "edges": edges_list,
+                "start_activities": start_list,
             }
             
             logger.info(f"DFG discovered: {len(dfg_dict['edges'])} edges")
@@ -181,6 +218,9 @@ class ProcessMiningEngine:
     ) -> PetriNetDict:
         """
         Discovers an Object-Centric Petri Net (OC-PN).
+
+        Results are cached by (object_type) to avoid redundant PM4PY calls.
+        Use `use_cache=False` to force recomputation.
 
         Args:
             object_type: Object type filter (None = all).
@@ -207,26 +247,37 @@ class ProcessMiningEngine:
     def _discover_petri_net(
         self, object_type: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Discovers a Petri net using PM4PY."""
+        """Discovers an Object-Centric Petri Net using PM4PY."""
         try:
             if object_type:
-                filtered = pm4py.ocel_filter_object_types(
+                filtered = pm4py.filter_ocel_object_types(
                     self.ocel_data, [object_type]
                 )
-                petri_net, im, fm = pm4py.discover_ocel_petri_net(filtered)
+                oc_pn = pm4py.discover_oc_petri_net(filtered)
             else:
-                petri_net, im, fm = pm4py.discover_ocel_petri_net(self.ocel_data)
+                oc_pn = pm4py.discover_oc_petri_net(self.ocel_data)
+            
+            # Extract petri nets per object type
+            petri_nets = oc_pn.get("petri_nets", {})
+            total_places = 0
+            total_transitions = 0
+            total_arcs = 0
+            
+            for _, (net, _, _) in petri_nets.items():
+                total_places += len(net.places)
+                total_transitions += len(net.transitions)
+                total_arcs += len(net.arcs)
             
             pn_dict = {
-                "places": len(petri_net.places),
-                "transitions": len(petri_net.transitions),
-                "arcs": len(petri_net.arcs),
-                "initial_marking": str(im),
-                "final_marking": str(fm),
+                "object_types": list(petri_nets.keys()),
+                "total_places": total_places,
+                "total_transitions": total_transitions,
+                "total_arcs": total_arcs,
+                "nets_count": len(petri_nets),
             }
             
-            logger.info(f"Petri net discovered: {pn_dict['places']} places, "
-                       f"{pn_dict['transitions']} transitions")
+            logger.info(f"Petri net discovered: {pn_dict['total_places']} places, "
+                       f"{pn_dict['total_transitions']} transitions")
             return pn_dict
         
         except Exception as e:
@@ -239,6 +290,8 @@ class ProcessMiningEngine:
         """
         Extracts process variants (activity sequences).
 
+        This method does NOT cache results as variant extraction is lightweight.
+
         Args:
             object_type: Object type filter.
             limit: Maximum variants to return (top-N) to keep responses manageable; defaults to 10.
@@ -247,18 +300,12 @@ class ProcessMiningEngine:
             List of VariantDict ordered by frequency.
         """
         logger.info(f"Extracting process variants (limit={limit})")
-        return self._variants(object_type, limit)
-    
-    def _variants(
-        self, object_type: Optional[str] = None, limit: int = 10
-    ) -> List[Dict[str, Any]]:
-        """Extracts variants using PM4PY DataFrames."""
-        # Default to top-10 to align with the public API and avoid massive outputs.
+        
         ocel = self.ocel_data
         if object_type:
-            ocel = pm4py.ocel_filter_object_types(ocel, [object_type])
+            ocel = pm4py.filter_ocel_object_types(ocel, [object_type])
         
-        variants = {}
+        variants: Dict[str, Dict[str, Any]] = {}
         
         for _, event in ocel.events.iterrows():
             event_id = str(event.get("ocel:eid", ""))
@@ -290,22 +337,21 @@ class ProcessMiningEngine:
         """
         Retrieves general OCEL statistics.
 
+        This method does NOT cache results as it accesses DataFrame properties directly.
+
         Returns:
             OCELStatsDict with totals for events, objects, types, and distributions.
         """
         logger.debug("Fetching OCEL statistics")
-        return self._stats()
-    
-    def _stats(self) -> Dict[str, Any]:
-        """Statistics using PM4PY DataFrames."""
         try:
-            logger.info("OCEL statistics obtained")
-            return {
+            stats = {
                 "total_events": len(self.ocel_data.events),
                 "total_objects": len(self.ocel_data.objects),
                 "object_types": self.ocel_data.objects["ocel:type"].nunique(),
                 "event_types": self.ocel_data.events["ocel:activity"].nunique(),
             }
+            logger.info("OCEL statistics obtained")
+            return stats
         except Exception as e:
             logger.error(f"Error obtaining PM4PY statistics: {e}")
             return {}
@@ -319,7 +365,8 @@ class ProcessMiningEngine:
     ) -> List[VariantDict]:
         """
         Extract true object-centric process variants.
-        Groups complete activity sequences per object, then aggregates by unique sequence.
+        Uses PM4PY's ocel_flattening to convert OCEL to traditional log per object type,
+        then extracts variants using get_variants.
 
         Args:
             object_type: Filter by object type (optional).
@@ -332,37 +379,36 @@ class ProcessMiningEngine:
         
         try:
             ocel = self.ocel_data
+            
+            # Get object types to process
             if object_type:
-                ocel = pm4py.ocel_filter_object_types(ocel, [object_type])
+                object_types = [object_type]
+            else:
+                object_types = pm4py.ocel_get_object_types(ocel)
             
-            # Get all objects
-            objects_df = ocel.objects
-            variants_map: Dict[str, Dict] = {}
+            # Aggregate variants across all object types
+            variants_map: Dict[tuple, Dict] = {}
             
-            for oid in objects_df.index:
+            for ot in object_types:
                 try:
-                    # Get events for this object
-                    object_events = pm4py.ocel_get_object_events(ocel, oid)
-                    if object_events.empty:
-                        continue
+                    # Flatten OCEL to traditional log for this object type
+                    flat_log = pm4py.ocel_flattening(ocel, ot)
                     
-                    # Sort by timestamp and extract activity sequence
-                    sorted_events = object_events.sort_values("ocel:timestamp")
-                    sequence = tuple(sorted_events["ocel:activity"].tolist())
-                    sequence_key = " → ".join(sequence)
+                    # Get variants using PM4PY's native function
+                    pm4py_variants = pm4py.get_variants(flat_log)
                     
-                    if sequence_key not in variants_map:
-                        variants_map[sequence_key] = {
-                            "activity_sequence": list(sequence),
-                            "frequency": 0,
-                            "sample_objects": [],
-                        }
-                    
-                    variants_map[sequence_key]["frequency"] += 1
-                    if len(variants_map[sequence_key]["sample_objects"]) < 3:
-                        variants_map[sequence_key]["sample_objects"].append(str(oid))
-                
-                except Exception:
+                    for sequence, count in pm4py_variants.items():
+                        if sequence not in variants_map:
+                            variants_map[sequence] = {
+                                "activity_sequence": list(sequence),
+                                "frequency": 0,
+                                "object_types": [],
+                            }
+                        variants_map[sequence]["frequency"] += count
+                        if ot not in variants_map[sequence]["object_types"]:
+                            variants_map[sequence]["object_types"].append(ot)
+                except Exception as e:
+                    logger.debug(f"Could not extract variants for {ot}: {e}")
                     continue
             
             # Sort by frequency and limit
@@ -384,6 +430,7 @@ class ProcessMiningEngine:
     ) -> PerformanceMetricsDict:
         """
         Calculate performance metrics: times between consecutive activities.
+        Uses PM4PY's ocel_flattening to get per-object traces, then calculates transition times.
         All times are in SECONDS (SI unit).
 
         Args:
@@ -398,41 +445,49 @@ class ProcessMiningEngine:
             import numpy as np
             
             ocel = self.ocel_data
+            
+            # Get object types to process
             if object_type:
-                ocel = pm4py.ocel_filter_object_types(ocel, [object_type])
+                object_types = [object_type]
+            else:
+                object_types = pm4py.ocel_get_object_types(ocel)
             
-            # Collect transition times
+            # Collect transition times across all object types
             transition_times: Dict[str, List[float]] = {}
-            objects_df = ocel.objects
             
-            for oid in objects_df.index:
+            for ot in object_types:
                 try:
-                    object_events = pm4py.ocel_get_object_events(ocel, oid)
-                    if len(object_events) < 2:
-                        continue
+                    # Flatten OCEL to traditional log for this object type
+                    flat_log = pm4py.ocel_flattening(ocel, ot)
                     
-                    sorted_events = object_events.sort_values("ocel:timestamp")
-                    timestamps = sorted_events["ocel:timestamp"].tolist()
-                    activities = sorted_events["ocel:activity"].tolist()
-                    
-                    for i in range(len(activities) - 1):
-                        transition = f"{activities[i]} → {activities[i+1]}"
+                    # Group by case and calculate transition times
+                    for case_id in flat_log['case:concept:name'].unique():
+                        case_events = flat_log[flat_log['case:concept:name'] == case_id]
+                        case_events = case_events.sort_values('time:timestamp')
                         
-                        # Calculate time difference in seconds
-                        t1 = timestamps[i]
-                        t2 = timestamps[i+1]
+                        if len(case_events) < 2:
+                            continue
                         
-                        # Handle different timestamp formats
-                        if hasattr(t1, 'timestamp'):
-                            delta_seconds = (t2.timestamp() - t1.timestamp())
-                        else:
-                            delta_seconds = (t2 - t1).total_seconds()
+                        timestamps = case_events['time:timestamp'].tolist()
+                        activities = case_events['concept:name'].tolist()
                         
-                        if transition not in transition_times:
-                            transition_times[transition] = []
-                        transition_times[transition].append(delta_seconds)
-                
-                except Exception:
+                        for i in range(len(activities) - 1):
+                            transition = f"{activities[i]} → {activities[i+1]}"
+                            
+                            t1 = timestamps[i]
+                            t2 = timestamps[i+1]
+                            
+                            # Calculate time difference in seconds
+                            if hasattr(t1, 'timestamp'):
+                                delta_seconds = t2.timestamp() - t1.timestamp()
+                            else:
+                                delta_seconds = (t2 - t1).total_seconds()
+                            
+                            if transition not in transition_times:
+                                transition_times[transition] = []
+                            transition_times[transition].append(delta_seconds)
+                except Exception as e:
+                    logger.debug(f"Could not process {ot} for metrics: {e}")
                     continue
             
             # Calculate statistics
@@ -535,6 +590,7 @@ class ProcessMiningEngine:
     ) -> ConformanceResultDict:
         """
         Check conformance of log traces against discovered Petri net model.
+        Uses PM4PY's ocel_flattening to get per-object traces for conformance checking.
 
         Args:
             object_type: Filter by object type (optional).
@@ -547,62 +603,75 @@ class ProcessMiningEngine:
         try:
             ocel = self.ocel_data
             if object_type:
-                ocel = pm4py.ocel_filter_object_types(ocel, [object_type])
+                ocel = pm4py.filter_ocel_object_types(ocel, [object_type])
             
-            # Discover Petri net for conformance
-            petri_net, _, _ = pm4py.discover_ocel_petri_net(ocel)
+            # Discover OC-PN for conformance
+            oc_pn = pm4py.discover_oc_petri_net(ocel)
+            petri_nets = oc_pn.get("petri_nets", {})
             
-            # Basic fitness calculation based on replay
-            # Note: Full token-based replay for OCEL is complex; we use simplified metrics
-            len(ocel.events)
-            total_objects = len(ocel.objects)
+            # Get DFG edges for simple conformance check
+            dfg_dict, _ = self.discover_dfg(object_type)
+            edges = {(e["source"], e["target"]) for e in dfg_dict.get("edges", [])}
             
-            # Count objects with complete traces (start to end activities)
+            # Get object types to check
+            if object_type:
+                object_types = [object_type]
+            else:
+                object_types = pm4py.ocel_get_object_types(ocel)[:3]  # Limit for performance
+            
             complete_traces = 0
+            total_traces = 0
             deviations = []
             
-            objects_df = ocel.objects
-            for oid in list(objects_df.index)[:100]:  # Sample for performance
+            for ot in object_types:
                 try:
-                    object_events = pm4py.ocel_get_object_events(ocel, oid)
-                    if not object_events.empty:
-                        activities = object_events.sort_values("ocel:timestamp")["ocel:activity"].tolist()
+                    flat_log = pm4py.ocel_flattening(ocel, ot)
+                    case_ids = list(flat_log['case:concept:name'].unique())[:100]  # Sample
+                    
+                    for case_id in case_ids:
+                        case_events = flat_log[flat_log['case:concept:name'] == case_id]
+                        case_events = case_events.sort_values('time:timestamp')
+                        activities = case_events['concept:name'].tolist()
                         
-                        # Simple check: does the sequence follow DFG edges?
-                        dfg_dict, _ = self.discover_dfg(object_type)
-                        edges = {(e["source"], e["target"]) for e in dfg_dict.get("edges", [])}
-                        
+                        total_traces += 1
                         is_conformant = True
+                        
                         for i in range(len(activities) - 1):
                             if (activities[i], activities[i+1]) not in edges:
                                 is_conformant = False
-                                deviations.append({
-                                    "object_id": str(oid),
-                                    "deviation": f"Unexpected: {activities[i]} → {activities[i+1]}",
-                                    "position": i,
-                                })
+                                if len(deviations) < 50:
+                                    deviations.append({
+                                        "object_id": str(case_id),
+                                        "deviation": f"Unexpected: {activities[i]} → {activities[i+1]}",
+                                        "position": i,
+                                    })
                                 break
                         
                         if is_conformant:
                             complete_traces += 1
-                
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Could not check conformance for {ot}: {e}")
                     continue
             
-            sample_size = min(100, total_objects)
-            fitness = complete_traces / sample_size if sample_size > 0 else 0.0
+            fitness = complete_traces / total_traces if total_traces > 0 else 0.0
             
             logger.info(f"Conformance checked: fitness={fitness:.2%}")
+            
+            # Count total places and transitions
+            total_places = sum(len(net.places) for net, _, _ in petri_nets.values())
+            total_transitions = sum(len(net.transitions) for net, _, _ in petri_nets.values())
+            
             return {
                 "fitness_score": round(fitness, 4),
                 "fitness_percentage": round(fitness * 100, 2),
-                "sample_size": sample_size,
+                "sample_size": total_traces,
                 "conformant_traces": complete_traces,
-                "deviations": deviations[:20],  # Limit for response size
+                "deviations": deviations[:20],
                 "total_deviations": len(deviations),
                 "model": {
-                    "places": len(petri_net.places),
-                    "transitions": len(petri_net.transitions),
+                    "object_types": list(petri_nets.keys()),
+                    "total_places": total_places,
+                    "total_transitions": total_transitions,
                 },
             }
         
@@ -621,7 +690,6 @@ class ProcessMiningEngine:
         
         try:
             # Build co-occurrence matrix
-            events_df = self.ocel_data.events
             objects_df = self.ocel_data.objects
             relations = self.ocel_data.relations if hasattr(self.ocel_data, "relations") else None
             
@@ -635,17 +703,14 @@ class ProcessMiningEngine:
             }
             
             # Count co-occurrences in events
+            # relations already contains ocel:type, so we can use it directly
             if relations is not None and not relations.empty:
-                for eid in events_df.index:
-                    event_objects = relations[relations["ocel:eid"] == eid]["ocel:oid"].tolist()
-                    types_in_event = []
+                # Group by event ID and get object types per event
+                for eid in relations["ocel:eid"].unique():
+                    event_relations = relations[relations["ocel:eid"] == eid]
+                    types_in_event = event_relations["ocel:type"].tolist()
                     
-                    for oid in event_objects:
-                        if oid in objects_df.index:
-                            obj_type = objects_df.loc[oid, "ocel:type"]
-                            types_in_event.append(obj_type)
-                    
-                    # Count pairs
+                    # Count pairs (including self-pairs for same type)
                     for i, t1 in enumerate(types_in_event):
                         for t2 in types_in_event[i:]:
                             co_occurrence[t1][t2] += 1
@@ -722,6 +787,7 @@ class ProcessMiningEngine:
     ) -> SocialNetworkResultDict:
         """
         Discover social/organizational network based on handovers between resources.
+        Uses PM4PY's ocel_flattening to get per-object traces for handover detection.
 
         Args:
             resource_attribute: Attribute name containing resource/actor info.
@@ -733,7 +799,6 @@ class ProcessMiningEngine:
         
         try:
             events_df = self.ocel_data.events
-            objects_df = self.ocel_data.objects
             
             if resource_attribute not in events_df.columns:
                 available = self.get_available_resource_attributes()
@@ -742,34 +807,44 @@ class ProcessMiningEngine:
                     "available_attributes": available,
                 }
             
-            # Build handover network
+            # Build handover network using flattened logs
             handovers: Dict[str, Dict[str, int]] = {}
             resources = set()
             
-            for oid in objects_df.index:
+            object_types = pm4py.ocel_get_object_types(self.ocel_data)
+            
+            for ot in object_types:
                 try:
-                    object_events = pm4py.ocel_get_object_events(self.ocel_data, oid)
-                    if len(object_events) < 2:
+                    flat_log = pm4py.ocel_flattening(self.ocel_data, ot)
+                    
+                    # Check if resource attribute is in flattened log
+                    if resource_attribute not in flat_log.columns:
                         continue
                     
-                    sorted_events = object_events.sort_values("ocel:timestamp")
-                    resource_sequence = sorted_events[resource_attribute].tolist()
-                    
-                    for i in range(len(resource_sequence) - 1):
-                        r1 = str(resource_sequence[i])
-                        r2 = str(resource_sequence[i+1])
+                    for case_id in flat_log['case:concept:name'].unique():
+                        case_events = flat_log[flat_log['case:concept:name'] == case_id]
+                        case_events = case_events.sort_values('time:timestamp')
                         
-                        if r1 and r2 and r1 != r2:  # Skip same resource or empty
-                            resources.add(r1)
-                            resources.add(r2)
+                        if len(case_events) < 2:
+                            continue
+                        
+                        resource_sequence = case_events[resource_attribute].tolist()
+                        
+                        for i in range(len(resource_sequence) - 1):
+                            r1 = str(resource_sequence[i]) if resource_sequence[i] is not None else ""
+                            r2 = str(resource_sequence[i+1]) if resource_sequence[i+1] is not None else ""
                             
-                            if r1 not in handovers:
-                                handovers[r1] = {}
-                            if r2 not in handovers[r1]:
-                                handovers[r1][r2] = 0
-                            handovers[r1][r2] += 1
-                
-                except Exception:
+                            if r1 and r2 and r1 != r2 and r1 != 'nan' and r2 != 'nan':
+                                resources.add(r1)
+                                resources.add(r2)
+                                
+                                if r1 not in handovers:
+                                    handovers[r1] = {}
+                                if r2 not in handovers[r1]:
+                                    handovers[r1][r2] = 0
+                                handovers[r1][r2] += 1
+                except Exception as e:
+                    logger.debug(f"Could not process {ot} for social network: {e}")
                     continue
             
             # Convert to edge list
