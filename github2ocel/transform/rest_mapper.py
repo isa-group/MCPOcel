@@ -11,19 +11,27 @@ def run_rest_transformation(data: Dict[str, List[Dict[str, Any]]], builder, repo
     Orchestrates the REST transformation phase.
     'data' should contain keys: 'commits', 'runs', 'releases', 'deployments'
     """
+
     logger.info("Starting REST transformation pipeline...")
 
     # 1. Commits (Order matters: commits should be processed early)
     commits = data.get("commits", [])
+    failed_commits = []
     for commit in commits:
-        process_commit_rest(commit, builder, repo_id)
-    logger.info(f"Processed {len(commits)} commits.")
+        try:
+            process_commit_rest(commit, builder, repo_id)
+        except Exception as e:
+            sha = commit.get("sha", "unknown")
+            logger.error(f"Failed to process commit {sha}: {e}", exc_info=True)
+            failed_commits.append(sha)
+
+    if failed_commits:
+        logger.warning(f"Failed commits: {len(failed_commits)}/{len(commits)}")
 
     # 2. Workflow Runs
     runs = data.get("runs", [])
     for run in runs:
-        if run.get("status") == "completed":
-            process_workflow_run(run, builder, repo_id)
+        process_workflow_run(run, builder, repo_id)
 
     # 3. Delivery (Releases & Deployments)
     releases = data.get("releases", [])

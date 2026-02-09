@@ -1,33 +1,28 @@
-import logging
+from typing import Generator, Dict, Any
+from github2ocel.client.github_client import GitHubClient
+from shared.logger import  get_logger
 
-from typing import List, Dict, Any, Optional
-
-from github2ocel.config.settings import APIConfig
-from github2ocel.extractor.rest import rest_get
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def fetch_releases(
-    owner: str,
-    repo: str,
-    token: str,
-    api_config: APIConfig,
-    pages: Optional[int] = None,
-    per_page: int = 30
-) -> List[Dict[str, Any]]:
-    logger.info("Fetching releases...")
-    endpoint = f"/repos/{owner}/{repo}/releases"
-    all_releases = []
-    current_page = 1
-    target_pages = pages if pages is not None else api_config.max_pages
+    client: GitHubClient,
+) -> Generator[Dict[str, Any], None, None]:
+    
+    per_page = client.rest_per_page
 
-    while True:
-        if target_pages and current_page > target_pages: break
-        response = rest_get(endpoint, token, api_config,
-                             params={"per_page": per_page, "page": current_page})
-        releases = response.json()
-        if not releases: break
-        all_releases.extend(releases)
-        current_page += 1
+    logger.info("--- Fetching Releases ---")
+    params = {"per_page": per_page}
 
-    return all_releases
+    releases_pages = client.rest_paginated(
+        endpoint=f"/repos/{client.owner}/{client.repo}/releases",
+        params=params
+    )
+
+    count = 0
+    for page_releases in releases_pages:
+        for release in page_releases:
+            release["__type"] = "Release"
+            yield release
+            count += 1
+
+    logger.info(f"Releases extraction completed. Total: {count}")

@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Optional, List, Callable
+from typing import Optional, List
 
 def load_env(env_file: Path = Path(".env")) -> None:
     """
@@ -9,7 +9,27 @@ def load_env(env_file: Path = Path(".env")) -> None:
     """
     if not env_file.exists():
         return
+    with env_file.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
 
+            # Inline comments and secure split
+            if "=" in line:
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+
+                # Remove quotation marks if present
+                if len(value) >= 2 and value[0] == value[-1] == '"':
+                    value = value[1:-1]
+                elif len(value) >= 2 and value[0] == value[-1] == "'":
+                    value = value[1:-1]
+
+                # Only define if it does not exist in the system
+                if key not in os.environ:
+                    os.environ[key] = value
     with env_file.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()

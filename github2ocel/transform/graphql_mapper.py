@@ -1,11 +1,12 @@
 import logging
 from typing import Dict, Any
 
-from .mappers.issues_prs import process_base_node, map_main_events, map_management_context, map_review_threads
+from .mappers.issues_prs import process_base_node, map_main_events, map_management_context #, map_review_threads
 from .mappers.lifecycle import map_lifecycle_events
 from .mappers.timeline import map_timeline_events
 from .utils.ensure import get_node_type, is_pull_request
 from .mappers.devops import map_devops_events
+
 logger = logging.getLogger(__name__)
 
 def process_issue_node(node: Dict[str, Any], builder: Any, repo_id: str) -> None:
@@ -40,7 +41,7 @@ def process_issue_node(node: Dict[str, Any], builder: Any, repo_id: str) -> None
         map_timeline_events(node, builder, obj_id)
 
         # 6. Reviews thread
-        map_review_threads(node, builder, obj_id)
+        # map_review_threads(node, builder, obj_id)
 
         # . DevOps (Only PRs)
         if is_pr:
