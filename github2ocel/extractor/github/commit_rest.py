@@ -1,63 +1,67 @@
-import logging
+from typing import Generator, Dict, Any, Optional
 
-from typing import List, Dict, Any, Optional
+from github2ocel.client.github_client import GitHubClient
+from shared.logger import  get_logger
 
-from github2ocel.config.settings import APIConfig
-from github2ocel.extractor.rest import rest_get
+logger = get_logger(__name__)
 
-logger = logging.getLogger(__name__)
 
 def fetch_commits_rest(
-    owner: str,
-    repo: str,
-    token: str,
-    api_config: APIConfig,
-    pages: Optional[int] = None,
-    per_page: int = 30,
+    client: GitHubClient,
     max_detailed_total: Optional[int] = None,
-    since: Optional[str] = None
-) -> List[Dict[str, Any]]:
+) -> Generator[Dict[str, Any], None, None]:
+    """
+    Fetches commits using the robust GitHubClient.
+    WARNING: Fetching details for every commit is expensive (1 API call per commit).
+    """
+    since_iso, until_iso = client.time_window_iso
 
-    logger.info("Fetching commits with details via REST API...")
+    logger.info("--- Fetching commits with details via REST API ---")
+    if since_iso:
+        logger.info(f"Time Window: {since_iso} -> {until_iso}")
+    else:
+        logger.info(f"Time Window: BEGINNING OF TIME -> {until_iso}")
 
-    endpoint_list = f"/repos/{owner}/{repo}/commits"
-    all_commits = []
+    per_page = client.rest_per_page
+
+    params = {
+        "until": until_iso,
+        "per_page": per_page
+    }
+    if since_iso:
+        params["since"] = since_iso
+
+    endpoint_list = f"/repos/{client.owner}/{client.repo}/commits"
+    commits_pages = client.rest_paginated(
+        endpoint=endpoint_list,
+        params=params,
+        per_page=per_page
+    )
     detailed_fetched = 0
-    target_pages = pages if pages is not None else api_config.max_pages
 
-    list_params = {"per_page": per_page}
-    if since: list_params["since"] = since
+    for commits in commits_pages:
+        # Process each commit on the current page
+        for summary in commits:
+            if max_detailed_total and detailed_fetched >= max_detailed_total:
+                logger.info(f"Reached max_detailed_total limit ({max_detailed_total})")
+                return
 
-    current_page = 1
-    while True:
-        if (target_pages and current_page > target_pages) or \
-           (max_detailed_total and detailed_fetched >= max_detailed_total):
-            break
-
-        list_params["page"] = current_page
-        response = rest_get(endpoint_list, token, api_config, params=list_params)
-        commits_summary = response.json()
-
-        if not commits_summary: break
-
-        for summary in commits_summary:
-            if max_detailed_total and detailed_fetched >= max_detailed_total: break
-
-            sha = summary["sha"]
-            endpoint_detail = f"/repos/{owner}/{repo}/commits/{sha}"
-
+            sha = summary.get("sha")
             try:
-                # Every single commit detail call is now protected by the Limiter
-                detail_resp = rest_get(endpoint_detail, token, api_config)
-                all_commits.append(detail_resp.json())
+                endpoint_detail = f"{endpoint_list}/{sha}"
+                # Reuse client -> Rate Limit
+                response = client.rest_get(endpoint_detail)
+                commit_detailed = response.json()
+
+                # Label mappers
+                commit_detailed["__type"] = "Commit"
+                yield commit_detailed
                 detailed_fetched += 1
             except Exception as e:
-                logger.warning(f"Skipping commit {sha} due to error: {e}")
+                # If an individual commit fails and move on to the next one.
+                logger.error(f"Failed to fetch details for commit {sha}: {e}")
                 continue
 
-        current_page += 1
-        logger.info(f"Detailed commits: {detailed_fetched} (Last page: {current_page-1})")
+        logger.info(f"Commits processed so far: {detailed_fetched}")
 
-    return all_commits
-
-
+    logger.info(f"Commits extraction completed. Total: {detailed_fetched}")

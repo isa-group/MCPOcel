@@ -1,40 +1,60 @@
-import logging
+from typing import Generator, Dict, Any
 
-from typing import List, Dict, Any, Optional
+from github2ocel.client.github_client import GitHubClient
+from shared.logger import  get_logger
 
-from github2ocel.config.settings import APIConfig
-from github2ocel.extractor.rest import rest_get
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def fetch_workflow_runs(
-    owner: str,
-    repo: str,
-    token: str,
-    api_config: APIConfig,
-    pages: Optional[int] = None,
-    per_page: int = 50,
-) -> List[Dict[str, Any]]:
-    logger.info("Fetching workflow runs via REST API...")
-    endpoint = f"/repos/{owner}/{repo}/actions/runs"
-    all_runs = []
+    client: GitHubClient,
+) -> Generator[Dict[str, Any], None, None]:
 
-    target_pages = pages if pages is not None else api_config.max_pages
-    current_page = 1
+    since_iso, until_iso = client.time_window_iso
+    per_page = client.rest_per_page
+
+    logger.info("--- Fetching Workflow Runs ---")
+
+    url = f"/repos/{client.owner}/{client.repo}/actions/runs"
+
+    params = {"per_page": per_page, "page": 1}
+
+    if since_iso:
+        # Actions format YYYY-MM-DD
+        start_date = since_iso.split('T')[0]
+        end_date = until_iso.split('T')[0]
+
+        date_query = f"{start_date}..{end_date}"
+        params["created"] = date_query
+        logger.info(f"Applying date filter: created={date_query}")
+
+    count = 0
 
     while True:
-        if target_pages and current_page > target_pages: break
+        try:
+            response = client.rest_get(url, params=params)
+            data = response.json()
 
-        response = rest_get(endpoint, token, api_config,
-                             params={"per_page": per_page, "page": current_page})
-        data = response.json()
-        runs = data.get("workflow_runs", [])
+            runs = data.get("workflow_runs", [])
+            if not runs:
+                break
 
-        if not runs: break
+            for run in runs:
+                run["__type"] = "WorkflowRun"
+                yield run
+                count += 1
 
-        all_runs.extend(runs)
-        logger.info(f"Fetched {len(all_runs)} workflow runs (Page {current_page})...")
-        current_page += 1
 
-    return all_runs
+            if len(runs) < per_page:
+                break
+
+            params["page"] += 1
+
+            if count % 100 == 0:
+                logger.info(f"Fetched {count} runs...")
+
+        except Exception as e:
+            logger.error(f"Error fetching runs page {params['page']}: {e}")
+            break
+
+    logger.info(f"Workflow Runs extraction completed. Total: {count}")
 

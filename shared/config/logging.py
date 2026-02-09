@@ -17,6 +17,9 @@ class LoggingConfig:
         self.log_file = log_file
         self.format = format
 
+        if not self.log_file.parent.exists():
+            self.log_file.parent.mkdir(parents=True, exist_ok=True)
+
     @classmethod
     def from_env(cls) -> "LoggingConfig":
         return cls(

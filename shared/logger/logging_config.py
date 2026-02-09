@@ -2,9 +2,6 @@ import logging
 import sys
 from typing import Optional
 from logging.handlers import RotatingFileHandler
-from dataclasses import dataclass
-from os import getenv
-from pathlib import Path
 
 from shared.config.logging import LoggingConfig
 
@@ -50,7 +47,7 @@ def setup_logging(config: Optional[LoggingConfig] = None) -> None:
         file_handler.setFormatter(detailed_formatter)
         root_logger.addHandler(file_handler)
     except Exception as e:
-        print(f"Error inicializando el archivo de log: {e}", file=sys.stderr)
+        print(f"Error initialising log file: {e}", file=sys.stderr)
 
     # Console handler (less verbose)
     console_handler = logging.StreamHandler(sys.stdout)

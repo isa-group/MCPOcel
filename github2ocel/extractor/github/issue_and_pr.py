@@ -1,30 +1,37 @@
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Generator
 
-from github2ocel.config.settings import APIConfig
+from github2ocel.client.github_client import GitHubClient
 from github2ocel.extractor.graphql.paginator import paginate_nodes
 from github2ocel.extractor.graphql.queries import ISSUES_QUERY, PRS_QUERY
+from shared.logger import  get_logger
 
-def fetch_issues_and_prs(
-    owner: str,
-    repo: str,
-    token: str,
-    api_config: APIConfig,
-    pages: Optional[int] = None,
-    per_page: int = 50,
-) -> List[Dict[str, Any]]:
-    issues = paginate_nodes(
-        ISSUES_QUERY, "issues",
-        owner, repo, token, api_config,
-        pages, per_page,
+logger = get_logger(__name__)
+
+def fetch_github_data(client: GitHubClient) -> Generator[Dict[str, Any], None, None]:
+    """
+    Fetches Issues and PRs using the robust GitHubClient.
+    Yields items one by one to save memory.
+    """
+    logger.info("--- Fetching Issues & PRs (GraphQL) ---")
+
+    # Phase A: Issues
+    issue_gen = paginate_nodes(
+        client=client,
+        query=ISSUES_QUERY,
+        node_type="issues",
     )
 
-    prs = paginate_nodes(
-        PRS_QUERY, "pullRequests",
-        owner, repo, token, api_config,
-        pages, per_page,
+    for node in issue_gen:
+        node["__type"] = "Issue"
+        yield node
+
+    # Phase B: Pull Requests
+    pr_gen = paginate_nodes(
+        client=client,
+        query=PRS_QUERY,
+        node_type="pullRequests",
     )
 
-    return (
-        [{"__type": "Issue", **i} for i in issues] +
-        [{"__type": "PullRequest", **p} for p in prs]
-    )
+    for node in pr_gen:
+        node["__type"] = "PullRequest"
+        yield node

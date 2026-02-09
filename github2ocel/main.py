@@ -1,117 +1,87 @@
-# stdlib
-import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from config.settings import APIConfig
 
-# Add parent directory to path for shared module access
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from shared.logger.logging_config import setup_logging, get_logger, LoggingConfig
-from shared.ocel.builder import OCELBuilder
-from shared.ocel.validator import validate_ocel
+# shared
+from shared.logger import setup_logging, get_logger
+from shared.config.env import load_env
 
-# internal
-from shared.logger import get_logger, setup_logging
-from github2ocel.config.settings import APIConfig, LoggingConfig
+# github2ocel
+from github2ocel.config.context import RepoContext
 from github2ocel.transform.builder import OCELBuilder
-
-from github2ocel.transform.rest_mapper import (
-    run_rest_transformation
-)
-from github2ocel.transform.graphql_mapper import (
-    process_issue_node,
-)
-from github2ocel.extractor.rest import fetch_workflow_runs, fetch_commits_rest, fetch_releases, fetch_deployments
-from github2ocel.extractor.graphql import fetch_github_data
+from github2ocel.extractor.extractor import run_extractor
 from github2ocel.validate.validate_ocel import validate_ocel
 from extractor.rest import fetch_workflow_runs, fetch_commits_rest, fetch_releases
 from extractor.graphql import fetch_github_data
 
 
-logger = get_logger(__name__)
-
-# Config Repository & Output
+# Output directory
 STORAGE_DIR = Path("./storage")
 
-def main():
-    load_dotenv()
-    # Setup Logging & API Config
-    log_config = LoggingConfig.from_env()
-    setup_logging(log_config)
-    api_config = APIConfig.from_env()
 
-    OWNER = os.getenv("GITHUB_OWNER")
-    REPO = os.getenv("GITHUB_REPO")
-    TOKEN = os.getenv("GITHUB_TOKEN")
+def main() -> None:
+    # Environment & logging
+    load_env(Path(".env"))
+    setup_logging()
+    logger = get_logger(__name__)
 
-    if not all([OWNER, REPO, TOKEN]):
-        logger.critical("Configuration missing (OWNER/REPO/TOKEN). Check .env.")
+    try:
+        ctx = RepoContext.from_env()
+    except Exception as e:
+        logger.critical(f"Failed to load context: {e}")
         sys.exit(1)
 
-    logger.info(f"--- Pipeline Start: {OWNER}/{REPO} ---")
+    fullname = f"{ctx.owner}/{ctx.repo}"
+    logger.info(f"--- Pipeline Start: {fullname} ---")
 
-    db_path = STORAGE_DIR / f"staging_{REPO}.db"
+    # Ensure storage exists
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    db_path = STORAGE_DIR / f"staging_{ctx.repo}.db"
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = STORAGE_DIR / f"github_ocel_{ctx.repo}_{timestamp}.json"
+
+    repo_id = f"repo_{ctx.owner}_{ctx.repo}"
+    extraction_success = False
+
     with OCELBuilder(db_path=db_path) as builder:
-        repo_id = f"repo_{OWNER}_{REPO}"
-        builder.add_object(repo_id, "Repository", {
-            "name": REPO,
-            "full_name": f"{OWNER}/{REPO}",
-            "visibility": "public"
-        })
+        builder.add_object(
+            repo_id,
+            "Repository",
+            {
+                "name": ctx.repo,
+                "full_name": fullname,
+                "visibility": ctx.visibility,
+            },
+        )
 
-        errors = False
+        # Ejecutamos la extracción y capturamos el resultado (True/False)
+        extraction_success = run_extractor(ctx, builder, repo_id)
 
-        # 1. GraphQL: Rich Structure (Issues & PRs)
-        try:
-            nodes = fetch_github_data(OWNER, REPO, TOKEN, api_config)
-            for node in nodes:
-
-                process_issue_node(node, builder, repo_id)
-            logger.info(f"Successfully processed {len(nodes)} GraphQL nodes.")
-        except Exception:
-            logger.exception("GraphQL phase failed")
-            errors = True
-
-        # last_week = (datetime.now() - timedelta(days=7)).isoformat() + "Z"# Llamada al fetchertry:
-        try:
-            # 2. REST Phase (Data collection)
-            rest_data = {
-                "commits": fetch_commits_rest(
-                    OWNER, REPO, TOKEN, api_config,
-                    since=None, # last_week
-                    max_detailed_total=50),
-                "runs": fetch_workflow_runs(OWNER, REPO, TOKEN, api_config),
-                "releases": fetch_releases(OWNER, REPO, TOKEN, api_config),
-                "deployments": fetch_deployments(OWNER, REPO, TOKEN, api_config)
-            }
-
-            # 3. REST Transformation (One single call!)
-            run_rest_transformation(rest_data, builder, repo_id)
-
-        except Exception:
-            logger.exception("REST phase failed")
-            errors = True
-
-        if errors:
-            logger.error("Pipeline aborted due to extraction errors.")
-            sys.exit(1)
+        if not extraction_success:
+            logger.error("Extraction failed. Aborting export.")
+        else:
+            # 3.3 Exportación (Solo si la extracción fue bien)
+            try:
+                logger.info("Exporting to JSON-OCEL...")
+                builder.export_json(output_path)
+                stats = builder.get_stats()
+                logger.info(f"Export done: {stats.get('objects', '?')} objects, {stats.get('events', '?')} events.")
+            except Exception:
+                logger.exception("Export failed during JSON generation")
+                extraction_success = False
 
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = STORAGE_DIR / f"github_ocel_{REPO}_{timestamp}.json"
-        STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-        try:
-            builder.export_json(output_path)
-            stats = builder.get_stats()
-            logger.info(f"Log generated: {stats['objects']} objects, {stats['events']} events.")
-        except Exception:
-            logger.exception("Export failed")
-            sys.exit(1)
-
+    # 4. Validate
+    if not extraction_success:
+        logger.error("Exiting due to errors.")
+        sys.exit(1)
 
     if validate_ocel(output_path):
-        logger.info("VALIDATION SUCCESS: OCEL 2.0 file is ready.")
+        logger.info(f"VALIDATION SUCCESS: OCEL 2.0 file ready at {output_path}")
+    else:
+        logger.warning("File generated but validation FAILED.")
+
 
 if __name__ == "__main__":
     main()

@@ -1,42 +1,45 @@
-import logging
+from typing import Generator, Dict, Any
+from github2ocel.client.github_client import GitHubClient
+from shared.logger import  get_logger
 
-from typing import List, Dict, Any, Optional
-
-from github2ocel.config.settings import APIConfig
-from github2ocel.extractor.rest import rest_get
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def fetch_deployments(
-    owner: str,
-    repo: str,
-    token: str,
-    api_config: APIConfig,
-    pages: Optional[int] = None,
-    per_page: int = 30
-) -> List[Dict[str, Any]]:
-    logger.info("Fetching deployments and statuses...")
-    endpoint = f"/repos/{owner}/{repo}/deployments"
-    all_deployments = []
-    current_page = 1
-    target_pages = pages if pages is not None else api_config.max_pages
+    client: GitHubClient,
+) -> Generator[Dict[str, Any], None, None]:
+    
+    per_page = client.rest_per_page
 
-    while True:
-        if target_pages and current_page > target_pages: break
-        response = rest_get(endpoint, token, api_config,
-                             params={"per_page": per_page, "page": current_page})
-        deployments = response.json()
-        if not deployments: break
 
-        for dep in deployments:
-            # Sub-resource fetch: statuses
-            status_url = f"/repos/{owner}/{repo}/deployments/{dep['id']}/statuses"
+    logger.info("---Fetching deployments and statuses ---")
+    endpoint_list = f"/repos/{client.owner}/{client.repo}/deployments"
+    params = {
+        "per_page": per_page
+    }
+    # Automatic pagination of the main list
+    deployments_pages = client.rest_paginated(
+        endpoint=endpoint_list,
+        params=params,
+        per_page=per_page
+    )
+    count = 0
+
+    for page_deployments in deployments_pages:
+        for deployment in page_deployments:
+
+            dep_id = deployment.get("id")
             try:
-                st_resp = rest_get(status_url, token, api_config)
-                dep["statuses"] = st_resp.json()
-            except Exception:
-                dep["statuses"] = []
-            all_deployments.append(dep)
+                endpoint_statuses = f"{endpoint_list}/{dep_id}/statuses"
 
-        current_page += 1
-    return all_deployments
+                statuses_resp = client.rest_get(endpoint_statuses)
+                deployment["statuses"] = statuses_resp.json()
+
+            except Exception as e:
+                logger.warning(f"Could not fetch statuses for deployment {dep_id}: {e}")
+                deployment["statuses"] = []
+
+            deployment["__type"] = "Deployment"
+            yield deployment
+            count += 1
+
+    logger.info(f"Deployments extraction completed. Total: {count}")
