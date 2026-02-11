@@ -71,7 +71,6 @@ class AnomalyReport:
 # Type aliases
 EventDict = Dict[str, Any]
 ObjectDict = Dict[str, Any]
-ObjectTypeStatsDict = Dict[str, Any]
 
 
 # =============================================================================
