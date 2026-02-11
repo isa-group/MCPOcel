@@ -21,6 +21,7 @@ from .typing_ocel import (
     ListToolsResponseDict,
 )
 from shared.logger.logging_config import get_logger
+from shared.logger.decorators import debug_log_tool
 from shared.ocel.config import OCELConfig
 
 logger = get_logger(__name__)
@@ -158,6 +159,48 @@ def _build_dynamic_tools_list(mcp: FastMCP) -> List[ToolInfoDict]:
     return tools_list
 
 
+def _paginate_response(
+    response_dict: Dict[str, Any],
+    tool_name: str,
+    cursor_store: Any,
+    page_size: int = constants.DEFAULT_PAGE_SIZE,
+) -> Dict[str, Any]:
+    """
+    If *response_dict* contains a ``references`` list longer than *page_size*,
+    store the full list in the cursor store, truncate to the first page, and
+    inject pagination metadata into the response dict.
+
+    Returns the (possibly modified) response dict.
+    """
+    refs = response_dict.get("references")
+    if refs is None or not isinstance(refs, list):
+        return response_dict
+
+    total = len(refs)
+    if total <= page_size:
+        return response_dict
+
+    cursor_id = cursor_store.create_cursor(tool_name, refs, page_size)
+    import math
+    total_pages = max(1, math.ceil(total / page_size))
+
+    response_dict["references"] = refs[:page_size]
+    response_dict["pagination"] = {
+        "cursor_id": cursor_id,
+        "page": 1,
+        "total_pages": total_pages,
+        "total_items": total,
+        "page_size": page_size,
+        "has_more": True,
+        "hint": (
+            f"Showing {page_size} of {total} items. "
+            f"Use get_cursor_results(cursor_id='{cursor_id}', page=2) "
+            f"to retrieve more pages."
+        ),
+    }
+    return response_dict
+
+
 def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> None:
     """
     Register all MCP tools and resources.
@@ -173,12 +216,14 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     # =========================================================================
 
     @mcp.tool()
-    def trace_object_lifecycle(object_id: str) -> Dict[str, Any]:
+    @debug_log_tool
+    def trace_object_lifecycle(object_id: str, total_only: bool = False) -> Dict[str, Any]:
         """
         Trace the full lifecycle of an object through all events.
 
         Args:
             object_id: The unique identifier of the object to trace.
+            total_only: If True, return only the total count of events instead of full data.
 
         Returns:
             Dict with event references, summary, and metadata.
@@ -189,10 +234,20 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 return {"error": "OCEL query engine not initialized"}
 
             references = query_engine.trace_object_lifecycle(object_id)
+
+            if total_only:
+                return {"total": len(references)}
+
             response = ResponseBuilder.build_lifecycle_response(
                 object_id, references
             )
-            return response.to_dict()
+            result = response.to_dict()
+
+            cursor_store = ocel_state.get("cursor_store")
+            if cursor_store:
+                result = _paginate_response(result, "trace_object_lifecycle", cursor_store)
+
+            return result
 
         except ValueError as e:
             return {"error": str(e)}
@@ -201,13 +256,15 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
-    def query_events_by_timerange(start_datetime: str, end_datetime: str) -> Dict[str, Any]:
+    @debug_log_tool
+    def query_events_by_timerange(start_datetime: str, end_datetime: str, total_only: bool = False) -> Dict[str, Any]:
         """
         Query events within a specific time range.
 
         Args:
             start_datetime: Start time in ISO 8601 format (e.g., "2025-01-20T10:00:00Z").
             end_datetime: End time in ISO 8601 format (e.g., "2025-01-20T15:00:00Z").
+            total_only: If True, return only the total count of events instead of full data.
 
         Returns:
             Dict with event references, summary, and metadata.
@@ -220,10 +277,20 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             references = query_engine.query_events_by_timerange(
                 start_datetime, end_datetime
             )
+
+            if total_only:
+                return {"total": len(references)}
+
             response = ResponseBuilder.build_timerange_response(
                 start_datetime, end_datetime, references
             )
-            return response.to_dict()
+            result = response.to_dict()
+
+            cursor_store = ocel_state.get("cursor_store")
+            if cursor_store:
+                result = _paginate_response(result, "query_events_by_timerange", cursor_store)
+
+            return result
 
         except ValueError as e:
             return {"error": str(e)}
@@ -232,9 +299,13 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
-    def get_statistics_by_object_type() -> Dict[str, Any]:
+    @debug_log_tool
+    def get_statistics_by_object_type(total_only: bool = False) -> Dict[str, Any]:
         """
         Get statistical information grouped by object type.
+
+        Args:
+            total_only: If True, return only the total count of object types instead of full data.
 
         Returns:
             Dict with statistics by object type and metadata.
@@ -245,6 +316,10 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 return {"error": "OCEL query engine not initialized"}
 
             stats = query_engine.get_statistics_by_object_type()
+
+            if total_only:
+                return {"total": len(stats)}
+
             response = ResponseBuilder.build_statistics_response(stats)
             return response.to_dict()
 
@@ -253,9 +328,13 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
-    def detect_anomalies() -> Dict[str, Any]:
+    @debug_log_tool
+    def detect_anomalies(total_only: bool = False) -> Dict[str, Any]:
         """
         Detect anomalies in the event log (orphaned objects, broken references).
+
+        Args:
+            total_only: If True, return only the total count of anomalies instead of full data.
 
         Returns:
             Dict with detected anomalies and severity information.
@@ -266,17 +345,31 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 return {"error": "OCEL query engine not initialized"}
 
             anomalies = query_engine.detect_anomalies()
+
+            if total_only:
+                return {"total": len(anomalies)}
+
             response = ResponseBuilder.build_anomalies_response(anomalies)
-            return response.to_dict()
+            result = response.to_dict()
+
+            cursor_store = ocel_state.get("cursor_store")
+            if cursor_store:
+                result = _paginate_response(result, "detect_anomalies", cursor_store)
+
+            return result
 
         except Exception as e:
             logger.error(f"Error in detect_anomalies: {e}")
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
-    def find_orphaned_objects() -> Dict[str, Any]:
+    @debug_log_tool
+    def find_orphaned_objects(total_only: bool = False) -> Dict[str, Any]:
         """
         Find objects that have no associated events.
+
+        Args:
+            total_only: If True, return only the total count of orphaned objects instead of full data.
 
         Returns:
             Dict with list of orphaned object IDs and statistics.
@@ -287,19 +380,30 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 return {"error": "OCEL query engine not initialized"}
 
             orphaned = query_engine.find_orphaned_objects()
+
+            if total_only:
+                return {"total": len(orphaned)}
+
             ocel_data = ocel_state.get("ocel_data")
             total_objects = len(ocel_data.objects) if ocel_data else 0
 
             response = ResponseBuilder.build_orphaned_response(
                 orphaned, total_objects
             )
-            return response.to_dict()
+            result = response.to_dict()
+
+            cursor_store = ocel_state.get("cursor_store")
+            if cursor_store:
+                result = _paginate_response(result, "find_orphaned_objects", cursor_store)
+
+            return result
 
         except Exception as e:
             logger.error(f"Error in find_orphaned_objects: {e}")
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
+    @debug_log_tool
     def list_available_tools() -> Dict[str, Any]:
         """
         List all available MCP tools with their descriptions and parameter schemas.
@@ -325,8 +429,9 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
+    @debug_log_tool
     def search_ocel(
-        query: str, top_k: int = 5, chunk_types: Optional[List[str]] = None
+        query: str, top_k: int = 5, chunk_types: Optional[List[str]] = None, total_only: bool = False
     ) -> Dict[str, Any]:
         """
         Search the OCEL data using semantic/hybrid search.
@@ -335,6 +440,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             query: Search query text.
             top_k: Number of results to return (default: 5).
             chunk_types: Optional list of chunk types to filter by. Valid values: ["event_types", "object_types", "events", "objects", "schema", "data"]. Use "schema" for event/object type definitions, "data" for actual events/objects.
+            total_only: If True, return only the total count of results instead of full data.
 
         Returns:
             Dict with search results and relevance scores.
@@ -353,6 +459,9 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                     results = retrieval_engine.search_data(query, top_k=top_k)
                 else:
                     results = retrieval_engine.search(query, top_k=top_k)
+
+            if total_only:
+                return {"total": len(results)}
 
             # Format results inline (simpler format for LLM consumption)
             formatted_results = []
@@ -376,6 +485,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
+    @debug_log_tool
     def discover_dfg(
         object_type: Optional[str] = None, include_visualization: bool = False
     ) -> Dict[str, Any]:
@@ -415,6 +525,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
+    @debug_log_tool
     def discover_petri_net(
         object_type: Optional[str] = None, include_visualization: bool = False
     ) -> Dict[str, Any]:
@@ -454,8 +565,9 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
+    @debug_log_tool
     def get_process_variants(
-        object_type: Optional[str] = None, limit: int = 10
+        object_type: Optional[str] = None, limit: int = 10, total_only: bool = False
     ) -> Dict[str, Any]:
         """
         Extract and list process variants (activity sequences).
@@ -463,6 +575,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         Args:
             object_type: Optional object type filter.
             limit: Maximum number of variants to return (default: 10).
+            total_only: If True, return only the total count of variants instead of full data.
 
         Returns:
             Dict with list of variants ordered by frequency.
@@ -473,14 +586,25 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 return {"error": "Process mining engine not initialized"}
 
             variants = mining_engine.extract_process_variants(object_type, limit)
+
+            if total_only:
+                return {"total": len(variants)}
+
             response = ResponseBuilder.build_variants_response(variants, object_type)
-            return response.to_dict()
+            result = response.to_dict()
+
+            cursor_store = ocel_state.get("cursor_store")
+            if cursor_store:
+                result = _paginate_response(result, "get_process_variants", cursor_store)
+
+            return result
 
         except Exception as e:
             logger.error(f"Error in get_process_variants: {e}")
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
+    @debug_log_tool
     def get_performance_metrics(object_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Calculate performance metrics (flow time, processing time, etc.).
@@ -505,8 +629,9 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
+    @debug_log_tool
     def detect_bottlenecks(
-        object_type: Optional[str] = None, threshold_percentile: float = 75.0
+        object_type: Optional[str] = None, threshold_percentile: float = 75.0, total_only: bool = False
     ) -> Dict[str, Any]:
         """
         Detect performance bottlenecks in the process.
@@ -514,6 +639,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         Args:
             object_type: Optional object type filter.
             threshold_percentile: Percentile threshold for bottleneck detection (0-100, default: 75).
+            total_only: If True, return only the total count of bottlenecks instead of full data.
 
         Returns:
             Dict with detected bottlenecks and affected activities.
@@ -526,16 +652,28 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             bottlenecks = mining_engine.detect_bottlenecks(
                 object_type, threshold_percentile
             )
+
+            if total_only:
+                count = len(bottlenecks) if isinstance(bottlenecks, list) else 1
+                return {"total": count}
+
             response = ResponseBuilder.build_bottlenecks_response(
                 bottlenecks
             )
-            return response.to_dict()
+            result = response.to_dict()
+
+            cursor_store = ocel_state.get("cursor_store")
+            if cursor_store:
+                result = _paginate_response(result, "detect_bottlenecks", cursor_store)
+
+            return result
 
         except Exception as e:
             logger.error(f"Error in detect_bottlenecks: {e}")
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
+    @debug_log_tool
     def check_conformance(object_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Check process conformance against discovered model.
@@ -562,9 +700,13 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
-    def analyze_object_interactions() -> Dict[str, Any]:
+    @debug_log_tool
+    def analyze_object_interactions(total_only: bool = False) -> Dict[str, Any]:
         """
         Analyze interactions between different objects in the event log.
+
+        Args:
+            total_only: If True, return only the total count of interaction pairs instead of full data.
 
         Returns:
             Dict with object interaction patterns and co-occurrence statistics.
@@ -575,17 +717,32 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 return {"error": "Process mining engine not initialized"}
 
             interactions = mining_engine.analyze_object_interactions()
+
+            if total_only:
+                count = len(interactions) if isinstance(interactions, list) else 1
+                return {"total": count}
+
             response = ResponseBuilder.build_interactions_response(interactions)
-            return response.to_dict()
+            result = response.to_dict()
+
+            cursor_store = ocel_state.get("cursor_store")
+            if cursor_store:
+                result = _paginate_response(result, "analyze_object_interactions", cursor_store)
+
+            return result
 
         except Exception as e:
             logger.error(f"Error in analyze_object_interactions: {e}")
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
-    def get_available_resource_attributes() -> Dict[str, Any]:
+    @debug_log_tool
+    def get_available_resource_attributes(total_only: bool = False) -> Dict[str, Any]:
         """
         Get list of available resource attributes for social network analysis.
+
+        Args:
+            total_only: If True, return only the total count of attributes instead of full data.
 
         Returns:
             Dict with available resource attribute names.
@@ -596,6 +753,10 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 return {"error": "Process mining engine not initialized"}
 
             attributes = mining_engine.get_available_resource_attributes()
+
+            if total_only:
+                return {"total": len(attributes)}
+
             response = {
                 "attributes": attributes,
                 "total_count": len(attributes),
@@ -610,6 +771,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     @mcp.tool()
+    @debug_log_tool
     def discover_social_network(resource_attribute: str) -> Dict[str, Any]:
         """
         Discover social network of resources (e.g., people, systems).
@@ -636,8 +798,62 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     # =========================================================================
+    # CURSOR / PAGINATION
+    # =========================================================================
+
+    @mcp.tool()
+    @debug_log_tool
+    def get_cursor_results(cursor_id: str, page: int = 1) -> Dict[str, Any]:
+        """
+        Retrieve a specific page of results from a previous query cursor.
+
+        When a tool returns more results than fit in a single response, a
+        cursor_id is included in the pagination metadata. Use this tool
+        to fetch subsequent pages.
+
+        Args:
+            cursor_id: The cursor identifier returned by a previous tool call.
+            page: Page number to retrieve (1-indexed, default: 1).
+
+        Returns:
+            Dict with items for the requested page and pagination metadata.
+        """
+        try:
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
+            cursor_page = cursor_store.get_page(cursor_id, page)
+            return cursor_page.to_dict()
+
+        except KeyError as e:
+            return {"error": str(e)}
+        except ValueError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error(f"Error in get_cursor_results: {e}")
+            return {"error": f"Internal error: {str(e)}"}
+
+    # =========================================================================
     # RESOURCES
     # =========================================================================
+
+    @mcp.resource("server://info")
+    def get_server_info() -> str:
+        """
+        Get server metadata and status information.
+
+        Returns:
+            JSON string with server info.
+        """
+        info = {
+            "server": constants.MCP_IMPLEMENTATION_NAME,
+            "version": constants.MCP_IMPLEMENTATION_VERSION,
+            "ocel_loaded": ocel_state.get("ocel_data") is not None,
+            "generated_at": datetime.now().isoformat(),
+            "page_size": constants.DEFAULT_PAGE_SIZE
+        }
+        return json.dumps(info, indent=2)
 
     @mcp.resource("ocel://info")
     def get_ocel_info() -> str:
@@ -671,7 +887,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 "total_relations": len(ocel_data.relations),
                 "start_date": start_date,
                 "end_date": end_date,
-                "generated_at": datetime.now().isoformat(),
+                "generated_at": datetime.now().isoformat()
             }
             return json.dumps(info, indent=2)
 

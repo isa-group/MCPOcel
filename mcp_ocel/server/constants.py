@@ -16,6 +16,10 @@ MCP_IMPLEMENTATION_NAME: Final[str] = "ocel-mcp-server"
 # Initial semantic version of the server for external compatibility.
 MCP_IMPLEMENTATION_VERSION: Final[str] = "0.1.0"
 
+# Cursor / pagination defaults
+DEFAULT_PAGE_SIZE: Final[int] = 50
+MAX_CURSOR_AGE_SECONDS: Final[int] = 300
+
 
 class LoadStrategy(str, Enum):
     """OCEL file loading strategy."""

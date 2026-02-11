@@ -155,11 +155,15 @@ The following metadata describes the active dataset. USE ONLY these exact names 
 ### AVAILABLE TOOLS
 You have access to MCP tools for querying and analyzing the OCEL data.
 When you need data, call the appropriate tool - the system will execute it and provide results.
-If a query may return very large data, make multiple calls to the same tool in batches instead of single one.
 Limit tool-calling rounds per user query to {max_tool_calls}.
 
 **IMPORTANT: All temporal metrics (performance, bottlenecks) are returned in SECONDS (SI unit).**
 Convert times to human-readable format.
+
+### TOOL TIPS
+- **total_only**: Most tools accept `total_only=True`. Use it when you only need the count (e.g. "how many anomalies?") to save context.
+- **Pagination**: Large results are auto-paginated (max {page_size}/page). When the response contains `pagination.cursor_id`, call `get_cursor_results(cursor_id, page=N)` for more pages.
+- **Efficiency**: Prefer `total_only` first, then fetch full data only if needed.
 
 ### ANALYSIS GUIDELINES
 1. **Multiplicity First**: Do not assume a single Case ID. Analyze how events link multiple objects (1:n, m:n relations).
@@ -174,7 +178,7 @@ Convert times to human-readable format.
 - Use the available tools to get data before answering questions.
 """
 
-def format_system_prompt(meta: OcelMetadata) -> str:
+def format_system_prompt(meta: OcelMetadata, page_size: int) -> str:
     """
     Format the system prompt with real OCEL metadata.
     
@@ -192,6 +196,7 @@ def format_system_prompt(meta: OcelMetadata) -> str:
         start_date=meta.start_date,
         end_date=meta.end_date,
         max_tool_calls=MAX_TOOL_CALLS,
+        page_size=page_size,
     )
 
 
@@ -236,7 +241,6 @@ async def fetch_metadata_from_server(client: MCPClient) -> OcelMetadata:
         start_date=info.start_date,
         end_date=info.end_date,
     )
-
 
 async def execute_tool_calls(
     client: MCPClient, provider: Any, tool_calls: List[ToolCall]
@@ -318,7 +322,8 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
         print(f"  Tools available: {len(available_tools)}")
         
         # Build system prompt (tools are passed separately to OpenAI)
-        system_prompt = format_system_prompt(meta)
+        page_size = await mcp_client.get_server_page_size()
+        system_prompt = format_system_prompt(meta, page_size)
 
         try:
             provider = build_provider(args.provider)
