@@ -155,7 +155,7 @@ The following metadata describes the active dataset. USE ONLY these exact names 
 ### AVAILABLE TOOLS
 You have access to MCP tools for querying and analyzing the OCEL data.
 When you need data, call the appropriate tool - the system will execute it and provide results.
-If a query may return very large data, make multiple calls to the same tool in batches instead of sigle one.
+If a query may return very large data, make multiple calls to the same tool in batches instead of single one.
 Limit tool-calling rounds per user query to {max_tool_calls}.
 
 **IMPORTANT: All temporal metrics (performance, bottlenecks) are returned in SECONDS (SI unit).**
