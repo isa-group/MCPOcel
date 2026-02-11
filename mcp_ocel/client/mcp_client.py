@@ -286,8 +286,15 @@ class MCPClient:
             total_objects=data.get("total_objects", 0),
             total_events=data.get("total_events", 0),
             start_date=data.get("start_date", "N/A"),
-            end_date=data.get("end_date", "N/A"),
+            end_date=data.get("end_date", "N/A")
         )
+
+    async def get_server_page_size(self) -> int:
+        """Get page size from server"""
+        content = await self.read_resource("server://info")
+        data = json.loads(content) if content else {}
+
+        return data.get("page_size", 50)
 
     async def get_schema_section(self, section: str) -> Dict[str, Any]:
         """

@@ -21,6 +21,7 @@ from .data_loading import OCELLoader
 from .ocel_query_engine import OCELQueryEngine
 from .process_mining import ProcessMiningEngine
 from .visualization_engine import VisualizationEngine
+from .cursor import CursorStore
 from .tools import register_tools
 
 # Lazy import for retrieval engine (optional dependency)
@@ -81,6 +82,13 @@ def _cleanup_resources() -> None:
                 except Exception as e:
                     logger.warning(f"Error closing retrieval engine: {e}")
 
+            if cursor_store := _ocel_state.get("cursor_store"):
+                try:
+                    cursor_store.clear()
+                    logger.info("Cursor store cleared")
+                except Exception as e:
+                    logger.warning(f"Error clearing cursor store: {e}")
+
             _ocel_state.clear()
             logger.info("OCEL state cleared")
             
@@ -140,6 +148,12 @@ def _initialize_ocel_state(ocel_path: str, debug: bool = False) -> None:
         except Exception as e:
             logger.warning(f"Failed to initialize retrieval engine: {e}")
     
+    # Initialize cursor store for paginated results
+    cursor_store = CursorStore(
+        default_page_size=constants.DEFAULT_PAGE_SIZE,
+        max_age_seconds=constants.MAX_CURSOR_AGE_SECONDS,
+    )
+    
     # Store in global state
     _ocel_state["config"] = ocel_config
     _ocel_state["ocel_data"] = ocel_data
@@ -148,6 +162,7 @@ def _initialize_ocel_state(ocel_path: str, debug: bool = False) -> None:
     _ocel_state["mining_engine"] = mining_engine
     _ocel_state["viz_engine"] = viz_engine
     _ocel_state["retrieval_engine"] = retrieval_engine
+    _ocel_state["cursor_store"] = cursor_store
     
     _ocel_initialized = True
     
