@@ -1,106 +1,144 @@
+import uuid
 import logging
 from typing import Dict, Any, Tuple
 from github2ocel.transform.builder import OCELBuilder
-from github2ocel.transform.utils.helper import make_id
-from github2ocel.transform.utils.ensure import ensure_user, is_pull_request, get_node_type
+from github2ocel.transform.utils.helper import make_id, safe_timestamp
+from github2ocel.transform.utils.ensure import ensure_user, get_node_type, is_pull_request
 from github2ocel.transform.utils.activity import Activities
+from github2ocel.transform.model.models import ObjectInstance, Event
 
 logger = logging.getLogger(__name__)
-
-def is_pull_request(node: Dict[str, Any]) -> bool:
-    """Single contract based on fetcher tagging."""
-    return node.get("__type") == "PullRequest"
-
 
 def process_base_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> Tuple[str, bool]:
     """
     Creates the base object (Issue or PullRequest) and returns its ID and type.
     """
+
     node_type = get_node_type(node)
     is_pr = is_pull_request(node)
+    created_at = safe_timestamp(node.get("createdAt"))
 
     try:
-        # Generate a stable ID based on the PR/Issue number
         obj_id = make_id(repo_id, "pr" if is_pr else "issue", node["number"])
     except (KeyError, ValueError) as e:
         logger.error(f"Error generating ID for {node_type}: {e}")
         raise
 
-    # Base attributes
     attrs = {
-        "number": node["number"],
-        "title": node.get("title", ""),
-        "state": node.get("state", "OPEN")
+        "time": created_at,
+        "number": int(node["number"]),
+        "title": node.get("title", "")[:255],
+        "state": node.get("state", "OPEN"),
+        "url": node.get("url", ""),
+        "updated_at": safe_timestamp(node.get("updatedAt")),
+        "body_text": node.get("bodyText", "")[:10000],
+        "body_length": len(node.get("body", "") or ""),
+
+        # 3. Metadata Social
+        "reactions_count": node.get("reactions", {}).get("totalCount", 0)
     }
 
-    # PR-specific attributes
     if is_pr:
         attrs.update({
-            "merged": node.get("merged", False),
+            "merged": int(node.get("merged", False)),
+            "merged_at": safe_timestamp(node.get("mergedAt")),
             "head_ref": node.get("headRefName", ""),
             "base_ref": node.get("baseRefName", ""),
-            "is_draft": node.get("isDraft", False)
+            "is_draft": int(node.get("isDraft", False))
+        })
+    else:
+        # Exclusive attributes of Issues
+        attrs.update({
+            "state_reason": node.get("stateReason", "Ns/Nc") # COMPLETED vs NOT_PLANNED
         })
 
-    builder.add_object(obj_id, node_type, attrs)
+    obj = ObjectInstance(object_id=obj_id, object_type=node_type)
+    obj.add_snapshot(time=created_at, attributes=attrs)
+    obj.add_rel(target_id=repo_id, qualifier="contained_in")
+    builder.insert_object(obj)
+
     return obj_id, is_pr
 
 
 def map_main_events(node: Dict[str, Any], builder: OCELBuilder,
                     repo_id: str, obj_id: str, is_pr: bool) -> None:
-    """
-    Maps the fundamental events: Opened, Closed, and Merged.
-    """
-    author_id = ensure_user(builder, node.get("author", {}).get("login"))
+    created_at = safe_timestamp(node.get("createdAt"))
 
-    # Base event relationships
-    rels = [
-        builder.rel(obj_id, "target"),
-        builder.rel(repo_id, "source")
-    ]
-    if author_id:
-        rels.append(builder.rel(author_id, "author"))
+    author_login = node.get("author", {}).get("login")
 
-    # Highly reliable metadata (directly observed events)
-    obs_meta = {
-        "event_class": "observed",
+    author_id = ensure_user(builder, repo_id, author_login, timestamp=created_at)
+
+    audit_attrs = {
         "source": "github_graphql_api",
         "confidence": "high"
     }
+    # EVENT: OPENED
+    if created_at:
+        evt_open = Event(
+            event_id=str(uuid.uuid4()),
+            event_type=Activities.PR_OPENED if is_pr else Activities.ISSUE_OPENED,
+            time=created_at,
+            attributes=audit_attrs
+        )
+        evt_open.add_rel(obj_id, "subject")
+        evt_open.add_rel(repo_id, "context")
 
-    # 1. Opening Event
-    builder.add_event(
-        Activities.PR_OPENED if is_pr else Activities.ISSUE_OPENED,
-        node["createdAt"],
-        rels,
-        obs_meta
-    )
+        if author_id:
+            evt_open.add_rel(author_id, "actor")
 
-    # 2. Closing Event
+        builder.insert_event(evt_open)
+
+    # EVENT: CLOSED
     if node.get("closedAt"):
-        builder.add_event(
-            Activities.PR_CLOSED if is_pr else Activities.ISSUE_CLOSED,
-            node["closedAt"],
-            rels,
-            obs_meta
+        closed_at = node["closedAt"]
+        evt_close = Event(
+            event_id=str(uuid.uuid4()),
+            event_type=Activities.PR_CLOSED if is_pr else Activities.ISSUE_CLOSED,
+            time=closed_at,
+            attributes=audit_attrs
         )
+        evt_close.add_rel(obj_id, "subject")
+        builder.insert_event(evt_close)
 
-    # 3. Merge Event (PRs Only)
+    # EVENT: MERGED (Only PRs)
     if is_pr and node.get("mergedAt"):
-        builder.add_event(
-            Activities.PR_MERGED,
-            node["mergedAt"],
-            rels,
-            obs_meta
+        merged_at = node["mergedAt"]
+        evt_merge = Event(
+            event_id=str(uuid.uuid4()),
+            event_type=Activities.PR_MERGED,
+            time=merged_at,
+            attributes=audit_attrs
         )
+        evt_merge.add_rel(obj_id, "subject")
+
+        if node.get("mergedBy"):
+            merger_login = node["mergedBy"].get("login")
+            merger_id = ensure_user(builder, repo_id, merger_login, timestamp=merged_at)
+            if merger_id:
+                evt_merge.add_rel(merger_id, "actor")
+
+        builder.insert_event(evt_merge)
 
 def map_management_context(node: Dict[str, Any], builder: OCELBuilder, obj_id: str) -> None:
     milestone = node.get("milestone")
     if milestone:
         m_id = f"milestone_{milestone['id']}"
-        builder.add_object(m_id, "Milestone", {
-            "title": milestone["title"],
-            "due_on": milestone.get("dueOn")
-        })
-        # Link Issue/PR to Milestone
-        builder.add_object_relationship(obj_id, m_id, "belongs_to_milestone")
+        m_created_at = milestone.get("createdAt") or node.get("createdAt")
+
+        m_obj = ObjectInstance(object_id=m_id, object_type="Milestone")
+        m_obj.add_snapshot(
+            time=safe_timestamp(m_created_at),
+            attributes={
+                "title": milestone["title"],
+                "due_on": safe_timestamp(milestone.get("dueOn")),
+                "state": milestone.get("state", "OPEN")
+            }
+        )
+        builder.insert_object(m_obj)
+
+        # Link Issue -> Milestone (Proxy object pattern)
+        issue_proxy = ObjectInstance(object_id=obj_id, object_type="Unknown")
+        issue_proxy.add_rel(target_id=m_id, qualifier="belongs_to_milestone")
+
+        builder.insert_object(issue_proxy)
+

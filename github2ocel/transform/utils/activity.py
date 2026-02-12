@@ -44,8 +44,11 @@ class Activities:
     DEPLOYMENT_ERROR = "DeploymentError"
 
     THREAD_RESOLVED = "ReviewThreadResolved"
-    BRANCH_CREATED = "BranchCreated"
-    BRANCH_DELETED = "BranchDeleted"
     MILESTONE_ASSIGNED = "MilestoneAssigned"
     JOB_STARTED = "WorkflowJobStarted"
     JOB_COMPLETED = "WorkflowJobCompleted"
+
+    BRANCH_CREATED = "BranchCreated"
+    BRANCH_MERGED = "BranchMerged"
+    BRANCH_DELETED = "BranchDeleted"
+    BRANCH_OBSERVED = "BranchSnapshot"

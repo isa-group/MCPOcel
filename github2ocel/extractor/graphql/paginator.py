@@ -9,37 +9,39 @@ def paginate_nodes(
     client: GitHubClient,
     query: str,
     node_type: str,           # "issues", "pullRequests"
-    page_size: Optional[int] = None,
+    variables: Dict[str, Any],
 ) -> Generator[Dict[str, Any], None, None]:
     """
     Generic pagination engine for GraphQL.
     Handles GitHub's nested response (data -> repository -> node_type).
     """
 
+    current_vars = variables.copy()
+    current_vars["owner"] = client.owner
+    current_vars["repo"] = client.repo
+    page_size = variables.get("pageSize")
+    final_page_size = page_size if page_size else client.graphql_per_page
+
+    # Ensure that it is in the variables for the query.
+    current_vars["pageSize"] = final_page_size
+
     cursor = None
     current_page = 1
     total_nodes = 0
-
     max_pages = client.max_pages
-    final_page_size = page_size if page_size is not None else getattr(client, "graphql_per_page", 50)
 
     logger.info(f"Starting GraphQL pagination for {node_type} (Page Size: {final_page_size})...")
 
     while True:
-        # 1. Control de Límite de Páginas
+        # Page Limit Control
         if max_pages and current_page > max_pages:
             logger.info(f"Reached max page limit ({max_pages}) for {node_type}")
             break
 
-        variables = {
-            "owner": client.owner,
-            "repo": client.repo,
-            "cursor": cursor,
-            "pageSize": final_page_size,
-        }
+        current_vars["cursor"] = cursor
 
         try:
-            response = client.graphql(query, variables)
+            response = client.graphql(query, current_vars)
 
             data_content = response.get("data", response)
 
@@ -60,8 +62,8 @@ def paginate_nodes(
             container = repo_data.get(node_type, {})
             nodes = container.get("nodes", [])
 
+            count = 0
             if nodes:
-                count = 0
                 for node in nodes:
                     if node: # null filter
                         yield node
