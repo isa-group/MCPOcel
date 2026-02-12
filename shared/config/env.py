@@ -1,55 +1,14 @@
 import os
 from pathlib import Path
 from typing import Optional, List
+from dotenv import load_dotenv
 
-def load_env(env_file: Path = Path(".env")) -> None:
-    """
-    Loads variables from .env without external dependencies.
-    Does not overwrite variables already defined.
-    """
-    if not env_file.exists():
-        return
-    with env_file.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
+load_dotenv()
 
-            # Inline comments and secure split
-            if "=" in line:
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip()
-
-                # Remove quotation marks if present
-                if len(value) >= 2 and value[0] == value[-1] == '"':
-                    value = value[1:-1]
-                elif len(value) >= 2 and value[0] == value[-1] == "'":
-                    value = value[1:-1]
-
-                # Only define if it does not exist in the system
-                if key not in os.environ:
-                    os.environ[key] = value
-    with env_file.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-
-            key, value = line.split("=", 1)
-            key, value = key.strip(), value.strip()
-
-            # Only define if it does not exist in the system
-            if key not in os.environ:
-                os.environ[key] = value
-
-
-# Read env utility
 class Env:
     """
-    Simple and robust wrapper for obtaining environment variables
-    with validation, defaults, and conversions.
+    Wrapper simple y robusto para obtener variables de entorno
+    con validación, valores por defecto y conversión de tipos.
     """
 
     # STRING
@@ -72,12 +31,20 @@ class Env:
             if default is None:
                 raise KeyError(f"Missing required environment variable: {name}")
             return default
-        return int(val)
+        try:
+            return int(val)
+        except ValueError:
+            raise ValueError(f"Environment variable '{name}' must be an integer, got: '{val}'")
 
     @staticmethod
     def optional_int(name: str, default: Optional[int] = None) -> Optional[int]:
         val = os.getenv(name)
-        return int(val) if val is not None else default
+        if val is None or val.strip() == "":
+            return default
+        try:
+            return int(val.strip())
+        except ValueError:
+            raise ValueError(f"Environment variable '{name}' must be an integer, got: '{val}'")
 
     # FLOAT
     @staticmethod
@@ -87,12 +54,20 @@ class Env:
             if default is None:
                 raise KeyError(f"Missing required environment variable: {name}")
             return default
-        return float(val)
+        try:
+            return float(val)
+        except ValueError:
+            raise ValueError(f"Environment variable '{name}' must be a float, got: '{val}'")
 
     @staticmethod
     def optional_float(name: str, default: Optional[float] = None) -> Optional[float]:
         val = os.getenv(name)
-        return float(val) if val else default
+        if val is None:
+            return default
+        try:
+            return float(val)
+        except ValueError:
+            raise ValueError(f"Environment variable '{name}' must be a float, got: '{val}'")
 
     # BOOLEAN
     TRUE_VALUES = {"1", "true", "yes", "on", "y", "t"}
@@ -116,9 +91,11 @@ class Env:
     @staticmethod
     def optional_bool(name: str, default: Optional[bool] = None) -> Optional[bool]:
         val = os.getenv(name)
-        return Env.bool(name, default) if val is not None else default
+        if val is None:
+            return default
+        return Env.bool(name, default)
 
-    # List CSV
+    # LIST (CSV)
     @staticmethod
     def list(name: str, default: Optional[List[str]] = None) -> List[str]:
         val = os.getenv(name)
@@ -131,19 +108,13 @@ class Env:
     @staticmethod
     def optional_list(name: str, default: Optional[List[str]] = None) -> Optional[List[str]]:
         val = os.getenv(name)
-        return [item.strip() for item in val.split(",")] if val else default
+        if val is None:
+            return default
+        return [item.strip() for item in val.split(",") if item.strip()]
 
     # PATH
     @staticmethod
     def path(name: str, default: Optional[str] = None, must_exist: bool = False) -> Path:
-        """
-        Get a path from environment variable.
-
-        Args:
-            name: Environment variable name
-            default: Default value if not found
-            must_exist: If True, validates that path exists
-        """
         val = os.getenv(name, default)
         if val is None:
             raise KeyError(f"Missing required environment variable: {name}")
@@ -157,5 +128,7 @@ class Env:
 
     @staticmethod
     def optional_path(name: str, default: Optional[str] = None) -> Optional[Path]:
-        val = os.getenv(name)
-        return Path(val) if val else (Path(default) if default else None)
+        val = os.getenv(name, default)
+        if val:
+            return Path(val).expanduser().resolve()
+        return None
