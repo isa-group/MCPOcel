@@ -13,6 +13,7 @@ from github2ocel.extractor.github.deployments import fetch_deployments
 from github2ocel.extractor.github.issue_and_pr import fetch_github_data
 from github2ocel.extractor.github.releases import fetch_releases
 from github2ocel.extractor.github.workflow_run import fetch_workflow_runs
+from github2ocel.extractor.github.branches import fetch_branches
 # exceptions
 from github2ocel.client.exceptions import (
     RateLimitError,
@@ -21,13 +22,23 @@ from github2ocel.client.exceptions import (
     FatalError
 )
 
+from github2ocel.config.profiles import get_profile_vars
+
 logger = get_logger(__name__)
 
 # Returns True if successful, False if there were fatal errors.
 def run_extractor(ctx: RepoContext, builder: OCELBuilder, repo_id: str) -> bool:
+    """
+    Orchestrates the extraction process:
+    1. GraphQL Phase (Issues, PRs, Timeline)
+    2. REST Phase (Commits, workflows, releases)
+    """
 
     logger.info(f"--- Extractor Start: {ctx.owner}/{ctx.repo} ---")
-
+    stats = {
+        "commits": 0, "issues": 0, "runs": 0,
+        "releases": 0, "deployments": 0, "branches": 0
+    }
     try:
         client = GitHubClient.from_context(ctx)
     except Exception as e:
@@ -35,17 +46,30 @@ def run_extractor(ctx: RepoContext, builder: OCELBuilder, repo_id: str) -> bool:
         return False
 
     success = True
-
-    # 1. GraphQL phase
     try:
+        profile_vars = get_profile_vars("complete")
+        user_configured_limit = client.graphql_per_page
+        is_heavy = profile_vars.get("withReviews") or profile_vars.get("withTimeline")
+        safety_cap = 20 if is_heavy else 50
+        final_page_size = min(user_configured_limit, safety_cap)
+
+        variables = {
+                "owner": client.owner,
+                "repo": client.repo,
+                "pageSize": final_page_size,
+                **profile_vars
+            }
+
+        # 1. GraphQL phase
         logger.info("Starting GraphQL extraction...")
-        nodes = fetch_github_data(client)
+        nodes = fetch_github_data(client, variables)
         count_graphql = 0
 
         for node in nodes:
             process_issue_node(node, builder, repo_id)
             count_graphql += 1
 
+        stats["issues"] = count_graphql
         logger.info(f"GraphQL extraction completed ({count_graphql} nodes).")
 
     except (RateLimitError, RetryableError, GraphQLError) as e:
@@ -64,23 +88,22 @@ def run_extractor(ctx: RepoContext, builder: OCELBuilder, repo_id: str) -> bool:
     if not success:
         logger.error("Skipping REST phase due to previous errors.")
         client.close()
-        return False
+        return stats, False
 
     # 2. REST phase
     try:
         logger.info("Starting REST extraction...")
 
-        commits = fetch_commits_rest(client, max_detailed_total=50)
-        run_rest_transformation({"commits": commits}, builder, repo_id)
+        fetch_rest = {
+            "commits": fetch_commits_rest(client, max_detailed_total=None),
+            "runs": fetch_workflow_runs(client),
+            "releases": fetch_releases(client),
+            "deployments": fetch_deployments(client),
+            "branches": fetch_branches(client)
+        }
 
-        workflow_runs = fetch_workflow_runs(client)
-        run_rest_transformation({"runs": workflow_runs}, builder, repo_id)
-
-        releases = fetch_releases(client)
-        run_rest_transformation({"releases": releases}, builder, repo_id)
-
-        deployments = fetch_deployments(client)
-        run_rest_transformation({"deployments": deployments}, builder, repo_id)
+        processing_stats = run_rest_transformation(fetch_rest, builder, repo_id)
+        stats.update(processing_stats)
 
         logger.info("REST extraction completed.")
 
@@ -97,4 +120,4 @@ def run_extractor(ctx: RepoContext, builder: OCELBuilder, repo_id: str) -> bool:
         client.print_rate_limit_stats()
         client.close()
 
-    return success
+    return stats, success

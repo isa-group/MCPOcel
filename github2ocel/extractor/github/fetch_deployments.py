@@ -7,20 +7,14 @@ logger = get_logger(__name__)
 def fetch_deployments(
     client: GitHubClient,
 ) -> Generator[Dict[str, Any], None, None]:
-    
-    per_page = client.rest_per_page
 
 
     logger.info("---Fetching deployments and statuses ---")
     endpoint_list = f"/repos/{client.owner}/{client.repo}/deployments"
-    params = {
-        "per_page": per_page
-    }
+
     # Automatic pagination of the main list
     deployments_pages = client.rest_paginated(
-        endpoint=endpoint_list,
-        params=params,
-        per_page=per_page
+        endpoint=endpoint_list
     )
     count = 0
 
