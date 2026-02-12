@@ -50,7 +50,7 @@ class GitHubClient:
 
         self.rest_headers = {
             **self._base_headers,
-            "Accept": "application/vnd.github+json",
+            "Accept": "application/vnd.github.v3+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
         self.graphql_headers = self._base_headers.copy()
@@ -123,8 +123,6 @@ class GitHubClient:
                     self.limiter.update_from_response(response, resource)
                 except requests.RequestException as e:
                     self._handle_request_error(e)
-
-                self.limiter.update_from_response(response, resource)
 
                 # 4. Validate Status
                 self._check_status_code(response)
@@ -269,20 +267,23 @@ class GitHubClient:
             f"/repos/{self.owner}/{self.repo}/commits",
             params=params
         )
-    
     def _handle_request_error(self, e: Exception) -> None:
         """Convert request errors in our hierarchy."""
         if isinstance(e, requests.Timeout):
             raise NetworkError(f"Timeout: {e}")
         if isinstance(e, requests.ConnectionError):
             raise NetworkError(f"Connection Error: {e}")
-        # Si ya es una de nuestras excepciones, la dejamos pasar
+        # If it is already one of our exceptions, let it pass.
+        if isinstance(e, requests.exceptions.ChunkedEncodingError):
+            # This is a temporary network error/server overload.
+            raise NetworkError(f"Server Connection Broken (ChunkedEncodingError): {e}")
+
         raise e
 
     def _check_status_code(self, response: requests.Response):
         """Handles HTTP codes and throws the correct exceptions."""
+
         code = response.status_code
-        
         if 200 <= code < 300:
             return
 
@@ -296,10 +297,10 @@ class GitHubClient:
             if "rate limit" in msg.lower() or "secondary" in msg.lower():
                 raise RateLimitError("Secondary Rate Limit (403)", resource="core")
             raise PermissionError("Permission Denied (403)")
-        
+
         if code == 429:
             raise RateLimitError("Rate Limit Exceeded (429)", resource="core")
-        
+
         if 500 <= code < 600:
             raise ServerError(f"GitHub Server Error ({code})")
 
@@ -308,7 +309,7 @@ class GitHubClient:
 
     # Stadistics Rate Limit
     def print_rate_limit_stats(self):
-        logger.info("=== Rate Limit Stats ===")
+        logger.info("--- Rate Limit Stats ---")
         logger.info(f"Total requests: {self.limiter.total_requests}")
         logger.info(f"Wait events:   {self.limiter.total_waits}")
         logger.info(f"Wait time:     {self.limiter.total_wait_time:.2f}s")

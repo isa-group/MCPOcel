@@ -7,15 +7,14 @@ logger = get_logger(__name__)
 def fetch_releases(
     client: GitHubClient,
 ) -> Generator[Dict[str, Any], None, None]:
-    
-    per_page = client.rest_per_page
-
+    """
+    Fetches repository releases using standard pagination.
+    """
     logger.info("--- Fetching Releases ---")
-    params = {"per_page": per_page}
+
 
     releases_pages = client.rest_paginated(
-        endpoint=f"/repos/{client.owner}/{client.repo}/releases",
-        params=params
+        endpoint=f"/repos/{client.owner}/{client.repo}/releases"
     )
 
     count = 0
