@@ -1,256 +1,197 @@
 import sqlite3
-import json
-import uuid
-import logging
+import re
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Union
-
-logger = logging.getLogger(__name__)
+from typing import Any, Dict, Set, List
+from github2ocel.transform.model.models import Event, ObjectInstance
 
 class OCELBuilder:
-    """
-    OCEL 2.0 Builder optimised for large volumes of data with persistence in SQLite.
-    Includes batch handling, optional logging, and streaming export.
-    """
-    def __init__(self, db_path: Optional[Union[str, Path]] = None, log_level: int = logging.INFO):
-        self.db_path = Path(db_path) if db_path else Path("ocel_staging.db")
-        if self.db_path.exists():
-            self.db_path.unlink()
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self.conn = None
+        self.cursor = None
 
-        self.conn = sqlite3.connect(str(self.db_path))
-        self._setup_db()
-        self._all_attributes = set()
-        self.log_level = log_level
-        logging.basicConfig(level=log_level, format='[%(levelname)s] %(message)s')
-        logger.debug(f"SQLiteOCELBuilder initialized at {self.db_path}")
+        # Caches to optimise performance and avoid collisions
+        self.registered_event_types: Set[str] = set()
+        self.registered_object_types: Set[str] = set()
+        self.known_tables_columns: Dict[str, Set[str]] = {}
 
-    # Context manager
+        # Statistics
+        self.stats = {"events": 0, "objects": 0, "relationships": 0}
+
     def __enter__(self):
+        self.conn = sqlite3.connect(self.db_path)
+        self.cursor = self.conn.cursor()
+        self._configure_sqlite()
+        self._init_base_schema()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            self.conn.rollback()
-            logger.error(f"Exception occurred: {exc_val}. Rolled back transaction.")
-        self.close()
-
-    # Setup DB
-    def _setup_db(self):
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            CREATE TABLE objects (
-                oid TEXT PRIMARY KEY,
-                type TEXT NOT NULL,
-                ovmap_json TEXT NOT NULL
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE events (
-                eid TEXT PRIMARY KEY,
-                activity TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                vmap_json TEXT NOT NULL
-            )
-        """)
-        cursor.execute("CREATE INDEX idx_event_time ON events(timestamp)")
-        cursor.execute("""
-            CREATE TABLE event_object_map (
-                eid TEXT,
-                oid TEXT,
-                qualifier TEXT,
-                FOREIGN KEY(eid) REFERENCES events(eid),
-                FOREIGN KEY(oid) REFERENCES objects(oid)
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE object_relationships (
-                source_id TEXT,
-                target_id TEXT,
-                qualifier TEXT
-            )
-        """)
-        cursor.execute("CREATE INDEX idx_objects_type ON objects(type)")
-        cursor.execute("CREATE INDEX idx_events_activity ON events(activity)")
-        cursor.execute("CREATE INDEX idx_eom_eid ON event_object_map(eid)")
-        cursor.execute("CREATE INDEX idx_eom_oid ON event_object_map(oid)")
-        cursor.execute("CREATE INDEX idx_rel_source ON object_relationships(source_id)")
-        cursor.execute("CREATE INDEX idx_rel_target ON object_relationships(target_id)")
-
-        self.conn.commit()
-        logger.debug("Database schema initialized")
-
-    # Helpers
-    @staticmethod
-    def _normalize_timestamp(ts: str) -> str:
-        """Normalises any ISO8601 to UTC-Z"""
-        try:
-            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-        except Exception as e:
-            logger.warning(f"Invalid timestamp {ts}, using current UTC: {e}")
-            return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-    @staticmethod
-    def rel(object_id: str, qualifier: str) -> Dict[str, str]:
-        return {"objectId": str(object_id), "qualifier": str(qualifier)}
-
-
-    # Core methods
-    def add_object(self, obj_id: str, obj_type: str, attributes: Dict[str, Any]):
-        """Insert or update an object with versioned OVMap, implicit batch commit"""
-        now_iso = self._normalize_timestamp(datetime.now(timezone.utc).isoformat())
-        with self.conn:
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT ovmap_json FROM objects WHERE oid = ?", (obj_id,))
-            row = cursor.fetchone()
-            ovmap = json.loads(row[0]) if row else {}
-
-            for key, value in attributes.items():
-                self._all_attributes.add(key)
-                if key not in ovmap:
-                    ovmap[key] = []
-                if not ovmap[key] or ovmap[key][-1]["ocel:value"] != value:
-                    ovmap[key].append({"ocel:time": now_iso, "ocel:value": value})
-
-            cursor.execute("""
-                INSERT OR REPLACE INTO objects (oid, type, ovmap_json)
-                VALUES (?, ?, ?)
-            """, (obj_id, obj_type, json.dumps(ovmap)))
-            if self.log_level <= logging.DEBUG:
-                logger.debug(f"Object added: {obj_id}")
-
-    def add_object_relationship(self, source_id: str, target_id: str, qualifier: str):
-        with self.conn:
-            self.conn.execute("""
-                INSERT INTO object_relationships (source_id, target_id, qualifier)
-                VALUES (?, ?, ?)
-            """, (source_id, target_id, qualifier))
-            if self.log_level <= logging.DEBUG:
-                logger.debug(f"Relationship added: {source_id} -[{qualifier}]-> {target_id}")
-
-    def add_event(self, activity: str, timestamp: str,
-                  relationships: List[Dict[str, str]],
-                  attributes: Optional[Dict[str, Any]] = None) -> str:
-        """Record an event and relationships, implicit batch commit"""
-        event_id = str(uuid.uuid4())
-        vmap = attributes.copy() if attributes else {}
-        ts = self._normalize_timestamp(timestamp)
-
-        with self.conn:
-            for rel in relationships:
-                oid = rel["objectId"]
-                qual = rel["qualifier"]
-                vmap[f"ocel:qualifier:{oid}"] = qual
-                self.conn.execute("""
-                    INSERT INTO event_object_map (eid, oid, qualifier)
-                    VALUES (?, ?, ?)
-                """, (event_id, oid, qual))
-
-            self.conn.execute("""
-                INSERT INTO events (eid, activity, timestamp, vmap_json)
-                VALUES (?, ?, ?, ?)
-            """, (event_id, activity, ts, json.dumps(vmap)))
-            if self.log_level <= logging.DEBUG:
-                logger.debug(f"Event added: {event_id} - {activity} at {ts}")
-        return event_id
-
-    # Stats
-    def get_stats(self) -> Dict[str, int]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM events")
-        ev_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM objects")
-        obj_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM object_relationships")
-        rel_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM event_object_map")
-        evobj_count = cursor.fetchone()[0]
-        return {
-            "events": ev_count,
-            "objects": obj_count,
-            "relationships": rel_count,
-            "event_object_links": evobj_count
-        }
-
-    def get_object(self, oid: str) -> Optional[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT type, ovmap_json FROM objects WHERE oid = ?", (oid,))
-        row = cursor.fetchone()
-        if row:
-            obj_type, ovmap_json = row
-            return {"oid": oid, "type": obj_type, "ovmap": json.loads(ovmap_json)}
-        return None
-
-
-    # Export
-    def export_json(self, filename: Union[str, Path]):
-        """Complete streaming export: log, events, objects, and relationships."""
-        with open(filename, "w", encoding="utf-8") as f:
-            # 1. Metadata
-            f.write('{\n  "ocel:global-log": {\n')
-            f.write('    "ocel:version": "2.0",\n')
-            f.write('    "ocel:ordering": "timestamp",\n')
-            f.write(f'    "ocel:attribute-names": {json.dumps(sorted(list(self._all_attributes)))}\n')
-            f.write('  },\n')
-
-            # 2. Global Event & Object (Catálogo de tipos)
-            global_events = {row[0]: [] for row in self.conn.execute("SELECT DISTINCT activity FROM events")}
-            f.write(f'  "ocel:global-event": {json.dumps(global_events, indent=2)},\n')
-
-            global_objects = {row[0]: [] for row in self.conn.execute("SELECT DISTINCT type FROM objects")}
-            f.write(f'  "ocel:global-object": {json.dumps(global_objects, indent=2)},\n')
-
-            # 3. Events (Streaming)
-            f.write('  "ocel:events": [\n')
-            cursor = self.conn.execute("SELECT eid, activity, timestamp, vmap_json FROM events ORDER BY timestamp ASC")
-            first = True
-            for eid, activity, ts, vmap_json in cursor:
-                if not first: f.write(',\n')
-                rel_cursor = self.conn.execute("SELECT oid FROM event_object_map WHERE eid = ?", (eid,))
-                omap = [r[0] for r in rel_cursor]
-                event_dict = {
-                    "ocel:eid": eid, "ocel:activity": activity,
-                    "ocel:timestamp": ts, "ocel:omap": omap,
-                    "ocel:vmap": json.loads(vmap_json)
-                }
-                f.write(f"    {json.dumps(event_dict)}")
-                first = False
-            f.write('\n  ],\n')
-
-            # 4. Objects (Streaming)
-            f.write('  "ocel:objects": [\n')
-            cursor = self.conn.execute("SELECT oid, type, ovmap_json FROM objects")
-            first = True
-            for oid, otype, ovmap_json in cursor:
-                if not first: f.write(',\n')
-                obj_dict = {
-                    "ocel:oid": oid, "ocel:type": otype,
-                    "ocel:ovmap": json.loads(ovmap_json)
-                }
-                f.write(f"    {json.dumps(obj_dict)}")
-                first = False
-            f.write('\n  ],\n')
-
-            # 5. Object Relationships
-            f.write('  "ocel:object-relationships": [\n')
-            cursor = self.conn.execute("SELECT source_id, target_id, qualifier FROM object_relationships")
-            first = True
-            for sid, tid, qual in cursor:
-                if not first: f.write(',\n')
-                rel_dict = {
-                    "ocel:sourceId": sid,
-                    "ocel:targetId": tid,
-                    "ocel:qualifier": qual
-                }
-                f.write(f"    {json.dumps(rel_dict)}")
-                first = False
-            f.write('\n  ]\n}') # Close JSON
-
-        logger.info(f"Complete streaming export: log, events, objects, and relationships.")
-
-    # Close
-    def close(self):
         if self.conn:
+            self.conn.commit()
+            self._print_stats()
             self.conn.close()
-            logger.debug("Database connection closed")
+
+    def _configure_sqlite(self):
+        # Optimisation for mass writing
+        self.cursor.execute("PRAGMA journal_mode = WAL;")
+        self.cursor.execute("PRAGMA synchronous = NORMAL;")
+        self.cursor.execute("PRAGMA foreign_keys = OFF;") 
+
+    def _init_base_schema(self):
+        """Initialises the six mandatory base tables of the OCEL 2.0 standard."""
+        base_stmts = [
+            # 1. Base identifiers
+            "CREATE TABLE IF NOT EXISTS event (ocel_id TEXT PRIMARY KEY, ocel_type TEXT)",
+            "CREATE TABLE IF NOT EXISTS object (ocel_id TEXT PRIMARY KEY, ocel_type TEXT)",
+
+            # 2. Relationships (composite PK: full integrity)
+            """CREATE TABLE IF NOT EXISTS event_object (
+                ocel_event_id TEXT,
+                ocel_object_id TEXT,
+                ocel_qualifier TEXT,
+                PRIMARY KEY (ocel_event_id, ocel_object_id, ocel_qualifier)
+            )""",
+            """CREATE TABLE IF NOT EXISTS object_object (
+                ocel_source_id TEXT,
+                ocel_target_id TEXT,
+                ocel_qualifier TEXT,
+                PRIMARY KEY (ocel_source_id, ocel_target_id, ocel_qualifier)
+            )""",
+
+            # 3. Type mapping (Original Name -> Table Name)
+            "CREATE TABLE IF NOT EXISTS event_map_type (ocel_type TEXT PRIMARY KEY, ocel_type_map TEXT)",
+            "CREATE TABLE IF NOT EXISTS object_map_type (ocel_type TEXT PRIMARY KEY, ocel_type_map TEXT)"
+        ]
+        for stmt in base_stmts:
+            self.cursor.execute(stmt)
+
+        # Índex performance
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_eo_event ON event_object(ocel_event_id)")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_eo_object ON event_object(ocel_object_id)")
+
+    def _sanitize_name(self, name: str) -> str:
+        """Converts arbitrary names to safe table namesHaz clic para usar esta alternativa."""
+        return re.sub(r'[^a-zA-Z0-9]', '', name)
+
+    def _get_sql_type(self, value: Any) -> str:
+        if isinstance(value, int): return "INTEGER"
+        if isinstance(value, float): return "REAL"
+        # OCEL 2.0 uses TEXT for strings and dates, and INTEGER (0/1) or TEXT for booleans.
+        if isinstance(value, bool): return "INTEGER"
+        return "TEXT"
+
+    def _ensure_type_table(self, type_name: str, attributes: Dict[str, Any], is_event: bool) -> str:
+        """
+        OCEL 2.0:
+        1. Maps the type to a physical table.
+        2. Creates the table if it does not exist.
+        3. Adds columns if new attributes arrive (Schema Evolution).
+        """
+        prefix = "event" if is_event else "object"
+        map_table = f"{prefix}_map_type"
+        registry = self.registered_event_types if is_event else self.registered_object_types
+
+        sanitized = self._sanitize_name(type_name)
+
+        # 1. Register Mapping
+        if type_name not in registry:
+            self.cursor.execute(f"INSERT OR IGNORE INTO {map_table} VALUES (?, ?)", (type_name, sanitized))
+            registry.add(type_name)
+
+        table_name = f"{prefix}_{sanitized}"
+
+        # 2. Create Table (if not cached)
+        if table_name not in self.known_tables_columns:
+            if is_event:
+                # Events: Unique (Id)
+                sql = f'CREATE TABLE IF NOT EXISTS "{table_name}" ("ocel_id" TEXT PRIMARY KEY, "ocel_time" TEXT)'
+                cols = {"ocel_id", "ocel_time"}
+            else:
+                # Objects: History (ID + Time + ChangedField make the row unique)
+                sql = f"""CREATE TABLE IF NOT EXISTS "{table_name}" (
+                    "ocel_id" TEXT,
+                    "ocel_time" TEXT,
+                    "ocel_changed_field" TEXT,
+                    PRIMARY KEY ("ocel_id", "ocel_time", "ocel_changed_field")
+                )"""
+                cols = {"ocel_id", "ocel_time", "ocel_changed_field"}
+
+            self.cursor.execute(sql)
+            self.known_tables_columns[table_name] = cols
+
+        # 3. Schema Evolution (ALTER TABLE)
+        current_cols = self.known_tables_columns[table_name]
+        for key, val in attributes.items():
+            if key not in current_cols:
+                sql_type = self._get_sql_type(val)
+                try:
+                    self.cursor.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "{key}" {sql_type}')
+                    current_cols.add(key)
+                except sqlite3.OperationalError:
+                    pass # La columna ya existía (race condition rara)
+
+        return table_name
+
+    def insert_event(self, event: Event):
+        # Strict validation: Event without object is not valid in OCEL 2.0
+        if not event.relationships:
+             raise ValueError(f"OCEL 2.0 Violation: Event {event.id} ({event.type}) has no object relationships.")
+
+        # 1. Base Table (Idempotent)
+        self.cursor.execute("INSERT OR IGNORE INTO event VALUES (?, ?)", (event.id, event.type))
+
+        # 2. Dynamic Attribute Table
+        table_name = self._ensure_type_table(event.type, event.attributes, is_event=True)
+
+        cols = ['"ocel_id"', '"ocel_time"']
+        vals = [event.id, event.time]
+
+        for k, v in event.attributes.items():
+            cols.append(f'"{k}"')
+            vals.append(v if not isinstance(v, bool) else (1 if v else 0))
+
+        placeholders = ", ".join(["?"] * len(vals))
+        self.cursor.execute(f'INSERT OR IGNORE INTO "{table_name}" ({", ".join(cols)}) VALUES ({placeholders})', vals)
+
+        # 3. Relationships (batch insert)
+        if event.relationships:
+            # Event -> [(event_id, obj_id, qualifier), ...]
+            data = [(event.id, obj_id, qual) for obj_id, qual in event.relationships]
+            self.cursor.executemany("INSERT OR IGNORE INTO event_object VALUES (?, ?, ?)", data)
+            self.stats["relationships"] += len(data)
+
+        self.stats["events"] += 1
+
+    def insert_object(self, obj: ObjectInstance):
+        # 1. Base Table
+        self.cursor.execute("INSERT OR IGNORE INTO object VALUES (?, ?)", (obj.id, obj.type))
+
+        # 2. Snapshots (Change History)
+        for snap in obj.snapshots:
+            table_name = self._ensure_type_table(obj.type, snap.attributes, is_event=False)
+
+            cols = ['"ocel_id"', '"ocel_time"', '"ocel_changed_field"']
+            # NULL handling for composite PKs
+            safe_changed = snap.changed_field if snap.changed_field is not None else 'RESERVED_FULL_UPDATE'
+            vals = [obj.id, snap.time, safe_changed]
+
+            for k, v in snap.attributes.items():
+                cols.append(f'"{k}"')
+                vals.append(v if not isinstance(v, bool) else (1 if v else 0))
+
+            placeholders = ", ".join(["?"] * len(vals))
+            self.cursor.execute(f'INSERT OR IGNORE INTO "{table_name}" ({", ".join(cols)}) VALUES ({placeholders})', vals)
+
+        # 3. Object-Object Relationships
+        if obj.related_objects:
+             data = [(obj.id, target_id, qual) for target_id, qual in obj.related_objects]
+             self.cursor.executemany("INSERT OR IGNORE INTO object_object VALUES (?, ?, ?)", data)
+             self.stats["relationships"] += len(data)
+
+        self.stats["objects"] += 1
+
+    def _print_stats(self):
+        print(f"--- OCEL 2.0 Generation Completed ---")
+        print(f"Events: {self.stats['events']}")
+        print(f"Objects: {self.stats['objects']}")
+        print(f"Relations: {self.stats['relationships']}")
