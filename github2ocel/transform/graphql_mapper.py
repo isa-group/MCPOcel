@@ -1,19 +1,22 @@
 import logging
 from typing import Dict, Any
 
+from github2ocel.transform.builder import OCELBuilder
 from .mappers.issues_prs import process_base_node, map_main_events, map_management_context #, map_review_threads
 from .mappers.lifecycle import map_lifecycle_events
 from .mappers.timeline import map_timeline_events
 from .utils.ensure import get_node_type, is_pull_request
-from .mappers.devops import map_devops_events
 
 logger = logging.getLogger(__name__)
 
-def process_issue_node(node: Dict[str, Any], builder: Any, repo_id: str) -> None:
+def process_issue_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     """
-    Lead orchestrator for GraphQL nodes.
+    Main orchestrator for GraphQL nodes.
+    Receives a node (Issue or PR) and coordinates the extraction of all its events and objects.
     """
 
+    node_type = "Unknown"
+    node_number = "Unknown"
     try:
         # Validation of minimum required fields
         node_type = get_node_type(node)
@@ -38,17 +41,11 @@ def process_issue_node(node: Dict[str, Any], builder: Any, repo_id: str) -> None
         map_lifecycle_events(node, builder, repo_id, obj_id)
 
         # 5. Process workflow (Assignments, Review Requests)
-        map_timeline_events(node, builder, obj_id)
+        map_timeline_events(node, builder, obj_id, repo_id)
 
         # 6. Reviews thread
         # map_review_threads(node, builder, obj_id)
 
-        # . DevOps (Only PRs)
-        if is_pr:
-            map_devops_events(node, builder, obj_id)
-
-    except Exception as e:
-        logger.error(f"Error en {node_type} #{node_number}: {e}")
     except ValueError as value:
         # Semantic errors (e.g. unknown node type)
         logger.warning(f"Skipping node due to contract violation: {value}")

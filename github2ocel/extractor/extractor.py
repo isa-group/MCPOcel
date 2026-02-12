@@ -8,12 +8,12 @@ from github2ocel.transform.builder import OCELBuilder
 from github2ocel.transform.rest_mapper import run_rest_transformation
 from github2ocel.transform.graphql_mapper import process_issue_node
 
-from github2ocel.extractor.github.commit_rest import fetch_commits_rest
-from github2ocel.extractor.github.deployments import fetch_deployments
+from github2ocel.extractor.github.fetch_commits_rest import fetch_commits_rest
+from github2ocel.extractor.github.fetch_deployments import fetch_deployments
 from github2ocel.extractor.github.issue_and_pr import fetch_github_data
-from github2ocel.extractor.github.releases import fetch_releases
-from github2ocel.extractor.github.workflow_run import fetch_workflow_runs
-from github2ocel.extractor.github.branches import fetch_branches
+from github2ocel.extractor.github.fetch_releases import fetch_releases
+from github2ocel.extractor.github.fetch_workflow_runs import fetch_workflow_runs
+from github2ocel.extractor.github.fetch_branches import fetch_branches
 # exceptions
 from github2ocel.client.exceptions import (
     RateLimitError,

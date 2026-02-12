@@ -1,27 +1,24 @@
+import uuid
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any
 from github2ocel.transform.builder import OCELBuilder
 from github2ocel.transform.utils.ensure import ensure_user, is_pull_request
+from github2ocel.transform.utils.helper import safe_timestamp, calculate_duration
 from github2ocel.transform.utils.activity import Activities
+from github2ocel.transform.model.models import Event, ObjectInstance
 
 logger = logging.getLogger(__name__)
 
-# Audit metadata (High confidence)
-audit_meta = {
-        "event_class": "observed",
-        "source": "github_timeline_audit",
-        "confidence": "high"
-    }
-
-def map_timeline_events(node: Dict[str, Any], builder: OCELBuilder, target_id: str) -> None:
+def map_timeline_events(node: Dict[str, Any], builder: OCELBuilder, target_id: str, repo_id: str) -> None:
     """
     Timeline event orchestrator.
-    Filters and delegates each event according to its node type in GraphQL (__typename).
+    Maps assignments, reviews requested, and other timeline items.
     """
+    # Calculate is_pr once here to pass it down
+    base_time = node.get("createdAt") # root object (Issue/PR)
     is_pr = is_pull_request(node)
     timeline_nodes = node.get("timelineItems", {}).get("nodes", [])
 
-    # Dictionary of dispatchers to avoid nested IFs
     handlers = {
         "AssignedEvent": _handle_assignment,
         "UnassignedEvent": _handle_unassignment,
@@ -30,93 +27,159 @@ def map_timeline_events(node: Dict[str, Any], builder: OCELBuilder, target_id: s
     }
 
     for item in timeline_nodes:
-        if not item or not item.get("createdAt"):
-            continue
+        if not item or not item.get("createdAt"): continue
 
         typename = item.get("__typename")
         handler = handlers.get(typename)
 
         if handler:
             try:
-                handler(item, builder, target_id, is_pr)
+                # Dispatch with is_pr explicitly passed
+                handler(item, builder, target_id, is_pr, repo_id, base_time)
             except Exception as e:
-                logger.warning(f"Error processing time event {typename} on {target_id}: {e}")
+                logger.warning(f"Error processing timeline {typename} on {target_id}: {e}")
 
 
-def _handle_assignment(item: Dict[str, Any], builder: OCELBuilder, target_id: str, is_pr: bool):
-    """Handles the event of assigning a user to an issue or PR."""
+def _handle_assignment(
+        item: Dict[str, Any],
+        builder: OCELBuilder,
+        target_id: str,
+        is_pr: bool,
+        repo_id: str,
+        base_time: str):
+
+    ts = safe_timestamp(item["createdAt"])
     assignee_login = item.get("assignee", {}).get("login")
-    assignee_id = ensure_user(builder, assignee_login)
-
-
+    assignee_id = ensure_user(builder, repo_id, assignee_login, timestamp=ts)
 
     if assignee_id:
+        time_to_assign = calculate_duration(base_time, item["createdAt"])
         activity = Activities.PR_ASSIGNED if is_pr else Activities.ISSUE_ASSIGNED
-        builder.add_event(
-            activity,
-            item["createdAt"],
-            [
-                builder.rel(target_id, "target"),
-                builder.rel(assignee_id, "assignee")
-            ],
-            audit_meta
+
+        # Create Evento
+        evt = Event(
+            event_id=str(uuid.uuid4()),
+            event_type=activity,
+            time=ts,
+            attributes={
+                "source": "timeline",
+                "assignment_latency_seconds": time_to_assign
+            }
         )
-        # Persistent object relationship: defines who is currently responsible in the OCEL model.
-        builder.add_object_relationship(target_id, assignee_id, "assigned_to")
+        evt.add_rel(target_id, "target")
+        evt.add_rel(assignee_id, "assignee")
+
+        builder.insert_event(evt)
+
+        # Issue -> User
+        proxy_target = ObjectInstance(object_id=target_id, object_type="Unknown")
+        proxy_target.add_rel(target_id=assignee_id, qualifier="assigned_to")
+
+        builder.insert_object(proxy_target)
 
 
-def _handle_unassignment(item: Dict[str, Any], builder: OCELBuilder, target_id: str, is_pr: bool):
-    """Handles the event of removing an assignment."""
+def _handle_unassignment(
+        item: Dict[str, Any],
+        builder: OCELBuilder,
+        target_id: str,
+        is_pr: bool,
+        repo_id: str,
+        base_time: str):
+
+    ts = safe_timestamp(item["createdAt"])
     assignee_login = item.get("assignee", {}).get("login")
-    assignee_id = ensure_user(builder, assignee_login)
+    assignee_id = ensure_user(builder, repo_id, assignee_login, timestamp=ts)
 
     if assignee_id:
+        duration = calculate_duration(base_time, item["createdAt"])
         activity = Activities.PR_UNASSIGNED if is_pr else Activities.ISSUE_UNASSIGNED
-        builder.add_event(
-            activity,
-            item["createdAt"],
-            [
-                builder.rel(target_id, "target"),
-                builder.rel(assignee_id, "assignee")
-            ],
-            audit_meta
+
+        evt = Event(
+            event_id=str(uuid.uuid4()),
+            event_type=activity,
+            time=ts,
+            attributes={
+                "source": "timeline",
+                "lifecycle_duration_seconds": duration
+            }
         )
+        evt.add_rel(target_id, "target")
+        evt.add_rel(assignee_id, "unassigned_user")
 
+        builder.insert_event(evt)
 
-def _handle_review_requested(item: Dict[str, Any], builder: OCELBuilder, target_id: str, is_pr: bool):
-    """Handle the review request (only applies to PRs)."""
+def _handle_review_requested(
+        item: Dict[str, Any],
+        builder: OCELBuilder,
+        target_id: str,
+        is_pr: bool,
+        repo_id: str,
+        base_time: str):
+
     if not is_pr: return
+    ts = safe_timestamp(item["createdAt"])
 
-    reviewer_login = item.get("requestedReviewer", {}).get("login")
-    reviewer_id = ensure_user(builder, reviewer_login)
+    reviewer_node = item.get("requestedReviewer")
+    if not reviewer_node:
+        # It can be a Team or a deleted user. If there is no node, we skip it.
+        return
+
+    reviewer_login = reviewer_node.get("login") or reviewer_node.get("name")
+    reviewer_id = ensure_user(builder, repo_id, reviewer_login, timestamp=ts)
 
     if reviewer_id:
-        builder.add_event(
-            Activities.PR_REVIEW_REQUESTED,
-            item["createdAt"],
-            [
-                builder.rel(target_id, "target"),
-                builder.rel(reviewer_id, "reviewer")
-            ],
-            audit_meta
+        time_to_ready = calculate_duration(base_time, item["createdAt"])
+        evt = Event(
+            event_id=str(uuid.uuid4()),
+            event_type=Activities.PR_REVIEW_REQUESTED,
+            time=ts,
+            attributes={
+                "time_to_ready_seconds": time_to_ready,
+                "reviewer_login": reviewer_login
+            }
         )
-        builder.add_object_relationship(target_id, reviewer_id, "review_requested_from")
+        evt.add_rel(target_id, "target")
+        evt.add_rel(reviewer_id, "requested_reviewer")
+
+        builder.insert_event(evt)
+
+        # PR -> Reviewer
+        proxy_target = ObjectInstance(object_id=target_id, object_type="Unknown")
+        proxy_target.add_rel(target_id=reviewer_id, qualifier="review_requested_from")
+
+        builder.insert_object(proxy_target)
 
 
-def _handle_review_removed(item: Dict[str, Any], builder: OCELBuilder, target_id: str, is_pr: bool):
-    """Handles the cancellation of a review request."""
+def _handle_review_removed(
+        item: Dict[str, Any],
+        builder: OCELBuilder,
+        target_id: str,
+        is_pr: bool,
+        repo_id: str,
+        base_time: str):
+
     if not is_pr: return
+    ts = safe_timestamp(item["createdAt"])
 
-    reviewer_login = item.get("requestedReviewer", {}).get("login")
-    reviewer_id = ensure_user(builder, reviewer_login)
+    reviewer_node = item.get("requestedReviewer")
+    if not reviewer_node:
+        return
+
+    reviewer_login = reviewer_node.get("login") or reviewer_node.get("name")
+    reviewer_id = ensure_user(builder, repo_id, reviewer_login, timestamp=ts)
 
     if reviewer_id:
-        builder.add_event(
-            Activities.PR_REVIEW_REQUEST_REMOVED,
-            item["createdAt"],
-            [
-                builder.rel(target_id, "target"),
-                builder.rel(reviewer_id, "reviewer")
-            ],
-            audit_meta
+        removal_latency = calculate_duration(base_time, item["createdAt"])
+        evt = Event(
+            event_id=str(uuid.uuid4()),
+            event_type=Activities.PR_REVIEW_REQUEST_REMOVED,
+            time=ts,
+            attributes={
+                "seconds_since_creation": removal_latency,
+                "reason": "manual_removal"
+            }
         )
+        evt.add_rel(target_id, "target")
+        evt.add_rel(reviewer_id, "removed_reviewer")
+
+        builder.insert_event(evt)
