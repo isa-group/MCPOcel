@@ -3,9 +3,10 @@ import logging
 from typing import Dict, Any, Tuple
 from github2ocel.transform.builder import OCELBuilder
 from github2ocel.transform.utils.helper import make_id, safe_timestamp
-from github2ocel.transform.utils.ensure import ensure_user, get_node_type, is_pull_request
+from github2ocel.transform.utils.ensure import ensure_user
 from github2ocel.transform.utils.activity import Activities
 from github2ocel.transform.model.models import ObjectInstance, Event
+from github2ocel.utils.is_pull_request import is_pull_request
 
 logger = logging.getLogger(__name__)
 
@@ -14,14 +15,13 @@ def process_base_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) 
     Creates the base object (Issue or PullRequest) and returns its ID and type.
     """
 
-    node_type = get_node_type(node)
     is_pr = is_pull_request(node)
     created_at = safe_timestamp(node.get("createdAt"))
 
     try:
-        obj_id = make_id(repo_id, "pr" if is_pr else "issue", node["number"])
+        obj_id = make_id(repo_id, "issue", node["number"])
     except (KeyError, ValueError) as e:
-        logger.error(f"Error generating ID for {node_type}: {e}")
+        logger.error(f"Error generating ID for {repo_id}: {e}")
         raise
 
     attrs = {
@@ -44,7 +44,12 @@ def process_base_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) 
             "merged_at": safe_timestamp(node.get("mergedAt")),
             "head_ref": node.get("headRefName", ""),
             "base_ref": node.get("baseRefName", ""),
-            "is_draft": int(node.get("isDraft", False))
+            "is_draft": int(node.get("isDraft", False)),
+            "additions": node.get("additions", 0),
+            "deletions": node.get("deletions", 0),
+            "changed_files": node.get("changedFiles", 0),
+            "total_changes": node.get("additions", 0) + node.get("deletions", 0),
+            "participants_count": node.get("participants", {}).get("totalCount", 0)
         })
     else:
         # Exclusive attributes of Issues
@@ -52,9 +57,12 @@ def process_base_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) 
             "state_reason": node.get("stateReason", "Ns/Nc") # COMPLETED vs NOT_PLANNED
         })
 
+    node_type = "PullRequest" if is_pr else "Issue"
+
     obj = ObjectInstance(object_id=obj_id, object_type=node_type)
     obj.add_snapshot(time=created_at, attributes=attrs)
     obj.add_rel(target_id=repo_id, qualifier="contained_in")
+
     builder.insert_object(obj)
 
     return obj_id, is_pr
@@ -121,24 +129,23 @@ def map_main_events(node: Dict[str, Any], builder: OCELBuilder,
 
 def map_management_context(node: Dict[str, Any], builder: OCELBuilder, obj_id: str) -> None:
     milestone = node.get("milestone")
-    if milestone:
-        m_id = f"milestone_{milestone['id']}"
-        m_created_at = milestone.get("createdAt") or node.get("createdAt")
+    if not milestone:
+        return
 
-        m_obj = ObjectInstance(object_id=m_id, object_type="Milestone")
-        m_obj.add_snapshot(
-            time=safe_timestamp(m_created_at),
-            attributes={
-                "title": milestone["title"],
-                "due_on": safe_timestamp(milestone.get("dueOn")),
-                "state": milestone.get("state", "OPEN")
-            }
-        )
-        builder.insert_object(m_obj)
+    m_id = f"milestone_{milestone['id']}"
+    m_created_at = milestone.get("createdAt") or node.get("createdAt")
 
-        # Link Issue -> Milestone (Proxy object pattern)
-        issue_proxy = ObjectInstance(object_id=obj_id, object_type="Unknown")
-        issue_proxy.add_rel(target_id=m_id, qualifier="belongs_to_milestone")
+    m_obj = ObjectInstance(object_id=m_id, object_type="Milestone")
+    m_obj.add_snapshot(
+        time=safe_timestamp(m_created_at),
+        attributes={
+            "title": milestone.get("title", ""),
+            "due_on": safe_timestamp(milestone.get("dueOn")),
+            "state": milestone.get("state", "OPEN")
+        }
+    )
+    m_obj.add_rel(target_id=obj_id, qualifier="milestone_for")
 
-        builder.insert_object(issue_proxy)
+    # Issue/PR -> Milestone
+    builder.insert_object(m_obj)
 

@@ -52,3 +52,5 @@ class Activities:
     BRANCH_MERGED = "BranchMerged"
     BRANCH_DELETED = "BranchDeleted"
     BRANCH_OBSERVED = "BranchSnapshot"
+
+    TAG_CREATED = "TagCreated"
