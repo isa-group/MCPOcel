@@ -48,7 +48,8 @@ class RateLimiter:
 
         self.total_requests += 1
 
-    def update_from_graphql_errors(self, errors: List[Dict[str, Any]]):
+
+    def update_from_graphql_errors(self, errors: List[Dict[str, Any]], resource: str = "graphql"):
         for err in errors:
             if err.get("type") == "RATE_LIMITED":
-                raise RateLimitError("GraphQL rate limit")
+                raise RateLimitError("GraphQL rate limit", resource=resource)

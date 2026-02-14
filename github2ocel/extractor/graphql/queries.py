@@ -4,6 +4,7 @@ query GetIssues($owner: String!, $repo: String!, $cursor: String, $pageSize: Int
     issues(
       first: $pageSize
       after: $cursor
+      states: [OPEN, CLOSED],
       orderBy: {field: CREATED_AT, direction: ASC}
     ) {
       pageInfo {
@@ -11,20 +12,20 @@ query GetIssues($owner: String!, $repo: String!, $cursor: String, $pageSize: Int
         endCursor
       }
       nodes {
-        # --- IDENTIDAD & TRAZABILIDAD (NUEVO) ---
-        id                # Global Node ID (estable)
-        number            # ID humano (#42)
+        # --- Identity ---
+        id                # Global Node ID
+        number
         title
-        url               # Link directo
+        url
 
-        # --- ESTADO & CICLO DE VIDA ---
+        # --- Lifecycle ---
         state
         stateReason       # COMPLETED, NOT_PLANNED
         createdAt
         closedAt
-        updatedAt         # Vital para delta loads
+        updatedAt
 
-        # --- PLANIFICACIÓN (NUEVO) ---
+        # --- Planification ---
         milestone {
           id
           title
@@ -32,40 +33,53 @@ query GetIssues($owner: String!, $repo: String!, $cursor: String, $pageSize: Int
           dueOn
         }
 
-        # --- CONTENIDO (TEXT MINING) ---
+        # --- Textx mining ---
         body              # Markdown
         bodyText          # Texto plano
 
-        # --- PARTICIPACIÓN SOCIAL ---
-        author { login }
-
+        # --- Social ---
+        author { 
+          login
+          ... on User { id }
+          ... on Organization { id }
+          ... on Bot { id }
+        }
         # Ownership
         assignees(first: 5) {
-          nodes { login }
-        }
-
-        # Popularidad / Calor
-        reactions(first: 1) { totalCount }
-        participants(first: 0) { totalCount } # (NUEVO) Solo el contador, muy barato
-
-        labels(first: 10) {
-          nodes { name color }
-        }
-
-        # --- DISCUSIÓN ---
-        # Traemos 10 para contexto, y totalCount para métricas
-        comments(first: 10) {
-          totalCount      # (NUEVO) Para saber si hay 100 comentarios ocultos
           nodes {
+            login
+            id
+          }
+        }
+        reactions(first: 1) { totalCount }
+        participants(first: 0) { totalCount }
+        labels(first: 10) {
+          nodes {
+            id
+            name
+            color
+          }
+        }
+
+        # --- Comments ---
+        comments(first: 10) {
+          totalCount
+          nodes {
+            id
             createdAt
             lastEditedAt
             body
-            author { login }
+            author {
+              login
+              ... on User { id }
+              ... on Organization { id }
+              ... on Bot { id }
+            }
             reactions(first: 1) { totalCount }
           }
         }
 
-        # --- EVENTOS DEL PROCESO ---
+        # --- Process Events ---
         timelineItems(
           first: 50
           itemTypes: [
@@ -76,15 +90,15 @@ query GetIssues($owner: String!, $repo: String!, $cursor: String, $pageSize: Int
             CLOSED_EVENT
             REOPENED_EVENT
             LOCKED_EVENT
-            MILESTONED_EVENT # (NUEVO) Ya que traemos milestones
-            DEMILESTONED_EVENT # (NUEVO)
+            MILESTONED_EVENT
+            DEMILESTONED_EVENT
           ]
         ) {
           nodes {
             __typename
-            ... on AssignedEvent { createdAt assignee { ... on User { login } } }
-            ... on UnassignedEvent { createdAt assignee { ... on User { login } } }
-            ... on LabeledEvent { createdAt label { name } }
+            ... on AssignedEvent { createdAt assignee { ... on User { login id } } }
+            ... on UnassignedEvent { createdAt assignee { ... on User { login id } } }
+            ... on LabeledEvent { createdAt label { id name } }
             ... on ClosedEvent { createdAt }
             ... on ReopenedEvent { createdAt }
             ... on MilestonedEvent { createdAt milestoneTitle }
@@ -103,7 +117,7 @@ query GetPullRequests(
   $cursor: String
   $pageSize: Int!
 
-  # Variables de Control (Perfiles)
+  # Control (Profiles)
   $withReviews: Boolean! = true
   $withReviewComments: Boolean! = false
   $withThreads: Boolean! = false
@@ -114,17 +128,18 @@ query GetPullRequests(
     pullRequests(
       first: $pageSize
       after: $cursor
+      states: [OPEN, CLOSED, MERGED],
       orderBy: { field: CREATED_AT, direction: ASC }
     ) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        # --- IDENTIDAD ---
+        # --- Identity ---
         id
         number
         title
         url
 
-        # --- ESTADO ---
+        # --- State ---
         state
         isDraft
         createdAt
@@ -133,33 +148,38 @@ query GetPullRequests(
         merged
         mergedAt
 
-        # --- RAMAS & COMMITS ---
+        # --- Branches & Commits ---
         headRefName
-        headRefOid      # SHA del último commit (Vital para enlazar con REST)
+        headRefOid
         baseRefName
 
-        # --- ESFUERZO (Métricas) ---
+        # --- Metrics ---
         additions
         deletions
         changedFiles
-        commits { totalCount } # Solo conteo, el detalle va por REST
+        commits { totalCount }
 
-        # --- CONTENIDO ---
+        # --- Content ---
         body
         bodyText
 
-        # --- PARTICIPACIÓN ---
-        author { login }
-        assignees(first: 5) { nodes { login } }
-        participants(first: 0) { totalCount } # Métricas baratas
+        # --- Social ---
+        author {
+          login
+          ... on User { id }
+          ... on Organization { id }
+          ... on Bot { id }
+        }
+        assignees(first: 5) { nodes { login id } }
+        participants(first: 0) { totalCount }
         reactions(first: 1) { totalCount }
-
+        
         labels(first: 10) {
           nodes {
             id
             name
             color
-            }
+          }
         }
 
         milestone {
@@ -169,44 +189,62 @@ query GetPullRequests(
           dueOn
         }
 
-        # --- REVIEWS (Configurable) ---
+        # --- Reviews ---
         reviews(first: 20) @include(if: $withReviews) {
           totalCount
           nodes {
+            id
             state
             submittedAt
-            author { login }
+            author { 
+              login 
+              ... on User { id } 
+            }
             body
             comments(first: 10) @include(if: $withReviewComments) {
               totalCount
               nodes {
+                id
                 createdAt
                 body
                 path
                 position
-                author { login }
+                author { 
+                  login 
+                  ... on User { id }
+                }
               }
             }
           }
         }
 
-        # --- THREADS (Configurable) ---
+        # --- Review Threads ---
         reviewThreads(first: 20) @include(if: $withThreads) {
           totalCount
           nodes {
+          id
             isResolved
-            resolvedBy { login }
+            resolvedBy { 
+              login 
+              ... on User { id } 
+            }
             comments(first: 20) {
               nodes {
+              id
                 createdAt
                 body
-                author { login }
+                author { 
+                  login 
+                  ... on User { id }
+                  ... on Organization { id }
+                  ... on Bot { id }
+                }
               }
             }
           }
         }
 
-        # --- CI/CD (Configurable) ---
+        # --- CI/CD ---
         statusCheckRollup @include(if: $withStatusChecks) {
           contexts(first: 50) {
             nodes {
@@ -221,7 +259,7 @@ query GetPullRequests(
           }
         }
 
-        # --- TIMELINE (Configurable) ---
+        # --- Timeline ---
         timelineItems(
           first: 50
           itemTypes: [
@@ -234,8 +272,29 @@ query GetPullRequests(
         ) @include(if: $withTimeline) {
           nodes {
             __typename
-            ... on AssignedEvent { createdAt assignee { ... on User { login } } }
-            ... on ReviewRequestedEvent { createdAt requestedReviewer { ... on User { login } ... on Team { name } } }
+            ... on AssignedEvent {
+              createdAt
+              assignee {
+                ... on User { login id }
+              }
+            }
+            ... on UnassignedEvent {
+              createdAt
+              assignee {
+                ... on User {
+                  login
+                  id
+                }
+              }
+            }
+            ... on ReviewRequestedEvent {
+              createdAt
+              requestedReviewer {
+                __typename
+                ... on User { login id } 
+                ... on Team { name }
+              }
+            }
             ... on MergedEvent { createdAt mergeRefName }
             ... on HeadRefForcePushedEvent { createdAt }
             ... on MilestonedEvent { createdAt milestoneTitle }
@@ -245,7 +304,6 @@ query GetPullRequests(
     }
   }
 
-  # --- OBSERVABILIDAD ---
   rateLimit {
     cost
     remaining
