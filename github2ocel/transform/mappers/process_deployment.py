@@ -10,38 +10,38 @@ from github2ocel.transform.model.models import Event, ObjectInstance
 logger = logging.getLogger(__name__)
 
 
-def process_deployment(deployment: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
+def process_deployment(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     """
     Process a deployment from REST API with OCEL 2.0 compliance.
     """
-    if not deployment.get("id"):
+    if not node.get("id"):
         return
 
     # 1. Ensure Object (Deployment)
     # Note: ensure_deployment calculates its own timestamp internally from the dict
-    dep_id = ensure_deployment(builder, repo_id, deployment)
+    dep_id = ensure_deployment(builder, repo_id, node)
     if not dep_id:
         return
 
     # Extract timestamp for events/relationships
-    ts_created = safe_timestamp(deployment.get("created_at"))
+    ts_created = safe_timestamp(node.get("created_at"))
 
     # 2. Dependencies (Commit & User)
-    sha = deployment.get("sha")
+    sha = node.get("sha")
     commit_id = None
 
-    dep_proxy = ObjectInstance(object_id=dep_id, object_type="Deployment")
+    deployment = ObjectInstance(object_id=dep_id, object_type="Deployment")
 
     if sha:
         commit_id = ensure_commit(builder, repo_id, sha, timestamp=ts_created)
         if commit_id:
             # O2O Relationship
-            dep_proxy.add_rel(target_id=commit_id, qualifier="deploys_commit")
+            deployment.add_rel(target_id=commit_id, qualifier="deploys_commit")
 
-    creator_login = deployment.get("creator", {}).get("login")
+    creator_login = node.get("creator", {}).get("login")
     creator_id = ensure_user(builder, repo_id, creator_login, timestamp=ts_created)
 
-    builder.insert_object(dep_proxy)
+    builder.insert_object(deployment)
 
     # 4. Event: Deployment Created
     try:
@@ -50,8 +50,8 @@ def process_deployment(deployment: Dict[str, Any], builder: OCELBuilder, repo_id
             event_type=Activities.DEPLOYMENT_CREATED,
             time=ts_created,
             attributes={
-                "environment": deployment.get("environment", "unknown"),
-                "ref": deployment.get("ref", ""),
+                "environment": node.get("environment", "unknown"),
+                "ref": node.get("ref", ""),
                 "source": "rest_api"
             }
         )
@@ -68,7 +68,7 @@ def process_deployment(deployment: Dict[str, Any], builder: OCELBuilder, repo_id
 
     # 5. Process Deployment Statuses
     # We only take the latest status usually, or iterate if historical data is available
-    statuses = deployment.get("statuses", [])
+    statuses = node.get("statuses", [])
 
     if statuses:
         latest_status = statuses[0]
@@ -95,7 +95,7 @@ def process_deployment(deployment: Dict[str, Any], builder: OCELBuilder, repo_id
                     time=ts_updated,
                     attributes={
                         "state": state,
-                        "environment": deployment.get("environment", "unknown"),
+                        "environment": node.get("environment", "unknown"),
                         "description": latest_status.get("description", "")[:255]
                     }
                 )

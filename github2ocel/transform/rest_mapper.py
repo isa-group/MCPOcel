@@ -2,7 +2,8 @@ import logging
 from typing import List, Dict, Any
 from .mappers.process_commit_rest import process_commit_rest
 from .mappers.process_workflow_run import process_workflow_run
-from .mappers.process_deployment import process_release, process_deployment
+from .mappers.process_deployment import process_deployment
+from .mappers.process_release import process_release
 from .mappers.process_branch import process_branch
 
 logger = logging.getLogger(__name__)

@@ -2,21 +2,20 @@ import uuid
 import logging
 from typing import Dict, Any
 from github2ocel.transform.builder import OCELBuilder
-from github2ocel.transform.utils.ensure import ensure_user, is_pull_request
+from github2ocel.transform.utils.ensure import ensure_user, ensure_team
 from github2ocel.transform.utils.helper import safe_timestamp, calculate_duration
 from github2ocel.transform.utils.activity import Activities
 from github2ocel.transform.model.models import Event, ObjectInstance
 
 logger = logging.getLogger(__name__)
 
-def map_timeline_events(node: Dict[str, Any], builder: OCELBuilder, target_id: str, repo_id: str) -> None:
+def map_timeline_events(node: Dict[str, Any], builder: OCELBuilder, target_id: str, repo_id: str, is_pr: bool) -> None:
     """
     Timeline event orchestrator.
     Maps assignments, reviews requested, and other timeline items.
     """
     # Calculate is_pr once here to pass it down
     base_time = node.get("createdAt") # root object (Issue/PR)
-    is_pr = is_pull_request(node)
     timeline_nodes = node.get("timelineItems", {}).get("nodes", [])
 
     handlers = {
@@ -121,14 +120,23 @@ def _handle_review_requested(
 
     reviewer_node = item.get("requestedReviewer")
     if not reviewer_node:
-        # It can be a Team or a deleted user. If there is no node, we skip it.
+        logger.debug(f"ReviewRequestedEvent on {target_id} has no requestedReviewer data")
         return
+    
+    reviewer_id = None
+    typename = reviewer_node.get("__typename")
 
-    reviewer_login = reviewer_node.get("login") or reviewer_node.get("name")
-    reviewer_id = ensure_user(builder, repo_id, reviewer_login, timestamp=ts)
+    if typename == "User":
+        login = reviewer_node.get("login")
+        if login:
+            reviewer_id = ensure_user(builder, repo_id, login, timestamp=ts)
+    elif typename == "Team":
+        reviewer_id = ensure_user(builder, repo_id, reviewer_login, timestamp=ts)
 
     if reviewer_id:
         time_to_ready = calculate_duration(base_time, item["createdAt"])
+        reviewer_login = reviewer_node.get("login") or reviewer_node.get("name", "Unknown")
+        
         evt = Event(
             event_id=str(uuid.uuid4()),
             event_type=Activities.PR_REVIEW_REQUESTED,
@@ -162,11 +170,23 @@ def _handle_review_removed(
     ts = safe_timestamp(item["createdAt"])
 
     reviewer_node = item.get("requestedReviewer")
+
     if not reviewer_node:
         return
-
-    reviewer_login = reviewer_node.get("login") or reviewer_node.get("name")
-    reviewer_id = ensure_user(builder, repo_id, reviewer_login, timestamp=ts)
+    reviewer_id = None
+    typename = reviewer_node.get("__typename")
+    
+    if typename == "User":
+        login = reviewer_node.get("login")
+        if login:
+            reviewer_id = ensure_user(builder, repo_id, login, timestamp=ts)
+    elif typename == "Team":
+        reviewer_id = ensure_team(builder, repo_id, reviewer_node)
+    else:
+        # Fallback if __typename is not present
+        reviewer_name = reviewer_node.get("login") or reviewer_node.get("name")
+        if reviewer_name:
+            reviewer_id = ensure_user(builder, repo_id, reviewer_name, timestamp=ts)
 
     if reviewer_id:
         removal_latency = calculate_duration(base_time, item["createdAt"])
@@ -176,7 +196,8 @@ def _handle_review_removed(
             time=ts,
             attributes={
                 "seconds_since_creation": removal_latency,
-                "reason": "manual_removal"
+                "reason": "manual_removal",
+                "reviewer_type": typename or "Unknown"
             }
         )
         evt.add_rel(target_id, "target")
