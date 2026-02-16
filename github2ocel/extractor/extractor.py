@@ -8,12 +8,18 @@ from github2ocel.transform.builder import OCELBuilder
 from github2ocel.transform.rest_mapper import run_rest_transformation
 from github2ocel.transform.graphql_mapper import process_issue_node
 
-from github2ocel.extractor.github.fetch_commits_rest import fetch_commits_rest
-from github2ocel.extractor.github.fetch_deployments import fetch_deployments
+# from github2ocel.extractor.github.fetch_commits_rest import fetch_commits_rest
+# from github2ocel.extractor.github.fetch_deployments import fetch_deployments
 from github2ocel.extractor.github.issue_and_pr import fetch_github_data
 from github2ocel.extractor.github.fetch_releases import fetch_releases
 from github2ocel.extractor.github.fetch_workflow_runs import fetch_workflow_runs
 from github2ocel.extractor.github.fetch_branches import fetch_branches
+from github2ocel.extractor.github.fetch_commits_graphql import fetch_commits_graphql
+from github2ocel.extractor.github.fetch_deployments_graphql import fetch_deployments_graphql
+from github2ocel.extractor.github.fetch_tags_graphql import fetch_tags_graphql
+from github2ocel.transform.mappers.process_commit_rest import process_commit_graphql
+from github2ocel.transform.mappers.process_deployment_graphql import process_deployment_graphql
+from github2ocel.transform.mappers.process_tag import process_tag
 # exceptions
 from github2ocel.client.exceptions import (
     RateLimitError,
@@ -37,7 +43,8 @@ def run_extractor(ctx: RepoContext, builder: OCELBuilder, repo_id: str) -> bool:
     logger.info(f"--- Extractor Start: {ctx.owner}/{ctx.repo} ---")
     stats = {
         "commits": 0, "issues": 0, "runs": 0,
-        "releases": 0, "deployments": 0, "branches": 0
+        "releases": 0, "deployments": 0, "branches": 0,
+        "tag": 0
     }
     try:
         client = GitHubClient.from_context(ctx)
@@ -86,19 +93,78 @@ def run_extractor(ctx: RepoContext, builder: OCELBuilder, repo_id: str) -> bool:
         success = False
 
     if not success:
+        client.close()
+        return stats, False
+    
+    # Commits
+    try:
+        logger.info("Starting Optimized Commit Extraction (GraphQL)...")
+        
+        commit_nodes = fetch_commits_graphql(client, page_size=50)
+        
+        count_commits = 0
+        for node in commit_nodes:
+            process_commit_graphql(node, builder, repo_id)
+            count_commits += 1
+            
+        stats["commits"] = count_commits
+        logger.info(f"Commits processed: {count_commits}")
+    except Exception as e:
+        logger.error(f"Critical error fetching commits via GraphQL: {e}")
+        success = False
+
+    # Deployments
+    if success:
+        try:
+            logger.info("Starting Optimized Deployment Extraction (GraphQL)...")
+
+            dep_nodes = fetch_deployments_graphql(client, page_size=40)
+            
+            count_deps = 0
+            for node in dep_nodes:
+                process_deployment_graphql(node, builder, repo_id)
+                count_deps += 1
+                
+            stats["deployments"] = count_deps
+            logger.info(f"Deployments processed: {count_deps}")
+
+        except Exception as e:
+            logger.error(f"Error fetching deployments via GraphQL: {e}")
+            success = False
+    
+    # Tags
+    if success:
+        try:
+            logger.info("Starting Optimized Tags Extraction (GraphQL)...")
+            tag_nodes = fetch_tags_graphql(client, page_size=100)
+            
+            count_tags = 0
+            for node in tag_nodes:
+                process_tag(node, builder, repo_id)
+                count_tags += 1
+                
+            stats["tags"] = count_tags # Asegúrate de inicializar esta key en stats={} al principio
+            logger.info(f"Tags processed: {count_tags}")
+
+        except Exception as e:
+            logger.error(f"Error fetching tags via GraphQL: {e}")
+
+    if not success:
         logger.error("Skipping REST phase due to previous errors.")
         client.close()
         return stats, False
+    
+
 
     # 2. REST phase
     try:
         logger.info("Starting REST extraction...")
 
         fetch_rest = {
-            "commits": fetch_commits_rest(client, max_detailed_total=None),
+            # "commits": fetch_commits_rest(client, max_detailed_total=None),
             "runs": fetch_workflow_runs(client),
             "releases": fetch_releases(client),
-            "deployments": fetch_deployments(client),
+            # "deployments": fetch_deployments(client),
             "branches": fetch_branches(client)
         }
 

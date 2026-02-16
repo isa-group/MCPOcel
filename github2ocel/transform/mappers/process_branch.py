@@ -24,8 +24,7 @@ def process_branch(branch: Dict[str, Any], builder: OCELBuilder, repo_id: str) -
         return
 
 
-    commit_node = branch.get("commit", {})
-    sha = commit_node.get("sha")
+    sha = branch.get("commit", {}).get("sha")
 
     # Note: In the branches API, “commit” usually provides a URL but not a direct date.
     # For security -> timestamp "observation" if there is no actual date.

@@ -5,7 +5,7 @@ from github2ocel.transform.builder import OCELBuilder
 from github2ocel.transform.utils.helper import safe_timestamp, calculate_duration
 from github2ocel.transform.utils.ensure import (
     ensure_comment, ensure_user, ensure_label, ensure_file,
-    ensure_review_comment, is_pull_request, ensure_commit, make_id
+    ensure_review_comment, ensure_commit, make_id
 )
 from github2ocel.transform.utils.activity import Activities
 from github2ocel.transform.model.models import ObjectInstance, Event
@@ -13,7 +13,7 @@ from github2ocel.transform.model.models import ObjectInstance, Event
 logger = logging.getLogger(__name__)
 
 def map_lifecycle_events(node: Dict[str, Any], builder: OCELBuilder,
-                         repo_id: str, target_id: str) -> None:
+                         repo_id: str, target_id: str, is_pr: bool) -> None:
     """
     Lifecycle event orchestrator (static).
     Maps events that are not timeline events
@@ -23,7 +23,7 @@ def map_lifecycle_events(node: Dict[str, Any], builder: OCELBuilder,
     _map_comments(node, builder, repo_id, target_id)
 
     # Reviews are exclusive to Pull Requests.
-    if is_pull_request(node):
+    if is_pr:
         _map_reviews(node, builder, repo_id, target_id)
         _map_pr_commits(node, builder, target_id, repo_id)
         _map_pr_check_runs(node, builder, target_id, repo_id)
@@ -50,12 +50,7 @@ def _map_labels(node: Dict[str, Any], builder: OCELBuilder,
         if not label_id:
             continue
 
-        proxy_target = ObjectInstance(object_id=target_id, object_type="Unknown")
-        proxy_target.add_rel(target_id=label_id, qualifier="has_label")
-        builder.insert_object(proxy_target)
-
         # Create Event (LABEL_ADDED)
-
         delay = calculate_duration(node.get("createdAt"), lbl.get("createdAt"))
 
         evt = Event(
@@ -306,7 +301,7 @@ def _map_pr_check_runs(node: Dict[str, Any], builder: OCELBuilder, pr_id: str, r
         pr_proxy = ObjectInstance(object_id=pr_id, object_type="PullRequest")
         pr_proxy.add_rel(target_id=job_id, qualifier="validated_by_job")
 
-        builder.insert_object(job_obj)
+        # builder.insert_object(job_obj)
         builder.insert_object(pr_proxy)
 
         # Started
@@ -342,3 +337,28 @@ def _map_pr_check_runs(node: Dict[str, Any], builder: OCELBuilder, pr_id: str, r
             evt_end.add_rel(pr_id, "pull_request_context")
 
             builder.insert_event(evt_end)
+
+
+def _map_review_threads(node, builder, pr_id, repo_id):
+    for thread in node.get("reviewThreads", {}).get("nodes", []):
+        thread_id = make_id(repo_id, "thread", thread["id"])
+        
+        thread_obj = ObjectInstance(object_id=thread_id, object_type="ReviewThread")
+        thread_obj.add_snapshot(
+            time=safe_timestamp(thread.get("createdAt")),
+            attributes={
+                "is_resolved": int(thread.get("isResolved", False)),
+                "resolved_by": thread.get("resolvedBy", {}).get("login")
+            }
+        )
+        builder.insert_object(thread_obj)
+        
+        if thread.get("isResolved"):
+            evt = Event(
+                event_type=Activities.THREAD_RESOLVED,
+                time=safe_timestamp(thread.get("resolvedAt")),
+                attributes={"resolver": thread.get("resolvedBy", {}).get("login")}
+            )
+            evt.add_rel(thread_id, "thread")
+            evt.add_rel(pr_id, "pull_request")
+            builder.insert_event(evt)
