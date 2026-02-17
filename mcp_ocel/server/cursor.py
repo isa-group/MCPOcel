@@ -166,6 +166,43 @@ class CursorStore:
             has_previous=page > 1,
         )
 
+    def get_all_items(self, cursor_id: str) -> List[Any]:
+        """
+        Retrieve **all** items stored in a cursor (unpaginated).
+
+        This is used internally by the tool-chaining mechanism so that a
+        downstream tool can operate on the full result set produced by an
+        upstream tool, regardless of pagination boundaries.
+
+        Args:
+            cursor_id: The cursor identifier.
+
+        Returns:
+            The complete list of items stored in the cursor.
+
+        Raises:
+            KeyError: cursor not found or expired.
+        """
+        with self._lock:
+            entry = self._store.get(cursor_id)
+
+        if entry is None:
+            raise KeyError(
+                f"Cursor '{cursor_id}' not found or expired. "
+                "Please re-execute the original query."
+            )
+
+        # Check expiry
+        age = (datetime.utcnow() - entry.created_at).total_seconds()
+        if age > self.max_age_seconds:
+            self._remove(cursor_id)
+            raise KeyError(
+                f"Cursor '{cursor_id}' expired after {self.max_age_seconds}s. "
+                "Please re-execute the original query."
+            )
+
+        return list(entry.results)
+
     def clear(self) -> None:
         """Remove all cursors (used during shutdown)."""
         with self._lock:
