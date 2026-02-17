@@ -141,44 +141,39 @@ async def fetch_available_tools(client: MCPClient) -> List[Dict[str, Any]]:
 
 
 SYSTEM_PROMPT_TEMPLATE = """
-### ROLE & OBJECTIVE
-You are an Expert in Object-Centric Process Mining (OCPM) analyzing OCEL 2.0 logs.
-Your goal is to discover process inefficiencies, interactions, and flow patterns.
+You are an OCEL 2.0 process-mining analyst. Discover inefficiencies, interactions, and flow patterns.
 
-### DYNAMIC CONTEXT (Current Loaded Log)
-The following metadata describes the active dataset. USE ONLY these exact names for queries:
-- **Object Types**: {object_types_list}
-- **Event Types**: {event_types_list}
-- **Log Stats**: {total_objects:,} objects, {total_events:,} events.
-- **Time Range**: {start_date} to {end_date}.
+DATASET
+Object Types: {object_types_list}
+Event Types: {event_types_list}
+Stats: {total_objects:,} objects, {total_events:,} events | {start_date} to {end_date}
+Use ONLY these exact type names in tool calls. Max {max_tool_calls} tool rounds per query.
 
-### AVAILABLE TOOLS
-You have access to MCP tools for querying and analyzing the OCEL data.
-When you need data, call the appropriate tool - the system will execute it and provide results.
-Limit tool-calling rounds per user query to {max_tool_calls}.
+TIPS
+- Use `total_only=True` when you only need counts.
+- `filter_by_event_type` / `filter_by_object_type`: precise type filtering (prefer over `search_ocel`).
+- All temporal metrics are in SECONDS; convert for the user.
+- Paginated results include `pagination.cursor_id`. Fetch more pages with `get_cursor_results`.
 
-**IMPORTANT: All temporal metrics (performance, bottlenecks) are returned in SECONDS (SI unit).**
-Convert times to human-readable format.
+TOOL CHAINING
+Tools with an `input_cursor_id` parameter accept a `cursor_id` from a previous result.
+The downstream tool then filters within that subset instead of the full OCEL.
+Chain any number of steps: each produces its own `cursor_id` for further chaining or pagination.
+Example — narrowing results in 3 steps:
+  1. filter_by_object_type("X") → cursor_id C1
+  2. filter_by_event_type("Y", input_cursor_id=C1) → cursor_id C2
+  3. query_events_by_timerange(start, end, input_cursor_id=C2) → final subset
 
-### TOOL TIPS
-- **total_only**: Most tools accept `total_only=True`. Use it when you only need the count (e.g. "how many anomalies?") to save context.
-- **Pagination**: Large results are auto-paginated (max {page_size}/page). When the response contains `pagination.cursor_id`, call `get_cursor_results(cursor_id, page=N)` for more pages.
-- **Efficiency**: Prefer `total_only` first, then fetch full data only if needed.
+ANALYSIS
+- OCEL is multi-object: events are hyperedges linking 1:n or m:n objects.
+- Distinguish batching (1 event → many objects) vs singular flows.
+- Compute throughput per object type.
 
-### ANALYSIS GUIDELINES
-1. **Multiplicity First**: Do not assume a single Case ID. Analyze how events link multiple objects (1:n, m:n relations).
-2. **Cardinality**: Identify "Batching" (one event, many objects) vs. "Singular" flows.
-3. **Graph Perspective**: Treat the log as a dynamic graph where objects are nodes and events are hyperedges.
-4. **Performance**: Calculate throughput times per 'Object Type'. All times are in SECONDS.
-
-### OUTPUT FORMAT
-- Strict console output only - no markdown, HTML, or code blocks.
-- When citing specific flows, refer to the Object Types defined in the Context above.
-- If generating SQL/Python, ensure compatibility with the OCEL 2.0 relational schema (event_map, object_map).
-- Use the available tools to get data before answering questions.
+OUTPUT
+Console text only — no markdown/HTML. Reference the exact Object Type names above.
 """
 
-def format_system_prompt(meta: OcelMetadata, page_size: int) -> str:
+def format_system_prompt(meta: OcelMetadata) -> str:
     """
     Format the system prompt with real OCEL metadata.
     
@@ -196,7 +191,6 @@ def format_system_prompt(meta: OcelMetadata, page_size: int) -> str:
         start_date=meta.start_date,
         end_date=meta.end_date,
         max_tool_calls=MAX_TOOL_CALLS,
-        page_size=page_size,
     )
 
 
@@ -322,8 +316,7 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
         print(f"  Tools available: {len(available_tools)}")
         
         # Build system prompt (tools are passed separately to OpenAI)
-        page_size = await mcp_client.get_server_page_size()
-        system_prompt = format_system_prompt(meta, page_size)
+        system_prompt = format_system_prompt(meta)
 
         try:
             provider = build_provider(args.provider)
