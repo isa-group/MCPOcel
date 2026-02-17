@@ -1,9 +1,3 @@
-"""
-OCEL 2.x Validator Orchestrator (No external dependencies)
-
-Coordinates syntax and semantic validation based on OCEL version.
-"""
-
 import json
 import logging
 from pathlib import Path

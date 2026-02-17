@@ -7,17 +7,17 @@ def validate_ocel_semantics(ocel: Dict) -> List[str]:
     """
     errors = []
 
-    # Cargamos las colecciones principales (Estándar OCEL 2.0 oficial)
+    # Load main collections (Official OCEL 2.0 Standard)
     events = ocel.get("events", [])
     objects = ocel.get("objects", [])
     event_types = {et["name"] for et in ocel.get("eventTypes", [])}
     object_types = {ot["name"] for ot in ocel.get("objectTypes", [])}
 
-    # Inventarios para validación cruzada
+    # Inventories for cross-validation
     object_ids: Set[str] = set()
     event_ids: Set[str] = set()
 
-    # Pasa 1: Inventario de IDs
+    # IDs
     for i, event in enumerate(events):
         eid = event.get("id")
         if not eid:
@@ -36,19 +36,19 @@ def validate_ocel_semantics(ocel: Dict) -> List[str]:
             errors.append(f"Duplicate object ID: {oid}")
         object_ids.add(oid)
 
-    # Pasa 2: Validación de Referencias e Integridad
+    # Reference and Integrity Validation
     
-    # Validar Eventos
+    # Events
     for event in events:
         eid = event.get("id", "unknown")
         etype = event.get("type")
 
-        # 2.1 Verificar si el tipo de evento fue declarado
+        # Check if the event type was declared
         if etype and etype not in event_types:
             errors.append(f"Event {eid} uses undeclared eventType '{etype}'")
 
-        # 2.2 Verificar relaciones Evento -> Objeto
-        # Según estándar OCEL 2.0: {"objectId": "o1", "qualifier": "item"}
+        # Verify Event -> Object relationships
+        # According to OCEL 2.0 standard: {‘objectId’: ‘o1’, “qualifier”: ‘item’}
         for rel in event.get("relationships", []):
             target_id = rel.get("objectId")
             if not target_id:
@@ -58,24 +58,24 @@ def validate_ocel_semantics(ocel: Dict) -> List[str]:
             if target_id not in object_ids:
                 errors.append(f"Event {eid} references non-existent object: {target_id}")
 
-    # Validar Objetos
+    # Objects
     for obj in objects:
         oid = obj.get("id", "unknown")
         otype = obj.get("type")
 
-        # 2.3 Verificar si el tipo de objeto fue declarado
+        # Check if the object type was declared
         if otype and otype not in object_types:
             errors.append(f"Object {oid} uses undeclared objectType '{otype}'")
 
-        # 2.4 Verificar Atributos de Objetos (Snapshots)
-        # OCEL 2.0 exige 'time' en los atributos de los objetos
+        # Check Object Attributes (Snapshots)
+        # OCEL 2.0 requires “time” in object attributes
         for attr in obj.get("attributes", []):
             if "time" not in attr:
                 errors.append(f"Object {oid}, attribute '{attr.get('name')}': Missing required 'time' field")
 
-    # 2.5 Relaciones Objeto -> Objeto (Si existen en el log)
-    # Nota: El estándar permite rel. O2O dentro de los objetos o en una colección aparte
-    # Si las tienes en una colección raíz 'objectRelationships':
+    # Object -> Object Relationships (If they exist in the log)
+    # Note: The standard allows O2O relationships within objects or in a separate collection
+    # If you have them in a root collection “objectRelationships”:
     for i, rel in enumerate(ocel.get("objectRelationships", [])):
         source = rel.get("sourceId")
         target = rel.get("targetId")

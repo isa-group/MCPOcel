@@ -1,11 +1,11 @@
 import uuid
 import logging
 from typing import Dict, Any
-from github2ocel.transform.builder import OCELBuilder
+from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.utils.ensure import ensure_user, ensure_team
 from github2ocel.transform.utils.helper import safe_timestamp, calculate_duration
 from github2ocel.transform.utils.activity import Activities
-from github2ocel.transform.model.models import Event, ObjectInstance
+from shared.ocel.model.models  import Event, ObjectInstance
 
 logger = logging.getLogger(__name__)
 

@@ -8,11 +8,11 @@ from shared.config.env import Env
 
 # github2ocel
 from github2ocel.config.context import RepoContext
-from github2ocel.transform.builder import OCELBuilder
+from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.mappers.OCEL2Json import OCEL2JsonExporter
 from github2ocel.extractor.extractor import run_extractor
 from github2ocel.validate.validate_ocel import validate_ocel
-from github2ocel.transform.model.models import ObjectInstance
+from shared.ocel.model.models import ObjectInstance
 from github2ocel.utils.summary import print_pipeline_audit
 from github2ocel.utils.verify_extractor import verify_data_integrity
 

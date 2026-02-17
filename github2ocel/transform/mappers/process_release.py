@@ -2,11 +2,12 @@ import logging
 import uuid
 from typing import Dict, Any
 
-from github2ocel.transform.builder import OCELBuilder
+from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.utils.activity import Activities
 from github2ocel.transform.utils.helper import make_id, safe_timestamp
 from github2ocel.transform.utils.ensure import ensure_user
-from github2ocel.transform.model.models import Event, ObjectInstance
+from shared.ocel.model.models  import Event, ObjectInstance
+
 logger = logging.getLogger(__name__)
 
 def process_release(release: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:

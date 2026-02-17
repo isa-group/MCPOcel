@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Optional, List
 from .helper import make_id, parse_commit_message, safe_timestamp
-from github2ocel.transform.model.models import ObjectInstance
+from shared.ocel.model.models  import ObjectInstance
 
 logger = logging.getLogger(__name__)
 
