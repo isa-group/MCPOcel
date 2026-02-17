@@ -962,6 +962,134 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             logger.error(f"Error in discover_social_network: {e}")
             return {"error": f"Internal error: {str(e)}"}
 
+    @mcp.tool()
+    @debug_log_tool
+    def filter_by_event_type(
+        event_type: str,
+        total_only: bool = False,
+        input_cursor_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Filter events by exact event type (activity name).
+
+        Use this tool for precise filtering by activity instead of the fuzzy text matching of search_ocel.
+        Results can be chained into other tools via the returned cursor_id.
+
+        Args:
+            event_type: Exact event type / activity name to filter for.
+            total_only: If True, return only the total count of events instead of full data.
+            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, the tool filters within that subset instead of the full OCEL.
+
+        Returns:
+            Dict with matching event references, summary, and metadata.
+        """
+        try:
+            input_data = _resolve_input_data(ocel_state, input_cursor_id)
+
+            if input_data is not None:
+                filtered = _filter_refs_by_event_type(input_data, event_type)
+                if total_only:
+                    return {"total": len(filtered)}
+                response = ResponseBuilder.build_filter_response(
+                    "event_type", event_type, [], source="cursor_chain"
+                )
+                result = response.to_dict()
+                result["references"] = filtered
+                result["metadata"]["total_events"] = len(filtered)
+            else:
+                query_engine = ocel_state.get("query_engine")
+                if not query_engine:
+                    return {"error": "OCEL query engine not initialized"}
+
+                references = query_engine.get_events_by_event_type(event_type)
+
+                if total_only:
+                    return {"total": len(references)}
+
+                response = ResponseBuilder.build_filter_response(
+                    "event_type", event_type, references, source="ocel"
+                )
+                result = response.to_dict()
+
+            cursor_store = ocel_state.get("cursor_store")
+            if cursor_store:
+                result = _paginate_response(
+                    result, "filter_by_event_type", cursor_store
+                )
+
+            return result
+
+        except ValueError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error(f"Error in filter_by_event_type: {e}")
+            return {"error": f"Internal error: {str(e)}"}
+
+    @mcp.tool()
+    @debug_log_tool
+    def filter_by_object_type(
+        object_type: str,
+        total_only: bool = False,
+        input_cursor_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Filter events by object type — returns all events that involve at
+        least one object of the given type.
+
+        Use this tool for precise filtering by object type instead of the fuzzy text matching
+        of search_ocel. Results can be chained into other tools via the
+        returned cursor_id.
+
+        Args:
+            object_type: Exact object type name to filter for.
+            total_only: If True, return only the total count of events instead of full data.
+            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, the tool filters within that subset instead of the full OCEL.
+
+        Returns:
+            Dict with matching event references, summary, and metadata.
+        """
+        try:
+            input_data = _resolve_input_data(ocel_state, input_cursor_id)
+
+            if input_data is not None:
+                filtered = _filter_refs_by_object_type(input_data, object_type)
+                if total_only:
+                    return {"total": len(filtered)}
+                response = ResponseBuilder.build_filter_response(
+                    "object_type", object_type, [], source="cursor_chain"
+                )
+                result = response.to_dict()
+                result["references"] = filtered
+                result["metadata"]["total_events"] = len(filtered)
+            else:
+                query_engine = ocel_state.get("query_engine")
+                if not query_engine:
+                    return {"error": "OCEL query engine not initialized"}
+
+                references = query_engine.get_events_by_object_type(object_type)
+
+                if total_only:
+                    return {"total": len(references)}
+
+                response = ResponseBuilder.build_filter_response(
+                    "object_type", object_type, references, source="ocel"
+                )
+                result = response.to_dict()
+
+            cursor_store = ocel_state.get("cursor_store")
+            if cursor_store:
+                result = _paginate_response(
+                    result, "filter_by_object_type", cursor_store
+                )
+
+            return result
+
+        except ValueError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error(f"Error in filter_by_object_type: {e}")
+            return {"error": f"Internal error: {str(e)}"}
+
     # =========================================================================
     # CURSOR / PAGINATION
     # =========================================================================

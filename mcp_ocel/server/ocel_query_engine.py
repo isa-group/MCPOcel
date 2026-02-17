@@ -1,8 +1,8 @@
 """
 Generic OCEL query engine.
-Five MVP tools: lifecycle, timerange, statistics, anomalies, orphaned objects.
+Seven MVP tools: lifecycle, timerange, statistics, anomalies, orphaned objects, filter by event type and filter by object type
 """
-
+import pm4py
 from datetime import datetime
 from typing import Dict, List
 
@@ -268,3 +268,120 @@ class OCELQueryEngine:
         orphaned = [str(oid) for oid in (all_objects - objects_in_events)]
         logger.info(f"Orphaned objects found: {len(orphaned)}")
         return orphaned
+
+    # ------------------------------------------------------------------
+    # Filter by event type / object type
+    # ------------------------------------------------------------------
+
+    def get_events_by_event_type(
+        self, event_type: str
+    ) -> List[EventReference]:
+        """
+        Returns all events of a given event type (activity).
+
+        Uses ``pm4py.filter_ocel_event_attribute`` with ``ocel:activity``.
+
+        Args:
+            event_type: Exact event type / activity name (e.g. "PRMerged").
+
+        Returns:
+            List of EventReference for matching events.
+
+        Raises:
+            ValueError: If the event type does not exist in the log.
+        """
+        known = set(self.ocel_data.events["ocel:activity"].unique())
+        if event_type not in known:
+            raise ValueError(
+                f"Event type '{event_type}' not found. "
+                f"Available event types: {sorted(known)}"
+            )
+
+        logger.debug(f"Filtering events by event type: {event_type}")
+        return self._filter_by_event_type(event_type)
+
+    def _filter_by_event_type(self, event_type: str) -> List[EventReference]:
+        """Filter events using PM4PY ``filter_ocel_event_attribute``."""
+        filtered_ocel = pm4py.filter_ocel_event_attribute(
+            self.ocel_data, "ocel:activity", [event_type]
+        )
+        return self._ocel_events_to_references(filtered_ocel)
+
+    def get_events_by_object_type(
+        self, object_type: str
+    ) -> List[EventReference]:
+        """
+        Returns all events involving objects of a given object type.
+
+        Uses ``pm4py.filter_ocel_object_types``.
+
+        Args:
+            object_type: Exact object type name (e.g. "PullRequest").
+
+        Returns:
+            List of EventReference for matching events.
+
+        Raises:
+            ValueError: If the object type does not exist in the log.
+        """
+        known = set(self.ocel_data.objects["ocel:type"].unique())
+        if object_type not in known:
+            raise ValueError(
+                f"Object type '{object_type}' not found. "
+                f"Available object types: {sorted(known)}"
+            )
+
+        logger.debug(f"Filtering events by object type: {object_type}")
+        return self._filter_by_object_type(object_type)
+
+    def _filter_by_object_type(self, object_type: str) -> List[EventReference]:
+        """Filter events using PM4PY ``filter_ocel_object_types``."""
+        filtered_ocel = pm4py.filter_ocel_object_types(
+            self.ocel_data, [object_type]
+        )
+        return self._ocel_events_to_references(filtered_ocel)
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    def _ocel_events_to_references(
+        self, ocel: OCELData
+    ) -> List[EventReference]:
+        """
+        Convert all events in an OCEL object to ``EventReference`` list.
+
+        Reused by the event-type and object-type filter methods.
+        """
+        references: List[EventReference] = []
+
+        for _, event in ocel.events.iterrows():
+            event_id = str(event.get("ocel:eid", ""))
+
+            event_relations = ocel.relations[
+                ocel.relations["ocel:eid"] == event_id
+            ]
+            involved_objs = [
+                ObjectReference(
+                    object_id=str(row["ocel:oid"]),
+                    object_type=str(row["ocel:type"]),
+                    role=(
+                        str(row.get("ocel:qualifier", ""))
+                        if row.get("ocel:qualifier")
+                        else None
+                    ),
+                )
+                for _, row in event_relations.iterrows()
+            ]
+
+            references.append(
+                EventReference(
+                    event_id=event_id,
+                    activity=str(event.get("ocel:activity", "unknown")),
+                    timestamp=str(event.get("ocel:timestamp", "")),
+                    involved_objects=involved_objs,
+                )
+            )
+
+        logger.info(f"Converted {len(references)} events to references")
+        return references
