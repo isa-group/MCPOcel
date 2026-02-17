@@ -43,7 +43,7 @@ def _parse_docstring_parameters(func: Callable) -> Dict[str, str]:
     lines = docstring.split("\n")
     in_args = False
 
-    for i, line in enumerate(lines):
+    for _, line in enumerate(lines):
         if "Args:" in line:
             in_args = True
             continue
@@ -166,9 +166,15 @@ def _paginate_response(
     page_size: int = constants.DEFAULT_PAGE_SIZE,
 ) -> Dict[str, Any]:
     """
-    If *response_dict* contains a ``references`` list longer than *page_size*,
-    store the full list in the cursor store, truncate to the first page, and
-    inject pagination metadata into the response dict.
+    Store the ``references`` list in the cursor store and inject a
+    ``cursor_id`` into the response metadata.
+
+    * When references **exceed** *page_size* the list is truncated to the
+      first page and full ``pagination`` metadata is added (existing
+      behaviour).
+    * When references **fit** in a single page, the list is left intact
+      but a ``cursor_id`` is still stored so that downstream tools can
+      use it via ``input_cursor_id`` for chaining.
 
     Returns the (possibly modified) response dict.
     """
@@ -177,28 +183,157 @@ def _paginate_response(
         return response_dict
 
     total = len(refs)
-    if total <= page_size:
+    if total == 0:
         return response_dict
 
-    cursor_id = cursor_store.create_cursor(tool_name, refs, page_size)
     import math
+
+    cursor_id = cursor_store.create_cursor(tool_name, refs, page_size)
     total_pages = max(1, math.ceil(total / page_size))
 
-    response_dict["references"] = refs[:page_size]
-    response_dict["pagination"] = {
-        "cursor_id": cursor_id,
-        "page": 1,
-        "total_pages": total_pages,
-        "total_items": total,
-        "page_size": page_size,
-        "has_more": True,
-        "hint": (
-            f"Showing {page_size} of {total} items. "
-            f"Use get_cursor_results(cursor_id='{cursor_id}', page=2) "
-            f"to retrieve more pages."
-        ),
-    }
+    if total > page_size:
+        # Multi-page: truncate and add full pagination block
+        response_dict["references"] = refs[:page_size]
+        response_dict["pagination"] = {
+            "cursor_id": cursor_id,
+            "page": 1,
+            "total_pages": total_pages,
+            "total_items": total,
+            "page_size": page_size,
+            "has_more": True,
+            "hint": (
+                f"Showing {page_size} of {total} items. "
+                f"Use get_cursor_results(cursor_id='{cursor_id}', page=2) "
+                f"to retrieve more pages. "
+                f"To chain results into another tool, pass "
+                f"input_cursor_id='{cursor_id}'."
+            ),
+        }
+    else:
+        # Single page: keep all references, expose cursor_id for chaining
+        response_dict["pagination"] = {
+            "cursor_id": cursor_id,
+            "page": 1,
+            "total_pages": 1,
+            "total_items": total,
+            "page_size": page_size,
+            "has_more": False,
+            "hint": (
+                f"All {total} items returned. "
+                f"To chain these results into another tool, pass "
+                f"input_cursor_id='{cursor_id}'."
+            ),
+        }
     return response_dict
+
+
+# ---------------------------------------------------------------------------
+# Cursor-chaining helpers
+# ---------------------------------------------------------------------------
+
+def _resolve_input_data(
+    ocel_state: Dict[str, Any],
+    input_cursor_id: Optional[str],
+) -> Optional[List[Any]]:
+    """
+    Resolve an *input_cursor_id* to the full (unpaginated) list of items
+    stored in that cursor.
+
+    Returns ``None`` when *input_cursor_id* is ``None`` (meaning the tool
+    should operate on the full OCEL).  Returns the item list otherwise.
+
+    Raises:
+        ValueError: If the cursor id cannot be resolved (expired / invalid).
+    """
+    if not input_cursor_id:
+        return None
+
+    cursor_store = ocel_state.get("cursor_store")
+    if not cursor_store:
+        raise ValueError("Cursor store not available")
+
+    try:
+        return cursor_store.get_all_items(input_cursor_id)
+    except KeyError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _filter_refs_by_timerange(
+    data: List[Dict[str, Any]],
+    start_dt: str,
+    end_dt: str,
+) -> List[Dict[str, Any]]:
+    """
+    Filter a list of event-reference dicts whose ``timestamp`` falls
+    inside [start_dt, end_dt].
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    start = _dt.fromisoformat(start_dt.replace("Z", "+00:00"))
+    end = _dt.fromisoformat(end_dt.replace("Z", "+00:00"))
+
+    # Normalise to UTC-aware for safe comparison
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=_tz.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=_tz.utc)
+
+    results: List[Dict[str, Any]] = []
+    for ref in data:
+        ts_raw = ref.get("timestamp", "")
+        if not ts_raw:
+            continue
+        try:
+            ts = _dt.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=_tz.utc)
+        except (ValueError, TypeError):
+            continue
+        if start <= ts <= end:
+            results.append(ref)
+    return results
+
+
+def _filter_refs_by_event_type(
+    data: List[Dict[str, Any]],
+    event_type: str,
+) -> List[Dict[str, Any]]:
+    """
+    Filter a list of event-reference dicts by ``activity == event_type``.
+    """
+    return [ref for ref in data if ref.get("activity") == event_type]
+
+
+def _filter_refs_by_object_type(
+    data: List[Dict[str, Any]],
+    object_type: str,
+) -> List[Dict[str, Any]]:
+    """
+    Filter a list of event-reference dicts whose ``involved_objects``
+    contain at least one object of the given *object_type*.
+    """
+    results: List[Dict[str, Any]] = []
+    for ref in data:
+        involved = ref.get("involved_objects", [])
+        if any(obj.get("object_type") == object_type for obj in involved):
+            results.append(ref)
+    return results
+
+
+def _filter_refs_by_object_id(
+    data: List[Dict[str, Any]],
+    object_id: str,
+) -> List[Dict[str, Any]]:
+    """
+    Filter a list of event-reference dicts whose ``involved_objects``
+    contain the given *object_id*.
+    """
+    results: List[Dict[str, Any]] = []
+    for ref in data:
+        involved = ref.get("involved_objects", [])
+        if any(obj.get("object_id") == object_id for obj in involved):
+            results.append(ref)
+    return results
 
 
 def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> None:
@@ -217,31 +352,46 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
     @mcp.tool()
     @debug_log_tool
-    def trace_object_lifecycle(object_id: str, total_only: bool = False) -> Dict[str, Any]:
+    def trace_object_lifecycle(object_id: str, total_only: bool = False, input_cursor_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Trace the full lifecycle of an object through all events.
 
         Args:
             object_id: The unique identifier of the object to trace.
             total_only: If True, return only the total count of events instead of full data.
+            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, the tool filters within that subset instead of the full OCEL.
 
         Returns:
             Dict with event references, summary, and metadata.
         """
         try:
-            query_engine = ocel_state.get("query_engine")
-            if not query_engine:
-                return {"error": "OCEL query engine not initialized"}
+            input_data = _resolve_input_data(ocel_state, input_cursor_id)
 
-            references = query_engine.trace_object_lifecycle(object_id)
+            if input_data is not None:
+                filtered = _filter_refs_by_object_id(input_data, object_id)
+                if total_only:
+                    return {"total": len(filtered)}
+                response = ResponseBuilder.build_lifecycle_response(
+                    object_id, [], visualization=None
+                )
+                result = response.to_dict()
+                result["references"] = filtered
+                result["metadata"]["total_events"] = len(filtered)
+                result["metadata"]["source"] = "cursor_chain"
+            else:
+                query_engine = ocel_state.get("query_engine")
+                if not query_engine:
+                    return {"error": "OCEL query engine not initialized"}
 
-            if total_only:
-                return {"total": len(references)}
+                references = query_engine.trace_object_lifecycle(object_id)
 
-            response = ResponseBuilder.build_lifecycle_response(
-                object_id, references
-            )
-            result = response.to_dict()
+                if total_only:
+                    return {"total": len(references)}
+
+                response = ResponseBuilder.build_lifecycle_response(
+                    object_id, references
+                )
+                result = response.to_dict()
 
             cursor_store = ocel_state.get("cursor_store")
             if cursor_store:
@@ -257,7 +407,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
     @mcp.tool()
     @debug_log_tool
-    def query_events_by_timerange(start_datetime: str, end_datetime: str, total_only: bool = False) -> Dict[str, Any]:
+    def query_events_by_timerange(start_datetime: str, end_datetime: str, total_only: bool = False, input_cursor_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Query events within a specific time range.
 
@@ -265,26 +415,41 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             start_datetime: Start time in ISO 8601 format (e.g., "2025-01-20T10:00:00Z").
             end_datetime: End time in ISO 8601 format (e.g., "2025-01-20T15:00:00Z").
             total_only: If True, return only the total count of events instead of full data.
+            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, the tool filters within that subset instead of the full OCEL.
 
         Returns:
             Dict with event references, summary, and metadata.
         """
         try:
-            query_engine = ocel_state.get("query_engine")
-            if not query_engine:
-                return {"error": "OCEL query engine not initialized"}
+            input_data = _resolve_input_data(ocel_state, input_cursor_id)
 
-            references = query_engine.query_events_by_timerange(
-                start_datetime, end_datetime
-            )
+            if input_data is not None:
+                filtered = _filter_refs_by_timerange(input_data, start_datetime, end_datetime)
+                if total_only:
+                    return {"total": len(filtered)}
+                response = ResponseBuilder.build_timerange_response(
+                    start_datetime, end_datetime, []
+                )
+                result = response.to_dict()
+                result["references"] = filtered
+                result["metadata"]["total_events"] = len(filtered)
+                result["metadata"]["source"] = "cursor_chain"
+            else:
+                query_engine = ocel_state.get("query_engine")
+                if not query_engine:
+                    return {"error": "OCEL query engine not initialized"}
 
-            if total_only:
-                return {"total": len(references)}
+                references = query_engine.query_events_by_timerange(
+                    start_datetime, end_datetime
+                )
 
-            response = ResponseBuilder.build_timerange_response(
-                start_datetime, end_datetime, references
-            )
-            result = response.to_dict()
+                if total_only:
+                    return {"total": len(references)}
+
+                response = ResponseBuilder.build_timerange_response(
+                    start_datetime, end_datetime, references
+                )
+                result = response.to_dict()
 
             cursor_store = ocel_state.get("cursor_store")
             if cursor_store:
