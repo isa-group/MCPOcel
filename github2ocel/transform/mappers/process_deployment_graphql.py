@@ -1,9 +1,9 @@
 import uuid
 from typing import Dict, Any
-from github2ocel.transform.builder import OCELBuilder
+from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.utils.helper import safe_timestamp
 from github2ocel.transform.utils.ensure import ensure_user, ensure_commit, ensure_deployment
-from github2ocel.transform.model.models import ObjectInstance, Event
+from shared.ocel.model.models  import ObjectInstance, Event
 from github2ocel.transform.utils.activity import Activities
 
 def process_deployment_graphql(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:

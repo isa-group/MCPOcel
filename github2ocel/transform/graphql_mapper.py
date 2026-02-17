@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any
 
-from github2ocel.transform.builder import OCELBuilder
+from shared.ocel.builder import OCELBuilder
 from .mappers.issues_prs import process_base_node, map_main_events, map_management_context #, map_review_threads
 from .mappers.lifecycle import map_lifecycle_events
 from .mappers.timeline import map_timeline_events

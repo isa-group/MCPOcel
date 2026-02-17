@@ -243,7 +243,7 @@ class GitHubClient:
 
         raise RuntimeError("Unreachable GraphQL loop")
 
-    # Métodos Helpers para repos, issues, PRs, commits
+    # Helpers (repos, issues, PRs, commits)
     def get_repo(self) -> Dict[str, Any]:
         if not self.owner or not self.repo:
             raise ValueError("owner/repo not set")

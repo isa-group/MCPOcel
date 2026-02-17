@@ -1,4 +1,4 @@
-from github2ocel.transform.builder import OCELBuilder
+from shared.ocel.builder import OCELBuilder
 
 def print_pipeline_audit(builder: OCELBuilder):
     cursor = builder.cursor

@@ -1,11 +1,3 @@
-"""
-OCEL 2.x Type Validation Utilities
-
-Provides strict validation for OCEL attribute types and
-declared attribute consistency.
-No external dependencies.
-"""
-
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 

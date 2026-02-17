@@ -4,7 +4,7 @@ from shared.logger import  get_logger
 # github2ocel
 from github2ocel.config.context import RepoContext
 from github2ocel.client.github_client import GitHubClient
-from github2ocel.transform.builder import OCELBuilder
+from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.rest_mapper import run_rest_transformation
 from github2ocel.transform.graphql_mapper import process_issue_node
 
