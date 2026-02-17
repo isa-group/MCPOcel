@@ -236,16 +236,15 @@ def _filter_refs_by_timerange(
     Filter a list of event-reference dicts whose ``timestamp`` falls
     inside [start_dt, end_dt].
     """
-    from datetime import datetime as _dt, timezone as _tz
 
-    start = _dt.fromisoformat(start_dt.replace("Z", "+00:00"))
-    end = _dt.fromisoformat(end_dt.replace("Z", "+00:00"))
+    start = datetime.fromisoformat(start_dt.replace("Z", "+00:00"))
+    end = datetime.fromisoformat(end_dt.replace("Z", "+00:00"))
 
     # Normalise to UTC-aware for safe comparison
     if start.tzinfo is None:
-        start = start.replace(tzinfo=_tz.utc)
+        start = start.replace(tzinfo=datetime.timezone.utc)
     if end.tzinfo is None:
-        end = end.replace(tzinfo=_tz.utc)
+        end = end.replace(tzinfo=datetime.timezone.utc)
 
     results: List[Dict[str, Any]] = []
     for ref in data:
@@ -253,9 +252,9 @@ def _filter_refs_by_timerange(
         if not ts_raw:
             continue
         try:
-            ts = _dt.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=_tz.utc)
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
         except (ValueError, TypeError):
             continue
         if start <= ts <= end:

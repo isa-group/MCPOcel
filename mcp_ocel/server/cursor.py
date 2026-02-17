@@ -8,7 +8,7 @@ allowing LLMs to iterate through large result sets without exhausting context.
 import uuid
 import math
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -50,7 +50,7 @@ class CursorEntry:
     results: List[Any]
     total: int
     page_size: int
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def total_pages(self) -> int:
@@ -138,7 +138,7 @@ class CursorStore:
             )
 
         # Check expiry
-        age = (datetime.utcnow() - entry.created_at).total_seconds()
+        age = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
         if age > self.max_age_seconds:
             self._remove(cursor_id)
             raise KeyError(
@@ -193,7 +193,7 @@ class CursorStore:
             )
 
         # Check expiry
-        age = (datetime.utcnow() - entry.created_at).total_seconds()
+        age = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
         if age > self.max_age_seconds:
             self._remove(cursor_id)
             raise KeyError(
@@ -221,7 +221,7 @@ class CursorStore:
 
     def _cleanup(self) -> None:
         """Remove expired cursors."""
-        now = datetime.now(datetime.timezone.utc)
+        now = datetime.now(timezone.utc)
         cutoff = timedelta(seconds=self.max_age_seconds)
         expired: List[str] = []
 
