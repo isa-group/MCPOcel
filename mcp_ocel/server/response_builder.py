@@ -200,6 +200,67 @@ class ResponseBuilder:
         )
     
     @staticmethod
+    def build_filter_response(
+        filter_type: str,
+        filter_value: str,
+        references: List[EventReference],
+        source: str = "ocel",
+    ) -> UnifiedMCPResponse:
+        """
+        Builds a response for event/object type filter tools.
+
+        Args:
+            filter_type: "event_type" or "object_type".
+            filter_value: The value that was filtered on.
+            references: List of EventReference matching the filter.
+            source: Origin of references — "ocel" (direct) or "cursor_chain".
+
+        Returns:
+            UnifiedMCPResponse.
+        """
+        logger.debug(
+            f"Building filter response: {filter_type}={filter_value} "
+            f"({len(references)} results, source={source})"
+        )
+
+        refs_list = [ref.to_dict() for ref in references]
+
+        # Build summary markdown
+        label = "event type" if filter_type == "event_type" else "object type"
+        activity_set = set(ref.activity for ref in references) if references else set()
+        obj_set = set(
+            obj.object_id
+            for ref in references
+            for obj in ref.involved_objects
+        ) if references else set()
+
+        lines = [
+            f"## Filter by {label}: {filter_value}",
+            f"- **Matching events**: {len(references)}",
+            f"- **Distinct activities**: {len(activity_set)}",
+            f"- **Involved objects**: {len(obj_set)}",
+            f"- **Source**: {source}",
+        ]
+        if activity_set:
+            lines.append(f"- **Activities**: {', '.join(sorted(activity_set))}")
+        summary = "\n".join(lines)
+
+        metadata = {
+            "filter_type": filter_type,
+            "filter_value": filter_value,
+            "total_events": len(references),
+            "event_types": sorted(activity_set),
+            "objects_involved": len(obj_set),
+            "source": source,
+        }
+
+        return UnifiedMCPResponse(
+            references=refs_list,
+            summary=summary,
+            metadata=metadata,
+        )
+
+    @staticmethod
     def build_dfg_response(
         dfg_dict: Dict[str, Any],
         visualization: Optional[Dict[str, Any]] = None,
