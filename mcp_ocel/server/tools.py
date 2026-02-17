@@ -58,37 +58,6 @@ def _parse_docstring_parameters(func: Callable) -> Dict[str, str]:
 
     return params
 
-
-def _infer_parameter_type(param_name: str, annotation: Any) -> str:
-    """
-    Infer JSON Schema type from a Python type annotation.
-
-    Args:
-        param_name: The parameter name (for context).
-        annotation: The type annotation.
-
-    Returns:
-        JSON Schema type string ("string", "number", "integer", "boolean", "array", "object").
-    """
-    if annotation == inspect.Parameter.empty:
-        return "string"
-
-    annotation_str = str(annotation).lower()
-
-    if "int" in annotation_str:
-        return "integer"
-    elif "float" in annotation_str:
-        return "number"
-    elif "bool" in annotation_str:
-        return "boolean"
-    elif "list" in annotation_str or "sequence" in annotation_str:
-        return "array"
-    elif "dict" in annotation_str:
-        return "object"
-    else:
-        return "string"
-
-
 def _build_dynamic_tools_list(mcp: FastMCP) -> List[ToolInfoDict]:
     """
     Build a dynamic list of available tools by introspecting the MCP server's tools.
