@@ -14,6 +14,7 @@ PROFILES: Dict[ExtractionProfile, Dict[str, bool]] = {
         "withThreads": False,
         "withTimeline": False,
         "withStatusChecks": False,
+        "withDiscussions": True,
     },
     ExtractionProfile.STANDARD: {
         "withReviews": True,           # Reviews
@@ -21,6 +22,7 @@ PROFILES: Dict[ExtractionProfile, Dict[str, bool]] = {
         "withThreads": False,
         "withTimeline": True,          # Timeline
         "withStatusChecks": True,      # CI
+        "withDiscussions": True,
     },
     ExtractionProfile.COMPLETE: {
         "withReviews": True,
@@ -28,6 +30,7 @@ PROFILES: Dict[ExtractionProfile, Dict[str, bool]] = {
         "withThreads": True,
         "withTimeline": True,
         "withStatusChecks": True,
+        "withDiscussions": True,
     }
 }
 

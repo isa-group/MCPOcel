@@ -128,7 +128,7 @@ class OCELBuilder:
                     self.cursor.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "{key}" {sql_type}')
                     current_cols.add(key)
                 except sqlite3.OperationalError:
-                    pass # La columna ya existía (race condition rara)
+                    pass # column already existed
 
         return table_name
 
@@ -189,6 +189,10 @@ class OCELBuilder:
              self.stats["relationships"] += len(data)
 
         self.stats["objects"] += 1
+
+    def object_exists(self, object_id: str) -> bool:
+        self.cursor.execute("SELECT 1 FROM object WHERE ocel_id = ?", (object_id,))
+        return self.cursor.fetchone() is not None
 
     def _print_stats(self):
         print(f"--- OCEL 2.0 Generation Completed ---")

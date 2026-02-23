@@ -10,12 +10,11 @@ from github2ocel.utils.is_pull_request import is_pull_request
 
 logger = logging.getLogger(__name__)
 
-def process_base_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> Tuple[str, bool]:
+def process_base_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str, is_pr: bool) -> Tuple[str, bool]:
     """
     Creates the base object (Issue or PullRequest) and returns its ID and type.
     """
 
-    is_pr = is_pull_request(node)
     created_at = safe_timestamp(node.get("createdAt"))
 
     try:
@@ -65,7 +64,7 @@ def process_base_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) 
 
     builder.insert_object(obj)
 
-    return obj_id, is_pr
+    return obj_id
 
 
 def map_main_events(node: Dict[str, Any], builder: OCELBuilder,

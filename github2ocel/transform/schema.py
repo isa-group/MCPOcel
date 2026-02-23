@@ -18,7 +18,9 @@ GITHUB_OBJECT_SCHEMA: Dict[str, List[str]] = {
     "Branch": ["name"],
     "File": ["path"],
     "Label": ["name", "color"],
-    "Release": ["tag_name", "name", "prerelease"]
+    "Release": ["tag_name", "name", "prerelease"],
+    "Discussion": ["number", "title", "url", "locked", "category", "reactions_count"],
+    "DiscussionComment": ["body_length", "reactions_count"],
 }
 
 # GitHub Attribute Type Hints

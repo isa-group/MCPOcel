@@ -8,15 +8,16 @@ from .mappers.timeline import map_timeline_events
 
 logger = logging.getLogger(__name__)
 
-def process_issue_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
+def process_issue_node(node: Dict[str, Any], builder: OCELBuilder, repo_id: str, node_type: str) -> None:
     """
     Main orchestrator for GraphQL nodes.
     Receives a node (Issue or PR) and coordinates the extraction of all its events and objects.
     """
+    is_pr = node_type == "PullRequest"
     existing_issues = {} 
     try:
         # 1. Create the object (Issue or PR)
-        obj_id, is_pr = process_base_node(node, builder, repo_id)
+        obj_id = process_base_node(node, builder, repo_id, is_pr)
         if not is_pr:
             existing_issues[node["number"]] = obj_id
 
