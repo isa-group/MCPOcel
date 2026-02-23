@@ -54,3 +54,9 @@ class Activities:
     BRANCH_OBSERVED = "BranchSnapshot"
 
     TAG_CREATED = "TagCreated"
+
+    # Discussions
+    DISCUSSION_CREATED = "DiscussionCreated"
+    DISCUSSION_ANSWERED = "DiscussionAnswered"
+    DISCUSSION_COMMENT_CREATED = "DiscussionCommentCreated"
+    DISCUSSION_OBSERVED = "DiscussionObserved"

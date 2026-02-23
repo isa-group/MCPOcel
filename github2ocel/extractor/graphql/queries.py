@@ -311,3 +311,66 @@ query GetPullRequests(
   }
 }
 """
+
+DISCUSSIONS_QUERY = """
+query GetDiscussions(
+  $owner: String!
+  $repo: String!
+  $cursor: String
+  $pageSize: Int!
+) {
+  repository(owner: $owner, name: $repo) {
+    discussions(first: $pageSize, after: $cursor) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        __typename
+        id
+        number
+        title
+        url
+        createdAt
+        updatedAt
+        answerChosenAt
+        locked
+
+        body
+        bodyText
+
+        author {
+          login
+          ... on User { id }
+          ... on Organization { id }
+          ... on Bot { id }
+        }
+
+        category {
+          id
+          name
+        }
+
+        reactions(first: 1) { totalCount }
+
+        comments(first: 50) {
+          totalCount
+          nodes {
+            id
+            createdAt
+            updatedAt
+            body
+            author {
+              login
+              ... on User { id }
+              ... on Organization { id }
+              ... on Bot { id }
+            }
+            reactions(first: 1) { totalCount }
+          }
+        }
+      }
+    }
+  }
+}
+"""

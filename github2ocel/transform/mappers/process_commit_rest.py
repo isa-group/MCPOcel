@@ -80,9 +80,11 @@ def process_commit_rest(commit: Dict[str, Any], builder: OCELBuilder, repo_id: s
     for issue_num in analysis["issue_refs"]:
         try:
             issue_id = make_id(repo_id, "issue", issue_num)
-            commit_obj.add_rel(target_id=issue_id, qualifier="references_issue")
+            if builder.object_exists(issue_id):
+                commit_obj.add_rel(target_id=issue_id, qualifier="references_issue")
         except Exception:
             pass
+        
 
     # Files & Event
     files = commit.get("files", [])
@@ -203,7 +205,8 @@ def process_commit_graphql(node: Dict[str, Any], builder: OCELBuilder, repo_id: 
     for issue_num in analysis["issue_refs"]:
         try:
             issue_id = make_id(repo_id, "issue", issue_num)
-            commit_obj.add_rel(target_id=issue_id, qualifier="references_issue")
+            if builder.object_exists(issue_id):
+                commit_obj.add_rel(target_id=issue_id, qualifier="references_issue")
         except Exception:
             pass
 

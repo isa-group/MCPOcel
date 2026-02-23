@@ -6,8 +6,8 @@ from github2ocel.config.context import RepoContext
 from github2ocel.client.github_client import GitHubClient
 from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.rest_mapper import run_rest_transformation
-from github2ocel.transform.graphql_mapper import process_issue_node
-
+# from github2ocel.transform.graphql_mapper import process_issue_node process_graphql_node
+from github2ocel.transform.mappers.process_graphql_node import process_graphql_node
 # from github2ocel.extractor.github.fetch_commits_rest import fetch_commits_rest
 # from github2ocel.extractor.github.fetch_deployments import fetch_deployments
 from github2ocel.extractor.github.issue_and_pr import fetch_github_data
@@ -42,9 +42,9 @@ def run_extractor(ctx: RepoContext, builder: OCELBuilder, repo_id: str) -> bool:
 
     logger.info(f"--- Extractor Start: {ctx.owner}/{ctx.repo} ---")
     stats = {
-        "commits": 0, "issues": 0, "runs": 0,
-        "releases": 0, "deployments": 0, "branches": 0,
-        "tag": 0
+        "issues": 0, "prs": 0, "discussions": 0,
+        "runs": 0, "releases": 0, "deployments": 0,
+        "commits": 0, "branches": 0, "tag": 0
     }
     try:
         client = GitHubClient.from_context(ctx)
@@ -69,15 +69,15 @@ def run_extractor(ctx: RepoContext, builder: OCELBuilder, repo_id: str) -> bool:
 
         # 1. GraphQL phase
         logger.info("Starting GraphQL extraction...")
-        nodes = fetch_github_data(client, variables)
+        nodes = fetch_github_data(client, variables, stats)
         count_graphql = 0
 
         for node in nodes:
-            process_issue_node(node, builder, repo_id)
+            process_graphql_node(node, builder, repo_id)
             count_graphql += 1
 
-        stats["issues"] = count_graphql
-        logger.info(f"GraphQL extraction completed ({count_graphql} nodes).")
+        total_graphql = stats["issues"] + stats["prs"] + stats["discussions"]
+        logger.info(f"GraphQL extraction completed ({total_graphql} nodes).")
 
     except (RateLimitError, RetryableError, GraphQLError) as e:
         logger.error(f"GraphQL Critical Failure: {e}")
