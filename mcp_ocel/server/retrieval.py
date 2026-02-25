@@ -458,26 +458,48 @@ class OCELChunker:
         chunks: List[Chunk] = []
         chunk_id = 0
 
-        # Event types
+        # Event types — include attribute definitions for schema search
         event_types = data.get("eventTypes", [])
         if event_types and isinstance(event_types, list):
-            type_names = [et.get("name", et) if isinstance(et, dict) else et for et in event_types]
+            type_descriptions = []
+            for et in event_types:
+                if isinstance(et, dict):
+                    name = et.get("name", str(et))
+                    attrs = et.get("attributes", [])
+                    if attrs:
+                        attr_names = [a.get("name", str(a)) if isinstance(a, dict) else str(a) for a in attrs]
+                        type_descriptions.append(f"{name} (attributes: {', '.join(attr_names)})")
+                    else:
+                        type_descriptions.append(name)
+                else:
+                    type_descriptions.append(str(et))
             chunks.append(Chunk(
                 id=f"chunk_{chunk_id}",
-                content=f"Event Types: {json.dumps(type_names)}",
+                content=f"Event Types: {json.dumps(type_descriptions)}",
                 path="eventTypes",
                 chunk_type="event_types",
                 metadata={"count": len(event_types)},
             ))
             chunk_id += 1
         
-        # Object types
+        # Object types — include attribute definitions for schema search
         object_types = data.get("objectTypes", [])
         if object_types and isinstance(object_types, list):
-            type_names = [ot.get("name", ot) if isinstance(ot, dict) else ot for ot in object_types]
+            type_descriptions = []
+            for ot in object_types:
+                if isinstance(ot, dict):
+                    name = ot.get("name", str(ot))
+                    attrs = ot.get("attributes", [])
+                    if attrs:
+                        attr_names = [a.get("name", str(a)) if isinstance(a, dict) else str(a) for a in attrs]
+                        type_descriptions.append(f"{name} (attributes: {', '.join(attr_names)})")
+                    else:
+                        type_descriptions.append(name)
+                else:
+                    type_descriptions.append(str(ot))
             chunks.append(Chunk(
                 id=f"chunk_{chunk_id}",
-                content=f"Object Types: {json.dumps(type_names)}",
+                content=f"Object Types: {json.dumps(type_descriptions)}",
                 path="objectTypes",
                 chunk_type="object_types",
                 metadata={"count": len(object_types)},
@@ -532,8 +554,8 @@ class OCELChunker:
         Aggregates large event batches into compact summaries containing:
         - Activity frequency distribution
         - Time range (earliest to latest timestamp)
-        - Count of unique referenced objects
-        - Sample object IDs
+        - Attribute value distributions for each attribute
+        - Count of unique referenced objects and sample IDs
         
         Args:
             events: List of event dictionaries to summarize.
@@ -543,9 +565,13 @@ class OCELChunker:
         Returns:
             Formatted text summary optimized for full-text search.
         """
-        activities = {}
-        timestamps = []
-        object_refs = set()
+        activities: Dict[str, int] = {}
+        timestamps: List[str] = []
+        object_refs: set = set()
+        # Collect attribute value distributions: {attr_name: {value: count}}
+        attr_distributions: Dict[str, Dict[str, int]] = {}
+        # Collect sample text values for searchability
+        attr_text_samples: Dict[str, List[str]] = {}
         
         for e in events:
             act = e.get("type", "unknown")
@@ -555,21 +581,50 @@ class OCELChunker:
             for rel in e.get("relationships", []):
                 if obj_id := rel.get("objectId"):
                     object_refs.add(obj_id)
+            for attr in e.get("attributes", []):
+                name = attr.get("name", "")
+                value = str(attr.get("value", ""))
+                if not name:
+                    continue
+                # Value distribution
+                dist = attr_distributions.setdefault(name, {})
+                dist[value] = dist.get(value, 0) + 1
+                # Collect text samples (up to 10 unique per attribute)
+                samples = attr_text_samples.setdefault(name, [])
+                if len(samples) < 10 and value not in samples:
+                    samples.append(value)
         
-        return (
-            f"Events batch [{start}:{end}]\n"
-            f"Activities: {json.dumps(activities)}\n"
-            f"Time range: {min(timestamps) if timestamps else 'N/A'} to {max(timestamps) if timestamps else 'N/A'}\n"
-            f"Referenced objects: {len(object_refs)} unique\n"
-            f"Sample object IDs: {list(object_refs)[:10]}"
-        )
+        lines = [
+            f"Events batch [{start}:{end}]",
+            f"Activities: {json.dumps(activities)}",
+            f"Time range: {min(timestamps) if timestamps else 'N/A'} to {max(timestamps) if timestamps else 'N/A'}",
+            f"Referenced objects: {len(object_refs)} unique",
+            f"Sample object IDs: {list(object_refs)[:10]}",
+        ]
+        
+        if attr_distributions:
+            lines.append("Attribute distributions:")
+            for attr_name, dist in attr_distributions.items():
+                # For attributes with few unique values, show full distribution
+                if len(dist) <= 20:
+                    lines.append(f"  {attr_name}: {json.dumps(dist)}")
+                else:
+                    # For high-cardinality attributes, show count + samples
+                    samples = attr_text_samples.get(attr_name, [])
+                    lines.append(
+                        f"  {attr_name}: {len(dist)} unique values, "
+                        f"samples: {json.dumps(samples)}"
+                    )
+        
+        return "\n".join(lines)
     
     def _summarize_objects(self, objects: List[Dict], start: int, end: int) -> str:
         """Create a searchable summary of objects batch.
         
         Aggregates large object batches into compact summaries containing:
         - Object type frequency distribution
-        - Up to 20 sample object IDs
+        - All object IDs in the batch
+        - Attribute value distributions and text samples
         
         Args:
             objects: List of object dictionaries to summarize.
@@ -579,17 +634,46 @@ class OCELChunker:
         Returns:
             Formatted text summary optimized for full-text search.
         """
-        types = {}
+        types: Dict[str, int] = {}
+        # Collect attribute distributions per attribute name: {attr_name: {value: count}}
+        attr_distributions: Dict[str, Dict[str, int]] = {}
+        attr_text_samples: Dict[str, List[str]] = {}
+        
         for obj in objects:
             otype = obj.get("type", "unknown")
             types[otype] = types.get(otype, 0) + 1
+            for attr in obj.get("attributes", []):
+                name = attr.get("name", "")
+                value = str(attr.get("value", ""))
+                if not name:
+                    continue
+                dist = attr_distributions.setdefault(name, {})
+                dist[value] = dist.get(value, 0) + 1
+                samples = attr_text_samples.setdefault(name, [])
+                if len(samples) < 10 and value not in samples:
+                    samples.append(value)
         
         obj_ids = [obj.get("id", "") for obj in objects]
-        return (
-            f"Objects batch [{start}:{end}]\n"
-            f"Types: {json.dumps(types)}\n"
-            f"Object IDs: {obj_ids[:20]}{'...' if len(obj_ids) > 20 else ''}"
-        )
+        
+        lines = [
+            f"Objects batch [{start}:{end}]",
+            f"Types: {json.dumps(types)}",
+            f"Object IDs: {json.dumps(obj_ids)}",
+        ]
+        
+        if attr_distributions:
+            lines.append("Attribute distributions:")
+            for attr_name, dist in attr_distributions.items():
+                if len(dist) <= 20:
+                    lines.append(f"  {attr_name}: {json.dumps(dist)}")
+                else:
+                    samples = attr_text_samples.get(attr_name, [])
+                    lines.append(
+                        f"  {attr_name}: {len(dist)} unique values, "
+                        f"samples: {json.dumps(samples)}"
+                    )
+        
+        return "\n".join(lines)
 
 
 class OCELRetrievalEngine:
