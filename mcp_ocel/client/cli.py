@@ -149,12 +149,6 @@ Event Types: {event_types_list}
 Stats: {total_objects:,} objects, {total_events:,} events | {start_date} to {end_date}
 Use ONLY these exact type names in tool calls. Max {max_tool_calls} tool rounds per query.
 
-TIPS
-- Use `total_only=True` when you only need counts.
-- `filter_by_event_type` / `filter_by_object_type`: precise type filtering (prefer over `search_ocel`).
-- All temporal metrics are in SECONDS; convert for the user.
-- Paginated results include `pagination.cursor_id`. Fetch more pages with `get_cursor_results`.
-
 TOOL CHAINING
 Tools with an `input_cursor_id` parameter accept a `cursor_id` from a previous result.
 The downstream tool then filters within that subset instead of the full OCEL.
@@ -163,6 +157,14 @@ Example — narrowing results in 3 steps:
   1. filter_by_object_type("X") → cursor_id C1
   2. filter_by_event_type("Y", input_cursor_id=C1) → cursor_id C2
   3. query_events_by_timerange(start, end, input_cursor_id=C2) → final subset
+
+TIPS
+- Use `total_only=True` when you only need counts.
+- `filter_by_event_type` / `filter_by_object_type`: precise type filtering (prefer over `search_ocel`).
+- All temporal metrics are in SECONDS; convert for the user.
+- Use time tools for ANY temporal question; NEVER compute them manually.
+- Plan the goal so you need to fetch the least amount of data; use tool chaining with cursors as much as possible.
+- Paginated results include `pagination.cursor_id`. Fetch more pages with `get_cursor_results`.
 
 ANALYSIS
 - OCEL is multi-object: events are hyperedges linking 1:n or m:n objects.

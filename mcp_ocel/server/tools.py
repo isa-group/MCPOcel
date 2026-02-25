@@ -567,13 +567,17 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         query: str, top_k: int = 5, chunk_types: Optional[List[str]] = None, total_only: bool = False
     ) -> Dict[str, Any]:
         """
-        Search the OCEL data using semantic/hybrid search.
+        Search the OCEL data using full-text search over all content including attribute values, object IDs, relationships, and schema definitions.
+
+        Use this tool to find events or objects by any textual content: attribute values,
+        activity names, object IDs, or type definitions.
+        For discovering what attributes exist on each type, use chunk_types=["schema"].
 
         Args:
             query: Search query text.
             top_k: Number of results to return (default: 5).
-            chunk_types: Optional list of chunk types to filter by. Valid values: ["event_types", "object_types", "events", "objects", "schema", "data"]. Use "schema" for event/object type definitions, "data" for actual events/objects.
-            total_only: If True, return only the total count of results instead of full data.
+            chunk_types: Optional list of chunk types to filter by. Valid values: ["event_types", "object_types", "events", "objects", "schema", "data"]. Use "schema" for event/object type definitions and their attributes, "data" for actual events/objects with their attribute values.
+            total_only: If True, return only the estimated total count of events/objects in matching chunks instead of full data.
 
         Returns:
             Dict with search results and relevance scores.
@@ -594,7 +598,12 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                     results = retrieval_engine.search(query, top_k=top_k)
 
             if total_only:
-                return {"total": len(results)}
+                # Sum the item counts from each matching chunk for a meaningful total
+                estimated_total = sum(
+                    r.get("metadata", {}).get("count", 1)
+                    for r in results
+                )
+                return {"total": estimated_total, "matching_chunks": len(results)}
 
             # Format results inline (simpler format for LLM consumption)
             formatted_results = []
