@@ -178,6 +178,10 @@ class GeminiProvider(BaseProvider):
         if not api_key:
             raise ProviderError("GEMINI_API_KEY is required for provider 'gemini'")
         self.client = genai.Client(api_key=api_key)
+        # Stores the raw Content from the last model response so that thought
+        # parts (and their thought_signature) are preserved when the conversation
+        # is sent back to Gemini after tool execution.
+        self._last_raw_content: Optional[genai_types.Content] = None
 
     def _convert_mcp_tools(self, mcp_tools: List[Dict[str, Any]]) -> List[genai_types.FunctionDeclaration]:
         """Convert MCP tool definitions to Gemini FunctionDeclaration format."""
@@ -226,6 +230,15 @@ class GeminiProvider(BaseProvider):
             role = msg.get("role", "user")
             
             if role == "system":
+                continue
+            
+            # For assistant messages that contain tool calls we stored the
+            # original Content object from the model response.  Re-use it
+            # verbatim so that thought parts and their thought_signature are
+            # preserved – Gemini requires them to be present when tool results
+            # are returned.
+            if role == "assistant" and msg.get("gemini_raw_content") is not None:
+                contents.append(msg["gemini_raw_content"])
                 continue
             
             gemini_role = "model" if role == "assistant" else "user"
@@ -284,18 +297,21 @@ class GeminiProvider(BaseProvider):
         
         content = ""
         parsed_tool_calls: List[ToolCall] = []
+        self._last_raw_content = None
         
         if response.candidates and response.candidates[0].content:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, "text") and part.text:
-                    content += part.text
-                elif hasattr(part, "function_call") and part.function_call:
+            raw_content = response.candidates[0].content
+            self._last_raw_content = raw_content
+            for part in raw_content.parts:
+                if hasattr(part, "function_call") and part.function_call:
                     fc = part.function_call
                     parsed_tool_calls.append(ToolCall(
                         id=f"gemini_{uuid.uuid4().hex[:8]}",
                         name=fc.name,
                         arguments=dict(fc.args) if fc.args else {},
                     ))
+                elif hasattr(part, "text") and part.text and not getattr(part, "thought", False):
+                    content += part.text
         
         finish_reason = None
         if response.candidates:
@@ -310,8 +326,13 @@ class GeminiProvider(BaseProvider):
     def build_assistant_tool_call_message(
         self, content: str, tool_calls: List[ToolCall]
     ) -> Dict[str, Any]:
-        """Build a Gemini assistant message with tool calls."""
-        return {
+        """Build a Gemini assistant message with tool calls.
+        
+        When available, the raw Content object from the last model response is
+        embedded under ``gemini_raw_content`` so that thought parts and their
+        ``thought_signature`` survive round-trips through the message history.
+        """
+        msg: Dict[str, Any] = {
             "role": "assistant",
             "content": content,
             "gemini_function_calls": [
@@ -319,6 +340,10 @@ class GeminiProvider(BaseProvider):
                 for tc in tool_calls
             ],
         }
+        if self._last_raw_content is not None:
+            msg["gemini_raw_content"] = self._last_raw_content
+            self._last_raw_content = None  # consume – avoid stale references
+        return msg
 
     def build_tool_result_message(
         self, tool_call: ToolCall, result: str
