@@ -254,14 +254,19 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def trace_object_lifecycle(object_id: str, input_cursor_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Trace the full lifecycle of an object through all events.
+        Return all events that involve a specific object, ordered by timestamp.
+
+        Each result is an event-reference dict:
+          {event_id, activity, timestamp, involved_objects: [{object_id, object_type, role}]}.
+        Use search_ocel or ocel://schema/objectTypes to discover valid object_ids first.
+        With input_cursor_id the filter applies to that cursor subset instead of the full log.
 
         Args:
-            object_id: The unique identifier of the object to trace.
-            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, filters within that subset instead of the full OCEL.
+            object_id: Exact object identifier to trace (e.g. "pr-42"). Must exist in the log.
+            input_cursor_id: cursor_id from a previous tool result to restrict the search scope.
 
         Returns:
-            Dict with cursor_id for the matching events.
+            Dict with cursor_id for the matching event-reference items.
         """
         try:
             cursor_store = ocel_state.get("cursor_store")
@@ -293,15 +298,19 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def query_events_by_timerange(start_datetime: str, end_datetime: str, input_cursor_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Query events within a specific time range.
+        Return all events whose timestamp falls within the given ISO 8601 window (both bounds inclusive).
+
+        Prefer this over search_ocel for exact temporal filtering.
+        Accepts "Z" UTC suffix (e.g. "2025-01-20T10:00:00Z") or numeric offset notation.
+        With input_cursor_id the filter applies to that cursor subset instead of the full log.
 
         Args:
-            start_datetime: Start time in ISO 8601 format (e.g., "2025-01-20T10:00:00Z").
-            end_datetime: End time in ISO 8601 format (e.g., "2025-01-20T15:00:00Z").
-            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, filters within that subset instead of the full OCEL.
+            start_datetime: Inclusive start in ISO 8601 format (e.g. "2025-01-20T00:00:00Z").
+            end_datetime: Inclusive end in ISO 8601 format (e.g. "2025-01-20T23:59:59Z").
+            input_cursor_id: cursor_id from a previous tool result to restrict the search scope.
 
         Returns:
-            Dict with cursor_id for the matching events.
+            Dict with cursor_id for the matching event-reference items.
         """
         try:
             cursor_store = ocel_state.get("cursor_store")
@@ -335,10 +344,15 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def get_statistics_by_object_type() -> Dict[str, Any]:
         """
-        Get statistical information grouped by object type.
+        Return object count and object-ID list grouped by object type.
+
+        Response is keyed by object type name; each entry contains {count, objects: [ids]}.
+        The type names returned here are the exact strings required by filter_by_object_type,
+        discover_dfg, discover_petri_net, get_process_variants, get_performance_metrics, etc.
+        Call this first to discover valid object-type values and their population sizes.
 
         Returns:
-            Dict with statistics per object type.
+            Dict with one entry per object type: {object_type: {count, objects}}.
         """
         try:
             query_engine = ocel_state.get("query_engine")
@@ -358,10 +372,17 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def detect_anomalies() -> Dict[str, Any]:
         """
-        Detect anomalies in the event log (orphaned objects, broken references).
+        Scan the event log for structural anomalies and return a cursor with all findings.
+
+        Detects two anomaly types:
+          - "orphaned_object": object referenced in relations but absent from all events.
+          - "event_no_objects": event with no linked objects.
+        Each result item has: {anomaly_type, severity ("low"|"medium"|"high"),
+        affected_id, description, timestamp}.
+        Use get_total_from_cursor_id to count anomalies cheaply without fetching all items.
 
         Returns:
-            Dict with cursor_id for the detected anomalies.
+            Dict with cursor_id for the detected anomaly items.
         """
         try:
             query_engine = ocel_state.get("query_engine")
@@ -385,10 +406,14 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def find_orphaned_objects() -> Dict[str, Any]:
         """
-        Find objects that have no associated events.
+        Find objects not referenced by any event in the log.
+
+        Each result item is {object_id, status: "orphaned"}.
+        For a richer anomaly report (including events with no objects) use detect_anomalies instead.
+        Prefer get_total_from_cursor_id over get_cursor_results when only the count is needed.
 
         Returns:
-            Dict with cursor_id for the orphaned objects.
+            Dict with cursor_id for the orphaned object items.
         """
         try:
             query_engine = ocel_state.get("query_engine")
@@ -412,10 +437,14 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def list_available_tools() -> Dict[str, Any]:
         """
-        List all available MCP tools with their descriptions and parameter schemas.
+        List all registered MCP tools with their descriptions and parameter schemas.
+
+        Call at session start or whenever it is unclear which tool to use.
+        Returns each tool's name, single-line description, and inputSchema
+        (type + description per parameter).
 
         Returns:
-            Dict with list of tools and total count.
+            Dict with tools list, total_count, and generation metadata.
         """
         try:
             tools = _build_dynamic_tools_list(mcp)
@@ -440,19 +469,28 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         query: str, top_k: int = 5, chunk_types: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
-        Search the OCEL data using full-text search over all content including attribute values, object IDs, relationships, and schema definitions.
+        Full-text search across all OCEL content: attribute values, object IDs, activity names, and schema definitions.
 
-        Use this tool to find events or objects by any textual content: attribute values,
-        activity names, object IDs, or type definitions.
-        For discovering what attributes exist on each type, use chunk_types=["schema"].
+        Use to locate events or objects by arbitrary text when the exact type or ID is unknown.
+        For precise filtering by known activity or object type, prefer filter_by_event_type /
+        filter_by_object_type (exact match, cursor-chainable, no relevance score noise).
+
+        chunk_types values:
+          - "event_types"  — only event-type labels
+          - "object_types" — only object-type labels
+          - "events"       — actual event instances with attribute values
+          - "objects"      — actual object instances with attribute values
+          - "schema"       — event/object type definitions and their declared attributes
+          - "data"         — all events + objects with attribute values
+        Omit chunk_types to search across all content.
 
         Args:
-            query: Search query text.
-            top_k: Number of results to return (default: 5).
-            chunk_types: Optional list of chunk types to filter by. Valid values: ["event_types", "object_types", "events", "objects", "schema", "data"]. Use "schema" for event/object type definitions and their attributes, "data" for actual events/objects with their attribute values.
+            query: Free-text search query.
+            top_k: Maximum number of results to return (default: 5).
+            chunk_types: Optional list of chunk type strings to restrict the search scope.
 
         Returns:
-            Dict with search results and relevance scores.
+            Dict with query, total_results, and results list each containing {content, chunk_type, path, score, metadata}.
         """
         try:
             with ocel_lock:
@@ -495,14 +533,20 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         object_type: Optional[str] = None, include_visualization: bool = False
     ) -> Dict[str, Any]:
         """
-        Discover a Directly Follows Graph (DFG) for process discovery.
+        Discover a Directly-Follows Graph (DFG) showing activity transition frequencies.
+
+        Each edge in the response has {edge_id, source, target, frequency}.
+        The response also includes start_activities: [{activity, frequency}].
+        Results are cached; repeated calls for the same object_type are fast.
+        Use object_type (exact name from get_statistics_by_object_type) to scope
+        discovery to a single object perspective.
 
         Args:
-            object_type: Optional object type filter.
-            include_visualization: Whether to include SVG visualization.
+            object_type: Optional exact object type name to restrict the DFG perspective.
+            include_visualization: When True, includes an SVG string in the response.
 
         Returns:
-            Dict with DFG edges, activities, and optional visualization.
+            Dict with DFG edges, start_activities, and optional SVG visualization.
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
@@ -535,14 +579,20 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         object_type: Optional[str] = None, include_visualization: bool = False
     ) -> Dict[str, Any]:
         """
-        Discover a Petri Net model for process analysis.
+        Discover an Object-Centric Petri Net using the Inductive Miner algorithm.
+
+        The response includes {total_places, total_transitions, total_arcs, nets_count, object_types}.
+        Results are cached; repeated calls for the same object_type are fast.
+        Inspect this before check_conformance to understand the reference model structure.
+        Use object_type (exact name from get_statistics_by_object_type) to restrict
+        the model to one object perspective.
 
         Args:
-            object_type: Optional object type filter.
-            include_visualization: Whether to include SVG visualization.
+            object_type: Optional exact object type name to restrict the Petri net perspective.
+            include_visualization: When True, includes an SVG string in the response.
 
         Returns:
-            Dict with Petri net structure (places, transitions, markings).
+            Dict with Petri net structure (total_places, total_transitions, total_arcs, nets_count).
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
@@ -575,14 +625,18 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         object_type: Optional[str] = None, limit: int = 10
     ) -> Dict[str, Any]:
         """
-        Extract and list process variants (activity sequences).
+        Extract the most frequent activity-sequence variants, ordered by descending frequency.
+
+        A variant is a unique ordered sequence of activities followed by one object.
+        Each result item has {variant_id, sequence (activities joined by " \u2192 "), frequency, sample_objects}.
+        Use object_type to restrict extraction to one object perspective.
 
         Args:
-            object_type: Optional object type filter.
-            limit: Maximum number of variants to return (default: 10).
+            object_type: Optional exact object type name to restrict variant extraction.
+            limit: Maximum number of variants to return, ordered by frequency (default: 10).
 
         Returns:
-            Dict with cursor_id for the variants.
+            Dict with cursor_id for the variant items.
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
@@ -614,13 +668,18 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def get_performance_metrics(object_type: Optional[str] = None) -> Dict[str, Any]:
         """
-        Calculate performance metrics (flow time, processing time, etc.).
+        Calculate timing statistics for every activity transition in the process.
+
+        All time values are in SECONDS — convert to minutes/hours/days for user-facing output.
+        Returns per-transition stats keyed by "A \u2192 B":
+          {count, avg_seconds, min_seconds, max_seconds, median_seconds, std_seconds}.
+        Use detect_bottlenecks instead when only the slowest transitions are of interest.
 
         Args:
-            object_type: Optional object type filter.
+            object_type: Optional exact object type name to restrict metrics to one perspective.
 
         Returns:
-            Dict with performance metrics including mean, median, and percentiles (in seconds).
+            Dict with time_unit ("seconds"), total_transitions_analyzed, and a transitions map.
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
@@ -641,14 +700,19 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         object_type: Optional[str] = None, threshold_percentile: float = 75.0
     ) -> Dict[str, Any]:
         """
-        Detect performance bottlenecks in the process.
+        Identify activity transitions whose average duration exceeds the given percentile threshold.
+
+        Severity label: "high" when avg_seconds > threshold_seconds \u00d7 1.5, otherwise "medium".
+        Each result item has {transition, avg_seconds, max_seconds, count, severity}.
+        Response metadata includes {threshold_percentile, threshold_seconds, time_unit, total_transitions}.
+        All time values are in SECONDS.
 
         Args:
-            object_type: Optional object type filter.
-            threshold_percentile: Percentile threshold for bottleneck detection (0-100, default: 75).
+            object_type: Optional exact object type name to restrict analysis to one perspective.
+            threshold_percentile: Percentile (0–100) above which a transition is flagged (default: 75).
 
         Returns:
-            Dict with cursor_id for the detected bottlenecks.
+            Dict with cursor_id for the bottleneck items.
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
@@ -674,13 +738,19 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def check_conformance(object_type: Optional[str] = None) -> Dict[str, Any]:
         """
-        Check process conformance against discovered model.
+        Measure how closely observed traces conform to the Inductive-Miner Petri net model.
+
+        Internally rediscovers the Petri net and replays sampled traces (up to 100 per object
+        type, max 3 types). Returns at most 20 deviations.
+        Response fields: {fitness_score (0–1), fitness_percentage, sample_size, conformant_traces,
+        total_deviations, deviations: [{object_id, deviation, position}], model info}.
+        Call discover_petri_net first to inspect the reference model before checking conformance.
 
         Args:
-            object_type: Optional object type filter.
+            object_type: Optional exact object type name to restrict conformance checking.
 
         Returns:
-            Dict with conformance metrics and non-conforming traces.
+            Dict with fitness_score, fitness_percentage, deviations list, and model summary.
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
@@ -701,12 +771,14 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def analyze_object_interactions() -> Dict[str, Any]:
         """
-        Analyze interactions between different objects in the event log.
+        Compute a co-occurrence matrix showing how often pairs of object types share the same event.
 
-        Args:
+        An entry (type_A, type_B) counts events that involve at least one object of each type.
+        Result items are {type_1, type_2, co_occurrences}, sorted by co_occurrences descending.
+        Response metadata also contains co_occurrence_matrix and total_pairs_analyzed.
 
         Returns:
-            Dict with cursor_id for the object interaction patterns.
+            Dict with cursor_id for the top object-type interaction pairs.
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
@@ -730,10 +802,13 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def get_available_resource_attributes() -> Dict[str, Any]:
         """
-        Get list of available resource attributes for social network analysis.
+        List event attribute names that can be used as resource dimensions in discover_social_network.
+
+        Always call this before discover_social_network to obtain valid resource_attribute values.
+        Returns the exact attribute name strings to pass as the resource_attribute argument.
 
         Returns:
-            Dict with available resource attribute names.
+            Dict with attributes (list of strings) and total_count.
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
@@ -754,13 +829,19 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def discover_social_network(resource_attribute: str) -> Dict[str, Any]:
         """
-        Discover social network of resources (e.g., people, systems).
+        Build a resource handover network showing collaboration between actors sharing events.
+
+        Edges represent direct handover-of-work: actor A followed by actor B on the same object.
+        Response is limited to the top 20 edges by weight. Each edge: {source, target, weight}.
+        Response also contains {nodes, total_nodes, total_edges, resource_attribute}.
+        If resource_attribute is not found, the response contains "error" and "available_attributes".
+        Call get_available_resource_attributes first to obtain valid attribute names.
 
         Args:
-            resource_attribute: The resource attribute to analyze (e.g., "resource", "manager").
+            resource_attribute: Exact event attribute name identifying the resource (e.g. "ocel:actor").
 
         Returns:
-            Dict with social network graph data (nodes, edges, metrics).
+            Dict with nodes list, top-20 edges, and network metrics.
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
@@ -784,16 +865,18 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         input_cursor_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Filter events by exact event type (activity name).
+        Return all events with exactly the given activity name (case-sensitive exact match).
 
-        Use this tool for precise filtering by activity instead of the fuzzy text matching of search_ocel.
+        Prefer this over search_ocel for precise, non-fuzzy activity filtering.
+        Valid activity names come from ocel://schema/eventTypes or the event_types list in ocel://info.
+        Supports cursor chaining: pass input_cursor_id to filter within a prior result subset.
 
         Args:
-            event_type: Exact event type / activity name to filter for.
-            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, filters within that subset instead of the full OCEL.
+            event_type: Exact activity name (case-sensitive) to filter for.
+            input_cursor_id: cursor_id from a previous tool result to restrict the search scope.
 
         Returns:
-            Dict with cursor_id for the matching events.
+            Dict with cursor_id for the matching event-reference items.
         """
         try:
             cursor_store = ocel_state.get("cursor_store")
@@ -827,18 +910,18 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         input_cursor_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Filter events by object type — returns all events that involve at
-        least one object of the given type.
+        Return all events that involve at least one object of the given type (case-sensitive exact match).
 
-        Use this tool for precise filtering by object type instead of the fuzzy text matching
-        of search_ocel.
+        Prefer this over search_ocel for precise, non-fuzzy object-type filtering.
+        Valid object type names come from ocel://schema/objectTypes or get_statistics_by_object_type.
+        Supports cursor chaining: pass input_cursor_id to filter within a prior result subset.
 
         Args:
-            object_type: Exact object type name to filter for.
-            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, filters within that subset instead of the full OCEL.
+            object_type: Exact object type name (case-sensitive) to filter for.
+            input_cursor_id: cursor_id from a previous tool result to restrict the search scope.
 
         Returns:
-            Dict with cursor_id for the matching events.
+            Dict with cursor_id for the matching event-reference items.
         """
         try:
             cursor_store = ocel_state.get("cursor_store")
@@ -873,15 +956,17 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def get_total_from_cursor_id(cursor_id: str) -> Dict[str, Any]:
         """
-        Return the total number of items stored in a cursor without loading the data.
+        Return the item count of a cursor without loading any data.
 
-        Use this instead of fetching full results when you only need a count.
+        Use this instead of get_cursor_results when only a count is needed.
+        For a richer summary (activity types, object types, time range)
+        use get_summary_from_cursor_id instead.
 
         Args:
             cursor_id: The cursor identifier returned by a previous tool call.
 
         Returns:
-            Dict with cursor_id and total item count.
+            Dict with cursor_id and total (integer item count).
         """
         try:
             cursor_store = ocel_state.get("cursor_store")
@@ -901,19 +986,19 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def get_timerange_by_cursor_id(cursor_id: str) -> Dict[str, Any]:
         """
-        Return the temporal range (start, end, duration) of the events in a cursor
-        without loading the full data.
+        Return the temporal bounds of an event cursor without loading any data.
 
-        Only available for cursors produced by event-filtering tools
-        (e.g., filter_by_event_type, query_events_by_timerange, trace_object_lifecycle).
-        Use this to learn the temporal bounds of a filtered subset before deciding
-        how to partition it further.
+        Returns {cursor_id, start (ISO 8601), end (ISO 8601), duration_seconds}.
+        Only works for event-reference cursors (produced by filter_by_event_type,
+        query_events_by_timerange, trace_object_lifecycle, etc.).
+        Raises an error for non-event cursors (e.g. find_orphaned_objects).
+        Use before further time-window decomposition to know the active time span.
 
         Args:
             cursor_id: The cursor identifier returned by a previous tool call.
 
         Returns:
-            Dict with cursor_id, start (ISO 8601), end (ISO 8601), and duration_seconds.
+            Dict with cursor_id, start, end (ISO 8601 strings), and duration_seconds.
         """
         try:
             cursor_store = ocel_state.get("cursor_store")
@@ -935,19 +1020,16 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def intersect_cursors(cursor_id_1: str, cursor_id_2: str) -> Dict[str, Any]:
         """
-        Compute the intersection of two event cursors by event_id.
+        Compute the intersection of two event cursors — keeps only events present in BOTH.
 
-        Returns a new cursor containing only events present in BOTH cursors.
-        Useful for combining independent filter results without loading either
-        dataset into the LLM context.
-
-        Both cursors must contain event-reference items (produced by event-
-        filtering tools). Non-event cursors (e.g. from find_orphaned_objects)
-        are not supported.
+        Deduplicates on event_id. Does not load any data into the LLM context.
+        Both cursors must be event-reference cursors (from event-filtering tools).
+        Non-event cursors (e.g. find_orphaned_objects) are not supported.
+        Use to combine two independent parallel filters without fetching intermediate results.
 
         Args:
-            cursor_id_1: First cursor identifier.
-            cursor_id_2: Second cursor identifier.
+            cursor_id_1: First event-reference cursor identifier.
+            cursor_id_2: Second event-reference cursor identifier.
 
         Returns:
             Dict with cursor_id for the intersection result.
@@ -976,19 +1058,16 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def union_cursors(cursor_id_1: str, cursor_id_2: str) -> Dict[str, Any]:
         """
-        Compute the union of two event cursors, deduplicated by event_id.
+        Compute the union of two event cursors — all events from either, deduplicated by event_id.
 
-        Returns a new cursor containing all events present in EITHER cursor,
-        with duplicates removed. Useful for merging results from parallel
-        filter paths without loading either dataset into the LLM context.
-
-        Both cursors must contain event-reference items (produced by event-
-        filtering tools). Non-event cursors (e.g. from find_orphaned_objects)
-        are not supported.
+        Does not load any data into the LLM context.
+        Both cursors must be event-reference cursors (from event-filtering tools).
+        Non-event cursors (e.g. find_orphaned_objects) are not supported.
+        Use to merge results from parallel filter paths before inspection or fetch.
 
         Args:
-            cursor_id_1: First cursor identifier.
-            cursor_id_2: Second cursor identifier.
+            cursor_id_1: First event-reference cursor identifier.
+            cursor_id_2: Second event-reference cursor identifier.
 
         Returns:
             Dict with cursor_id for the union result.
@@ -1025,12 +1104,13 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def get_summary_from_cursor_id(cursor_id: str) -> Dict[str, Any]:
         """
-        Return a lightweight summary of the cursor without loading the full data.
+        Return a lightweight summary of a cursor's contents without loading all items.
 
-        Reports total item count, activity types, object types, and time range.
-        Only activity/object/time fields are populated for event-reference cursors
-        (produced by event-filtering tools).
-        Use this to characterise a subset before deciding whether to fetch it.
+        Reports: total item count, distinct activity_types, distinct object_types,
+        time_start and time_end (ISO 8601).
+        Activity/object/time fields are only populated for event-reference cursors
+        (from event-filtering tools); other cursor types return those fields as None.
+        Call this before get_cursor_results to characterise a subset and decide whether to fetch.
 
         Args:
             cursor_id: The cursor identifier returned by a previous tool call.
@@ -1060,11 +1140,12 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def get_cursor_results(cursor_id: str) -> Dict[str, Any]:
         """
-        Retrieve ALL data stored in a cursor.
+        Fetch ALL items stored in a cursor — use only for the final subset to present to the user.
 
-        Call this only for the final filtered subset you intend to present to the user.
-        For counts, time ranges, or type composition, prefer the cheaper inspection
-        tools.
+        This loads the full dataset into context; prefer cheaper inspection tools first:
+          - get_total_from_cursor_id    → count only
+          - get_timerange_by_cursor_id  → temporal bounds only
+          - get_summary_from_cursor_id  → count + types + time range
 
         Args:
             cursor_id: The cursor identifier returned by a previous tool call.
