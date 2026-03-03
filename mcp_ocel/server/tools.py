@@ -128,74 +128,6 @@ def _build_dynamic_tools_list(mcp: FastMCP) -> List[ToolInfoDict]:
     return tools_list
 
 
-def _paginate_response(
-    response_dict: Dict[str, Any],
-    tool_name: str,
-    cursor_store: Any,
-    page_size: int = constants.DEFAULT_PAGE_SIZE,
-) -> Dict[str, Any]:
-    """
-    Store the ``references`` list in the cursor store and inject a
-    ``cursor_id`` into the response metadata.
-
-    * When references **exceed** *page_size* the list is truncated to the
-      first page and full ``pagination`` metadata is added (existing
-      behaviour).
-    * When references **fit** in a single page, the list is left intact
-      but a ``cursor_id`` is still stored so that downstream tools can
-      use it via ``input_cursor_id`` for chaining.
-
-    Returns the (possibly modified) response dict.
-    """
-    refs = response_dict.get("references")
-    if refs is None or not isinstance(refs, list):
-        return response_dict
-
-    total = len(refs)
-    if total == 0:
-        return response_dict
-
-    import math
-
-    cursor_id = cursor_store.create_cursor(tool_name, refs, page_size)
-    total_pages = max(1, math.ceil(total / page_size))
-
-    if total > page_size:
-        # Multi-page: truncate and add full pagination block
-        response_dict["references"] = refs[:page_size]
-        response_dict["pagination"] = {
-            "cursor_id": cursor_id,
-            "page": 1,
-            "total_pages": total_pages,
-            "total_items": total,
-            "page_size": page_size,
-            "has_more": True,
-            "hint": (
-                f"Showing {page_size} of {total} items. "
-                f"Use get_cursor_results(cursor_id='{cursor_id}', page=2) "
-                f"to retrieve more pages. "
-                f"To chain results into another tool, pass "
-                f"input_cursor_id='{cursor_id}'."
-            ),
-        }
-    else:
-        # Single page: keep all references, expose cursor_id for chaining
-        response_dict["pagination"] = {
-            "cursor_id": cursor_id,
-            "page": 1,
-            "total_pages": 1,
-            "total_items": total,
-            "page_size": page_size,
-            "has_more": False,
-            "hint": (
-                f"All {total} items returned. "
-                f"To chain these results into another tool, pass "
-                f"input_cursor_id='{cursor_id}'."
-            ),
-        }
-    return response_dict
-
-
 # ---------------------------------------------------------------------------
 # Cursor-chaining helpers
 # ---------------------------------------------------------------------------
@@ -320,52 +252,36 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
     @mcp.tool()
     @debug_log_tool
-    def trace_object_lifecycle(object_id: str, total_only: bool = False, input_cursor_id: Optional[str] = None) -> Dict[str, Any]:
+    def trace_object_lifecycle(object_id: str, input_cursor_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Trace the full lifecycle of an object through all events.
 
         Args:
             object_id: The unique identifier of the object to trace.
-            total_only: If True, return only the total count of events instead of full data.
-            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, the tool filters within that subset instead of the full OCEL.
+            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, filters within that subset instead of the full OCEL.
 
         Returns:
-            Dict with event references, summary, and metadata.
+            Dict with cursor_id for the matching events.
         """
         try:
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
             input_data = _resolve_input_data(ocel_state, input_cursor_id)
 
             if input_data is not None:
-                filtered = _filter_refs_by_object_id(input_data, object_id)
-                if total_only:
-                    return {"total": len(filtered)}
-                response = ResponseBuilder.build_lifecycle_response(
-                    object_id, [], visualization=None
-                )
-                result = response.to_dict()
-                result["references"] = filtered
-                result["metadata"]["total_events"] = len(filtered)
-                result["metadata"]["source"] = "cursor_chain"
+                refs = _filter_refs_by_object_id(input_data, object_id)
             else:
                 query_engine = ocel_state.get("query_engine")
                 if not query_engine:
                     return {"error": "OCEL query engine not initialized"}
 
                 references = query_engine.trace_object_lifecycle(object_id)
+                refs = [ref.to_dict() for ref in references]
 
-                if total_only:
-                    return {"total": len(references)}
-
-                response = ResponseBuilder.build_lifecycle_response(
-                    object_id, references
-                )
-                result = response.to_dict()
-
-            cursor_store = ocel_state.get("cursor_store")
-            if cursor_store:
-                result = _paginate_response(result, "trace_object_lifecycle", cursor_store)
-
-            return result
+            cursor_id = cursor_store.create_cursor("trace_object_lifecycle", refs)
+            return {"cursor_id": cursor_id}
 
         except ValueError as e:
             return {"error": str(e)}
@@ -375,33 +291,27 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
     @mcp.tool()
     @debug_log_tool
-    def query_events_by_timerange(start_datetime: str, end_datetime: str, total_only: bool = False, input_cursor_id: Optional[str] = None) -> Dict[str, Any]:
+    def query_events_by_timerange(start_datetime: str, end_datetime: str, input_cursor_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Query events within a specific time range.
 
         Args:
             start_datetime: Start time in ISO 8601 format (e.g., "2025-01-20T10:00:00Z").
             end_datetime: End time in ISO 8601 format (e.g., "2025-01-20T15:00:00Z").
-            total_only: If True, return only the total count of events instead of full data.
-            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, the tool filters within that subset instead of the full OCEL.
+            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, filters within that subset instead of the full OCEL.
 
         Returns:
-            Dict with event references, summary, and metadata.
+            Dict with cursor_id for the matching events.
         """
         try:
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
             input_data = _resolve_input_data(ocel_state, input_cursor_id)
 
             if input_data is not None:
-                filtered = _filter_refs_by_timerange(input_data, start_datetime, end_datetime)
-                if total_only:
-                    return {"total": len(filtered)}
-                response = ResponseBuilder.build_timerange_response(
-                    start_datetime, end_datetime, []
-                )
-                result = response.to_dict()
-                result["references"] = filtered
-                result["metadata"]["total_events"] = len(filtered)
-                result["metadata"]["source"] = "cursor_chain"
+                refs = _filter_refs_by_timerange(input_data, start_datetime, end_datetime)
             else:
                 query_engine = ocel_state.get("query_engine")
                 if not query_engine:
@@ -410,20 +320,10 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 references = query_engine.query_events_by_timerange(
                     start_datetime, end_datetime
                 )
+                refs = [ref.to_dict() for ref in references]
 
-                if total_only:
-                    return {"total": len(references)}
-
-                response = ResponseBuilder.build_timerange_response(
-                    start_datetime, end_datetime, references
-                )
-                result = response.to_dict()
-
-            cursor_store = ocel_state.get("cursor_store")
-            if cursor_store:
-                result = _paginate_response(result, "query_events_by_timerange", cursor_store)
-
-            return result
+            cursor_id = cursor_store.create_cursor("query_events_by_timerange", refs)
+            return {"cursor_id": cursor_id}
 
         except ValueError as e:
             return {"error": str(e)}
@@ -433,15 +333,12 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
     @mcp.tool()
     @debug_log_tool
-    def get_statistics_by_object_type(total_only: bool = False) -> Dict[str, Any]:
+    def get_statistics_by_object_type() -> Dict[str, Any]:
         """
         Get statistical information grouped by object type.
 
-        Args:
-            total_only: If True, return only the total count of object types instead of full data.
-
         Returns:
-            Dict with statistics by object type and metadata.
+            Dict with statistics per object type.
         """
         try:
             query_engine = ocel_state.get("query_engine")
@@ -449,11 +346,8 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 return {"error": "OCEL query engine not initialized"}
 
             stats = query_engine.get_statistics_by_object_type()
-
-            if total_only:
-                return {"total": len(stats)}
-
             response = ResponseBuilder.build_statistics_response(stats)
+
             return response.to_dict()
 
         except Exception as e:
@@ -462,34 +356,26 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
     @mcp.tool()
     @debug_log_tool
-    def detect_anomalies(total_only: bool = False) -> Dict[str, Any]:
+    def detect_anomalies() -> Dict[str, Any]:
         """
         Detect anomalies in the event log (orphaned objects, broken references).
 
-        Args:
-            total_only: If True, return only the total count of anomalies instead of full data.
-
         Returns:
-            Dict with detected anomalies and severity information.
+            Dict with cursor_id for the detected anomalies.
         """
         try:
             query_engine = ocel_state.get("query_engine")
             if not query_engine:
                 return {"error": "OCEL query engine not initialized"}
 
-            anomalies = query_engine.detect_anomalies()
-
-            if total_only:
-                return {"total": len(anomalies)}
-
-            response = ResponseBuilder.build_anomalies_response(anomalies)
-            result = response.to_dict()
-
             cursor_store = ocel_state.get("cursor_store")
-            if cursor_store:
-                result = _paginate_response(result, "detect_anomalies", cursor_store)
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
 
-            return result
+            anomalies = query_engine.detect_anomalies()
+            refs = [anom.to_dict() for anom in anomalies]
+            cursor_id = cursor_store.create_cursor("detect_anomalies", refs)
+            return {"cursor_id": cursor_id}
 
         except Exception as e:
             logger.error(f"Error in detect_anomalies: {e}")
@@ -497,39 +383,26 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
     @mcp.tool()
     @debug_log_tool
-    def find_orphaned_objects(total_only: bool = False) -> Dict[str, Any]:
+    def find_orphaned_objects() -> Dict[str, Any]:
         """
         Find objects that have no associated events.
 
-        Args:
-            total_only: If True, return only the total count of orphaned objects instead of full data.
-
         Returns:
-            Dict with list of orphaned object IDs and statistics.
+            Dict with cursor_id for the orphaned objects.
         """
         try:
             query_engine = ocel_state.get("query_engine")
             if not query_engine:
                 return {"error": "OCEL query engine not initialized"}
 
-            orphaned = query_engine.find_orphaned_objects()
-
-            if total_only:
-                return {"total": len(orphaned)}
-
-            ocel_data = ocel_state.get("ocel_data")
-            total_objects = len(ocel_data.objects) if ocel_data else 0
-
-            response = ResponseBuilder.build_orphaned_response(
-                orphaned, total_objects
-            )
-            result = response.to_dict()
-
             cursor_store = ocel_state.get("cursor_store")
-            if cursor_store:
-                result = _paginate_response(result, "find_orphaned_objects", cursor_store)
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
 
-            return result
+            orphaned = query_engine.find_orphaned_objects()
+            refs = [{"object_id": obj_id, "status": "orphaned"} for obj_id in orphaned]
+            cursor_id = cursor_store.create_cursor("find_orphaned_objects", refs)
+            return {"cursor_id": cursor_id}
 
         except Exception as e:
             logger.error(f"Error in find_orphaned_objects: {e}")
@@ -564,7 +437,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @mcp.tool()
     @debug_log_tool
     def search_ocel(
-        query: str, top_k: int = 5, chunk_types: Optional[List[str]] = None, total_only: bool = False
+        query: str, top_k: int = 5, chunk_types: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Search the OCEL data using full-text search over all content including attribute values, object IDs, relationships, and schema definitions.
@@ -577,7 +450,6 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             query: Search query text.
             top_k: Number of results to return (default: 5).
             chunk_types: Optional list of chunk types to filter by. Valid values: ["event_types", "object_types", "events", "objects", "schema", "data"]. Use "schema" for event/object type definitions and their attributes, "data" for actual events/objects with their attribute values.
-            total_only: If True, return only the estimated total count of events/objects in matching chunks instead of full data.
 
         Returns:
             Dict with search results and relevance scores.
@@ -597,15 +469,6 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 else:
                     results = retrieval_engine.search(query, top_k=top_k)
 
-            if total_only:
-                # Sum the item counts from each matching chunk for a meaningful total
-                estimated_total = sum(
-                    r.get("metadata", {}).get("count", 1)
-                    for r in results
-                )
-                return {"total": estimated_total, "matching_chunks": len(results)}
-
-            # Format results inline (simpler format for LLM consumption)
             formatted_results = []
             for result in results:
                 formatted_results.append({
@@ -709,7 +572,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @mcp.tool()
     @debug_log_tool
     def get_process_variants(
-        object_type: Optional[str] = None, limit: int = 10, total_only: bool = False
+        object_type: Optional[str] = None, limit: int = 10
     ) -> Dict[str, Any]:
         """
         Extract and list process variants (activity sequences).
@@ -717,29 +580,31 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         Args:
             object_type: Optional object type filter.
             limit: Maximum number of variants to return (default: 10).
-            total_only: If True, return only the total count of variants instead of full data.
 
         Returns:
-            Dict with list of variants ordered by frequency.
+            Dict with cursor_id for the variants.
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
             if not mining_engine:
                 return {"error": "Process mining engine not initialized"}
 
-            variants = mining_engine.extract_process_variants(object_type, limit)
-
-            if total_only:
-                return {"total": len(variants)}
-
-            response = ResponseBuilder.build_variants_response(variants, object_type)
-            result = response.to_dict()
-
             cursor_store = ocel_state.get("cursor_store")
-            if cursor_store:
-                result = _paginate_response(result, "get_process_variants", cursor_store)
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
 
-            return result
+            variants = mining_engine.extract_process_variants(object_type, limit)
+            refs = [
+                {
+                    "variant_id": i + 1,
+                    "sequence": " → ".join(v.get("activity_sequence", [])),
+                    "frequency": v.get("frequency", 0),
+                    "sample_objects": v.get("sample_objects", v.get("sample_events", [])),
+                }
+                for i, v in enumerate(variants)
+            ]
+            cursor_id = cursor_store.create_cursor("get_process_variants", refs)
+            return {"cursor_id": cursor_id}
 
         except Exception as e:
             logger.error(f"Error in get_process_variants: {e}")
@@ -773,7 +638,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @mcp.tool()
     @debug_log_tool
     def detect_bottlenecks(
-        object_type: Optional[str] = None, threshold_percentile: float = 75.0, total_only: bool = False
+        object_type: Optional[str] = None, threshold_percentile: float = 75.0
     ) -> Dict[str, Any]:
         """
         Detect performance bottlenecks in the process.
@@ -781,34 +646,25 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         Args:
             object_type: Optional object type filter.
             threshold_percentile: Percentile threshold for bottleneck detection (0-100, default: 75).
-            total_only: If True, return only the total count of bottlenecks instead of full data.
 
         Returns:
-            Dict with detected bottlenecks and affected activities.
+            Dict with cursor_id for the detected bottlenecks.
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
             if not mining_engine:
                 return {"error": "Process mining engine not initialized"}
 
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
             bottlenecks = mining_engine.detect_bottlenecks(
                 object_type, threshold_percentile
             )
-
-            if total_only:
-                count = len(bottlenecks) if isinstance(bottlenecks, list) else 1
-                return {"total": count}
-
-            response = ResponseBuilder.build_bottlenecks_response(
-                bottlenecks
-            )
-            result = response.to_dict()
-
-            cursor_store = ocel_state.get("cursor_store")
-            if cursor_store:
-                result = _paginate_response(result, "detect_bottlenecks", cursor_store)
-
-            return result
+            refs = bottlenecks if isinstance(bottlenecks, list) else [bottlenecks]
+            cursor_id = cursor_store.create_cursor("detect_bottlenecks", refs)
+            return {"cursor_id": cursor_id}
 
         except Exception as e:
             logger.error(f"Error in detect_bottlenecks: {e}")
@@ -843,35 +699,28 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
     @mcp.tool()
     @debug_log_tool
-    def analyze_object_interactions(total_only: bool = False) -> Dict[str, Any]:
+    def analyze_object_interactions() -> Dict[str, Any]:
         """
         Analyze interactions between different objects in the event log.
 
         Args:
-            total_only: If True, return only the total count of interaction pairs instead of full data.
 
         Returns:
-            Dict with object interaction patterns and co-occurrence statistics.
+            Dict with cursor_id for the object interaction patterns.
         """
         try:
             mining_engine = ocel_state.get("mining_engine")
             if not mining_engine:
                 return {"error": "Process mining engine not initialized"}
 
-            interactions = mining_engine.analyze_object_interactions()
-
-            if total_only:
-                count = len(interactions) if isinstance(interactions, list) else 1
-                return {"total": count}
-
-            response = ResponseBuilder.build_interactions_response(interactions)
-            result = response.to_dict()
-
             cursor_store = ocel_state.get("cursor_store")
-            if cursor_store:
-                result = _paginate_response(result, "analyze_object_interactions", cursor_store)
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
 
-            return result
+            interactions = mining_engine.analyze_object_interactions()
+            refs = interactions if isinstance(interactions, list) else [interactions]
+            cursor_id = cursor_store.create_cursor("analyze_object_interactions", refs)
+            return {"cursor_id": cursor_id}
 
         except Exception as e:
             logger.error(f"Error in analyze_object_interactions: {e}")
@@ -879,12 +728,9 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
     @mcp.tool()
     @debug_log_tool
-    def get_available_resource_attributes(total_only: bool = False) -> Dict[str, Any]:
+    def get_available_resource_attributes() -> Dict[str, Any]:
         """
         Get list of available resource attributes for social network analysis.
-
-        Args:
-            total_only: If True, return only the total count of attributes instead of full data.
 
         Returns:
             Dict with available resource attribute names.
@@ -895,18 +741,10 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 return {"error": "Process mining engine not initialized"}
 
             attributes = mining_engine.get_available_resource_attributes()
-
-            if total_only:
-                return {"total": len(attributes)}
-
-            response = {
+            return {
                 "attributes": attributes,
                 "total_count": len(attributes),
-                "metadata": {
-                    "generated_at": datetime.now().isoformat(),
-                },
             }
-            return response
 
         except Exception as e:
             logger.error(f"Error in get_available_resource_attributes: {e}")
@@ -943,58 +781,38 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def filter_by_event_type(
         event_type: str,
-        total_only: bool = False,
         input_cursor_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Filter events by exact event type (activity name).
 
         Use this tool for precise filtering by activity instead of the fuzzy text matching of search_ocel.
-        Results can be chained into other tools via the returned cursor_id.
 
         Args:
             event_type: Exact event type / activity name to filter for.
-            total_only: If True, return only the total count of events instead of full data.
-            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, the tool filters within that subset instead of the full OCEL.
+            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, filters within that subset instead of the full OCEL.
 
         Returns:
-            Dict with matching event references, summary, and metadata.
+            Dict with cursor_id for the matching events.
         """
         try:
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
             input_data = _resolve_input_data(ocel_state, input_cursor_id)
 
             if input_data is not None:
-                filtered = _filter_refs_by_event_type(input_data, event_type)
-                if total_only:
-                    return {"total": len(filtered)}
-                response = ResponseBuilder.build_filter_response(
-                    "event_type", event_type, [], source="cursor_chain"
-                )
-                result = response.to_dict()
-                result["references"] = filtered
-                result["metadata"]["total_events"] = len(filtered)
+                refs = _filter_refs_by_event_type(input_data, event_type)
             else:
                 query_engine = ocel_state.get("query_engine")
                 if not query_engine:
                     return {"error": "OCEL query engine not initialized"}
-
                 references = query_engine.get_events_by_event_type(event_type)
+                refs = [ref.to_dict() for ref in references]
 
-                if total_only:
-                    return {"total": len(references)}
-
-                response = ResponseBuilder.build_filter_response(
-                    "event_type", event_type, references, source="ocel"
-                )
-                result = response.to_dict()
-
-            cursor_store = ocel_state.get("cursor_store")
-            if cursor_store:
-                result = _paginate_response(
-                    result, "filter_by_event_type", cursor_store
-                )
-
-            return result
+            cursor_id = cursor_store.create_cursor("filter_by_event_type", refs)
+            return {"cursor_id": cursor_id}
 
         except ValueError as e:
             return {"error": str(e)}
@@ -1006,7 +824,6 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @debug_log_tool
     def filter_by_object_type(
         object_type: str,
-        total_only: bool = False,
         input_cursor_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -1014,52 +831,33 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         least one object of the given type.
 
         Use this tool for precise filtering by object type instead of the fuzzy text matching
-        of search_ocel. Results can be chained into other tools via the
-        returned cursor_id.
+        of search_ocel.
 
         Args:
             object_type: Exact object type name to filter for.
-            total_only: If True, return only the total count of events instead of full data.
-            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, the tool filters within that subset instead of the full OCEL.
+            input_cursor_id: Optional cursor_id from a previous tool result to chain filters. When provided, filters within that subset instead of the full OCEL.
 
         Returns:
-            Dict with matching event references, summary, and metadata.
+            Dict with cursor_id for the matching events.
         """
         try:
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
             input_data = _resolve_input_data(ocel_state, input_cursor_id)
 
             if input_data is not None:
-                filtered = _filter_refs_by_object_type(input_data, object_type)
-                if total_only:
-                    return {"total": len(filtered)}
-                response = ResponseBuilder.build_filter_response(
-                    "object_type", object_type, [], source="cursor_chain"
-                )
-                result = response.to_dict()
-                result["references"] = filtered
-                result["metadata"]["total_events"] = len(filtered)
+                refs = _filter_refs_by_object_type(input_data, object_type)
             else:
                 query_engine = ocel_state.get("query_engine")
                 if not query_engine:
                     return {"error": "OCEL query engine not initialized"}
-
                 references = query_engine.get_events_by_object_type(object_type)
+                refs = [ref.to_dict() for ref in references]
 
-                if total_only:
-                    return {"total": len(references)}
-
-                response = ResponseBuilder.build_filter_response(
-                    "object_type", object_type, references, source="ocel"
-                )
-                result = response.to_dict()
-
-            cursor_store = ocel_state.get("cursor_store")
-            if cursor_store:
-                result = _paginate_response(
-                    result, "filter_by_object_type", cursor_store
-                )
-
-            return result
+            cursor_id = cursor_store.create_cursor("filter_by_object_type", refs)
+            return {"cursor_id": cursor_id}
 
         except ValueError as e:
             return {"error": str(e)}
@@ -1068,37 +866,221 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": f"Internal error: {str(e)}"}
 
     # =========================================================================
-    # CURSOR / PAGINATION
+    # CURSOR INSPECTION & SET OPERATIONS
     # =========================================================================
 
     @mcp.tool()
     @debug_log_tool
-    def get_cursor_results(cursor_id: str, page: int = 1) -> Dict[str, Any]:
+    def get_total_from_cursor_id(cursor_id: str) -> Dict[str, Any]:
         """
-        Retrieve a specific page of results from a previous query cursor.
+        Return the total number of items stored in a cursor without loading the data.
 
-        When a tool returns more results than fit in a single response, a
-        cursor_id is included in the pagination metadata. Use this tool
-        to fetch subsequent pages.
+        Use this instead of fetching full results when you only need a count.
 
         Args:
             cursor_id: The cursor identifier returned by a previous tool call.
-            page: Page number to retrieve (1-indexed, default: 1).
 
         Returns:
-            Dict with items for the requested page and pagination metadata.
+            Dict with cursor_id and total item count.
         """
         try:
             cursor_store = ocel_state.get("cursor_store")
             if not cursor_store:
                 return {"error": "Cursor store not available"}
 
-            cursor_page = cursor_store.get_page(cursor_id, page)
-            return cursor_page.to_dict()
+            total = cursor_store.get_total(cursor_id)
+            return {"cursor_id": cursor_id, "total": total}
+
+        except KeyError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error(f"Error in get_total_from_cursor_id: {e}")
+            return {"error": f"Internal error: {str(e)}"}
+
+    @mcp.tool()
+    @debug_log_tool
+    def get_timerange_by_cursor_id(cursor_id: str) -> Dict[str, Any]:
+        """
+        Return the temporal range (start, end, duration) of the events in a cursor
+        without loading the full data.
+
+        Only available for cursors produced by event-filtering tools
+        (e.g., filter_by_event_type, query_events_by_timerange, trace_object_lifecycle).
+        Use this to learn the temporal bounds of a filtered subset before deciding
+        how to partition it further.
+
+        Args:
+            cursor_id: The cursor identifier returned by a previous tool call.
+
+        Returns:
+            Dict with cursor_id, start (ISO 8601), end (ISO 8601), and duration_seconds.
+        """
+        try:
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
+            timerange = cursor_store.get_timerange(cursor_id)
+            return {"cursor_id": cursor_id, **timerange}
 
         except KeyError as e:
             return {"error": str(e)}
         except ValueError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error(f"Error in get_timerange_by_cursor_id: {e}")
+            return {"error": f"Internal error: {str(e)}"}
+
+    @mcp.tool()
+    @debug_log_tool
+    def intersect_cursors(cursor_id_1: str, cursor_id_2: str) -> Dict[str, Any]:
+        """
+        Compute the intersection of two event cursors by event_id.
+
+        Returns a new cursor containing only events present in BOTH cursors.
+        Useful for combining independent filter results without loading either
+        dataset into the LLM context.
+
+        Both cursors must contain event-reference items (produced by event-
+        filtering tools). Non-event cursors (e.g. from find_orphaned_objects)
+        are not supported.
+
+        Args:
+            cursor_id_1: First cursor identifier.
+            cursor_id_2: Second cursor identifier.
+
+        Returns:
+            Dict with cursor_id for the intersection result.
+        """
+        try:
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
+            items_1 = cursor_store.get_all_items(cursor_id_1)
+            items_2 = cursor_store.get_all_items(cursor_id_2)
+
+            ids_2 = {item["event_id"] for item in items_2 if "event_id" in item}
+            result = [item for item in items_1 if item.get("event_id") in ids_2]
+
+            cursor_id = cursor_store.create_cursor("intersect_cursors", result)
+            return {"cursor_id": cursor_id}
+
+        except KeyError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error(f"Error in intersect_cursors: {e}")
+            return {"error": f"Internal error: {str(e)}"}
+
+    @mcp.tool()
+    @debug_log_tool
+    def union_cursors(cursor_id_1: str, cursor_id_2: str) -> Dict[str, Any]:
+        """
+        Compute the union of two event cursors, deduplicated by event_id.
+
+        Returns a new cursor containing all events present in EITHER cursor,
+        with duplicates removed. Useful for merging results from parallel
+        filter paths without loading either dataset into the LLM context.
+
+        Both cursors must contain event-reference items (produced by event-
+        filtering tools). Non-event cursors (e.g. from find_orphaned_objects)
+        are not supported.
+
+        Args:
+            cursor_id_1: First cursor identifier.
+            cursor_id_2: Second cursor identifier.
+
+        Returns:
+            Dict with cursor_id for the union result.
+        """
+        try:
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
+            items_1 = cursor_store.get_all_items(cursor_id_1)
+            items_2 = cursor_store.get_all_items(cursor_id_2)
+
+            seen: set = set()
+            result = []
+            for item in items_1 + items_2:
+                eid = item.get("event_id")
+                if eid:
+                    if eid not in seen:
+                        seen.add(eid)
+                        result.append(item)
+                else:
+                    result.append(item)
+
+            cursor_id = cursor_store.create_cursor("union_cursors", result)
+            return {"cursor_id": cursor_id}
+
+        except KeyError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error(f"Error in union_cursors: {e}")
+            return {"error": f"Internal error: {str(e)}"}
+
+    @mcp.tool()
+    @debug_log_tool
+    def get_summary_from_cursor_id(cursor_id: str) -> Dict[str, Any]:
+        """
+        Return a lightweight summary of the cursor without loading the full data.
+
+        Reports total item count, activity types, object types, and time range.
+        Only activity/object/time fields are populated for event-reference cursors
+        (produced by event-filtering tools).
+        Use this to characterise a subset before deciding whether to fetch it.
+
+        Args:
+            cursor_id: The cursor identifier returned by a previous tool call.
+
+        Returns:
+            Dict with cursor_id, total, activity_types, object_types, time_start, time_end.
+        """
+        try:
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
+            summary = cursor_store.get_summary(cursor_id)
+            return {"cursor_id": cursor_id, **summary}
+
+        except KeyError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error(f"Error in get_summary_from_cursor_id: {e}")
+            return {"error": f"Internal error: {str(e)}"}
+
+    # =========================================================================
+    # CURSOR FETCH
+    # =========================================================================
+
+    @mcp.tool()
+    @debug_log_tool
+    def get_cursor_results(cursor_id: str) -> Dict[str, Any]:
+        """
+        Retrieve ALL data stored in a cursor.
+
+        Call this only for the final filtered subset you intend to present to the user.
+        For counts, time ranges, or type composition, prefer the cheaper inspection
+        tools.
+
+        Args:
+            cursor_id: The cursor identifier returned by a previous tool call.
+
+        Returns:
+            Dict with cursor_id, total item count, and the full results list.
+        """
+        try:
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
+            items = cursor_store.get_all_items(cursor_id)
+            return {"cursor_id": cursor_id, "total": len(items), "results": items}
+
+        except KeyError as e:
             return {"error": str(e)}
         except Exception as e:
             logger.error(f"Error in get_cursor_results: {e}")
@@ -1120,8 +1102,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             "server": constants.MCP_IMPLEMENTATION_NAME,
             "version": constants.MCP_IMPLEMENTATION_VERSION,
             "ocel_loaded": ocel_state.get("ocel_data") is not None,
-            "generated_at": datetime.now().isoformat(),
-            "page_size": constants.DEFAULT_PAGE_SIZE
+            "generated_at": datetime.now().isoformat()
         }
         return json.dumps(info, indent=2)
 

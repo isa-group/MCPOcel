@@ -148,11 +148,8 @@ def _initialize_ocel_state(ocel_path: str, debug: bool = False) -> None:
         except Exception as e:
             logger.warning(f"Failed to initialize retrieval engine: {e}")
     
-    # Initialize cursor store for paginated results
-    cursor_store = CursorStore(
-        default_page_size=constants.DEFAULT_PAGE_SIZE,
-        max_age_seconds=constants.MAX_CURSOR_AGE_SECONDS,
-    )
+    # Initialize cursor store — lives for the lifespan of the client session
+    cursor_store = CursorStore()
     
     # Store in global state
     _ocel_state["config"] = ocel_config

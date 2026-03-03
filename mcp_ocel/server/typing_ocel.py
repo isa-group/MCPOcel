@@ -645,8 +645,6 @@ class UnifiedMCPResponse:
             "summary": self.summary,
             "visualization": self.visualization,
             "metadata": self.metadata or {},
-            "verification_hash": self.verification_hash,
-            "generated_at": self.generated_at,
         }
 
 
