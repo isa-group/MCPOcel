@@ -275,35 +275,6 @@ async def execute_tool_calls(
     return results
 
 
-async def enrich_context_with_search(client: MCPClient, user_query: str) -> Optional[str]:
-    """
-    Use hybrid search to find relevant OCEL context for the user's query.
-    
-    Returns formatted context string or None if search fails/unavailable.
-    """
-    try:
-        result = await client.search_ocel(query=user_query, top_k=3)
-        
-        if "error" in result:
-            return None
-        
-        results = result.get("results", [])
-        if not results:
-            return None
-        
-        context_parts = []
-        for r in results:
-            chunk_type = r.get("chunk_type", "unknown")
-            content = r.get("content", "")
-            score = r.get("score", 0)
-            context_parts.append(f"[{chunk_type} | relevance: {score:.3f}]\n{content}")
-        
-        return "### Relevant OCEL Context (from hybrid search)\n" + "\n\n".join(context_parts)
-    
-    except Exception:
-        return None
-
-
 async def interactive_chat_async(args: argparse.Namespace) -> None:
     """Main interactive chat loop (async version) with native tool calling."""
     global _mcp_client_ref
@@ -356,16 +327,8 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
                 if user_text.lower() in {":quit", ":exit"}:
                     break
 
-                # Enrich context with hybrid search before sending to LLM
-                search_context = await enrich_context_with_search(mcp_client, user_text)
-                if search_context:
-                    enriched_query = f"{user_text}\n\n{search_context}"
-                    print("  [Hybrid search context added]")
-                else:
-                    enriched_query = user_text
-
                 # Add user message
-                messages.append({"role": "user", "content": enriched_query})
+                messages.append({"role": "user", "content": user_text})
                 
                 prompt_tokens = estimate_tokens(
                     [{"role": m["role"], "content": m.get("content", "")} for m in messages],
