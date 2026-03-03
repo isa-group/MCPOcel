@@ -1,15 +1,42 @@
+import inspect
 import logging
+from pathlib import Path
 import sys
 from typing import Optional
 from logging.handlers import RotatingFileHandler
-
 from shared.config.logging import LoggingConfig
+from shared.config.env import Env
 
+_LOGS_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
+
+def _caller_module_name() -> str:
+    """Returns the module name that imports this file outside shared/logger/."""
+    logger_dir = Path(__file__).resolve().parent
+    for frame_info in inspect.stack():
+        filename = frame_info.filename
+        # Skip frozen/internal Python frames (e.g. <frozen importlib._bootstrap>)
+        if filename.startswith("<"):
+            continue
+        frame_path = Path(filename).resolve()
+        # Skip any file inside the shared/logger package
+        if frame_path.parent == logger_dir:
+            continue
+        module = inspect.getmodule(frame_info[0])
+        if module:
+            name = module.__name__
+            if name not in ("__main__", "__mp_main__"):
+                return name.split(".")[-1]
+        return frame_path.stem
+    return "app"
 
 def setup_logging(config: Optional[LoggingConfig] = None) -> None:
-
     if config is None:
         config = LoggingConfig.from_env()
+
+    # Resolve log file path lazily: caller module name is only meaningful here,
+    # not at class-definition/import time.
+    if config.log_file is None:
+        config.log_file = Env.optional_path("LOG_FILE", _LOGS_DIR / f"{_caller_module_name()}.log")
 
     # Create logs directory if it doesn't exist
     config.log_file.parent.mkdir(parents=True, exist_ok=True)
