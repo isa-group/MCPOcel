@@ -20,7 +20,7 @@ from shared.lifecycle import register_shutdown_callback, install_signal_handlers
 
 DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
-MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "20"))
+MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", sys.maxsize))
 print(f"Provider: {DEFAULT_PROVIDER} | Model: {DEFAULT_MODEL}")
 
 # Global cache for available tools (fetched once from server)
@@ -149,22 +149,31 @@ Event Types: {event_types_list}
 Stats: {total_objects:,} objects, {total_events:,} events | {start_date} to {end_date}
 Use ONLY these exact type names in tool calls. Max {max_tool_calls} tool rounds per query.
 
+CURSOR MODEL
+All filter/query tools return ONLY a cursor_id. Data never enters the LLM context until
+you explicitly request it. Description for the tools will indicate how to inspect or retrieve data from a cursor_id.
+Cursors live for the full session — no TTL.
+
 TOOL CHAINING
 Tools with an `input_cursor_id` parameter accept a `cursor_id` from a previous result.
 The downstream tool then filters within that subset instead of the full OCEL.
-Chain any number of steps: each produces its own `cursor_id` for further chaining or pagination.
-Example — narrowing results in 3 steps:
+Chain any number of steps: each produces its own `cursor_id` for further chaining.
+Example — narrowing results in 3 steps, then fetching:
   1. filter_by_object_type("X") → cursor_id C1
   2. filter_by_event_type("Y", input_cursor_id=C1) → cursor_id C2
-  3. query_events_by_timerange(start, end, input_cursor_id=C2) → final subset
+  3. query_events_by_timerange(start, end, input_cursor_id=C2) → cursor_id C3
+  4. get_cursor_results(C3)                                    → all data for user
 
 TIPS
-- Use `total_only=True` when you only need counts.
+- FETCH LAZILY: Use cursor-related tools to reason about subsets. Get results ONLY for the
+  final subset you intend to present to the user.
 - `filter_by_event_type` / `filter_by_object_type`: precise type filtering (prefer over `search_ocel`).
 - All temporal metrics are in SECONDS; convert for the user.
-- Use time tools for ANY temporal question; NEVER compute them manually.
-- Plan the goal so you need to fetch the least amount of data; use tool chaining with cursors as much as possible.
-- Paginated results include `pagination.cursor_id`. Fetch more pages with `get_cursor_results`.
+- STRICT TEMPORAL DELEGATION: NEVER fetch broad datasets to manually inspect, filter, or group
+  timestamps in your context window. For ANY semantic temporal condition (e.g., recurring periods,
+  specific days, shifts), deduce all exact absolute start/end timestamps from the narrowest known
+  boundaries ({start_date}/{end_date} or a cursor's timerange result), then issue
+  separate tool calls for EACH distinct time range using tool chaining.
 
 ANALYSIS
 - OCEL is multi-object: events are hyperedges linking 1:n or m:n objects.
