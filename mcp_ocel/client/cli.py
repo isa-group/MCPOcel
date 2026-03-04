@@ -204,15 +204,41 @@ def format_system_prompt(meta: OcelMetadata) -> str:
         max_tool_calls=MAX_TOOL_CALLS,
     )
 
+def _extract_message_text(m: Dict[str, Any]) -> str:
+    """Extract all text from a message regardless of its format.
 
-def estimate_tokens(messages: List[Dict[str, str]], model: str) -> int:
-    text = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+    Handles all formats present in the message history:
+      OpenAI Responses API:
+        - function_call_output       → result in 'output'
+        - responses_function_calls   → calls[].arguments
+      Gemini:
+        - tool_result (role)         → result in 'content'
+        - assistant with tool calls  → content + gemini_function_calls[].args
+      Regular role/content messages  → role + content
+    """
+    if m.get("type") == "function_call_output":
+        return m.get("output", "")
+    if m.get("_type") == "responses_function_calls":
+        parts = [m.get("content", "")]
+        for call in m.get("calls", []):
+            parts.append(call.get("arguments", ""))
+        return " ".join(filter(None, parts))
+    # Gemini assistant message may carry function call args alongside content
+    parts = [f"{m.get('role', '')}: {m.get('content', '')}"]
+    for fc in m.get("gemini_function_calls", []):
+        args = fc.get("args", {})
+        if args:
+            parts.append(json.dumps(args, ensure_ascii=False))
+    return " ".join(filter(None, parts))
+
+
+def estimate_tokens(messages: List[Dict[str, Any]], model: str) -> int:
+    text = "\n".join(_extract_message_text(m) for m in messages)
     try:
         encoder = tiktoken.encoding_for_model(model)
     except Exception:
         encoder = tiktoken.get_encoding("cl100k_base")
     return len(encoder.encode(text))
-
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MCP client for OCEL schema Q&A")

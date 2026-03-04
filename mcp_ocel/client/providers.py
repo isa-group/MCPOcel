@@ -62,22 +62,26 @@ class BaseProvider:
 
 
 class OpenAIProvider(BaseProvider):
-    """OpenAI API provider with native tool calling support."""
-    
+    """OpenAI API provider using the /v1/responses endpoint.
+
+    All current OpenAI models (GPT-4o, o3, o4-mini, deep-research variants,
+    etc.) support this endpoint, which is the new unified API surface.
+    """
+
     def __init__(self, api_key: str) -> None:
         if not api_key:
             raise ProviderError("OPENAI_API_KEY is required for provider 'openai'")
         self.client = OpenAI(api_key=api_key)
 
     def _convert_mcp_tools(self, mcp_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Convert MCP tool definitions to OpenAI function calling format."""
-        openai_tools = []
+        """Convert MCP tool definitions to the Responses API function tool format."""
+        result = []
         for tool in mcp_tools:
             input_schema = tool.get("inputSchema", {})
             properties = input_schema.get("properties", {})
             required = input_schema.get("required", [])
-            
-            flat_properties = {}
+
+            flat_properties: Dict[str, Any] = {}
             for prop_name, prop_info in properties.items():
                 if isinstance(prop_info, dict):
                     flat_properties[prop_name] = {
@@ -86,88 +90,112 @@ class OpenAIProvider(BaseProvider):
                     }
                 else:
                     flat_properties[prop_name] = {"type": "string"}
-            
-            openai_tools.append({
+
+            result.append({
                 "type": "function",
-                "function": {
-                    "name": tool.get("name", ""),
-                    "description": tool.get("description", ""),
-                    "parameters": {
-                        "type": "object",
-                        "properties": flat_properties,
-                        "required": required,
-                    },
+                "name": tool.get("name", ""),
+                "description": tool.get("description", ""),
+                "parameters": {
+                    "type": "object",
+                    "properties": flat_properties,
+                    "required": required,
                 },
             })
-        return openai_tools
+        return result
+
+    def _build_input(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert message history to the Responses API input format.
+
+        Mapping:
+          - system      → developer role (required by o-series reasoning models)
+          - user        → user role (unchanged)
+          - assistant   → assistant role
+          - _type=="responses_function_calls" → expanded function_call items
+          - type=="function_call_output"      → kept as-is
+        """
+        items: List[Dict[str, Any]] = []
+        for msg in messages:
+            if msg.get("_type") == "responses_function_calls":
+                # If the model produced text before the tool calls, prepend it.
+                if msg.get("content"):
+                    items.append({"role": "assistant", "content": msg["content"]})
+                items.extend(msg["calls"])
+            elif msg.get("type") == "function_call_output":
+                items.append(msg)
+            else:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role == "system":
+                    items.append({"role": "developer", "content": content})
+                elif role in ("user", "assistant"):
+                    items.append({"role": role, "content": content})
+                # Ignore Gemini-specific or unknown keys
+        return items
 
     def chat_with_tools(
         self, messages: List[Dict[str, Any]], model: str, tools: List[Dict[str, Any]]
     ) -> ChatResponse:
-        """Execute a chat completion with native tool calling."""
+        """Execute a request via /v1/responses."""
+        input_items = self._build_input(messages)
         openai_tools = self._convert_mcp_tools(tools)
-        
-        kwargs: Dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-        }
-        
+
+        kwargs: Dict[str, Any] = {"model": model, "input": input_items}
         if openai_tools:
             kwargs["tools"] = openai_tools
-            kwargs["tool_choice"] = "auto"
-        
-        response = self.client.chat.completions.create(**kwargs)
-        
-        choice = response.choices[0]
-        message = choice.message
-        
+
+        response = self.client.responses.create(**kwargs)
+
+        content = ""
         parsed_tool_calls: List[ToolCall] = []
-        if message.tool_calls:
-            for tc in message.tool_calls:
+
+        for item in response.output:
+            if item.type == "message":
+                for part in item.content:
+                    if hasattr(part, "text"):
+                        content += part.text
+            elif item.type == "function_call":
                 try:
-                    arguments = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
+                    arguments = json.loads(item.arguments)
+                except (json.JSONDecodeError, TypeError):
                     arguments = {}
                 parsed_tool_calls.append(ToolCall(
-                    id=tc.id,
-                    name=tc.function.name,
+                    id=item.call_id,
+                    name=item.name,
                     arguments=arguments,
                 ))
-        
+
         return ChatResponse(
-            content=message.content or "",
+            content=content,
             tool_calls=parsed_tool_calls,
-            finish_reason=choice.finish_reason,
+            finish_reason=None,
         )
 
     def build_assistant_tool_call_message(
         self, content: str, tool_calls: List[ToolCall]
     ) -> Dict[str, Any]:
-        """Build an OpenAI assistant message with tool calls."""
+        """Build an assistant turn with function calls for the Responses API."""
         return {
-            "role": "assistant",
+            "_type": "responses_function_calls",
             "content": content,
-            "tool_calls": [
+            "calls": [
                 {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.name,
-                        "arguments": json.dumps(tc.arguments),
-                    }
+                    "type": "function_call",
+                    "call_id": tc.id,
+                    "name": tc.name,
+                    "arguments": json.dumps(tc.arguments),
                 }
                 for tc in tool_calls
-            ]
+            ],
         }
 
     def build_tool_result_message(
         self, tool_call: ToolCall, result: str
     ) -> Dict[str, Any]:
-        """Build an OpenAI tool result message."""
+        """Build a function_call_output item for the Responses API."""
         return {
-            "role": "tool",
-            "tool_call_id": tool_call.id,
-            "content": result,
+            "type": "function_call_output",
+            "call_id": tool_call.id,
+            "output": result,
         }
 
 
