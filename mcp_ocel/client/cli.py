@@ -9,10 +9,14 @@ import os
 import sys
 import threading
 import time
+from math import isinf
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from tzlocal import get_localzone_name
 
 import tiktoken
+
+from shared.config.env import Env
 
 from .mcp_client import MCPClient, MCPClientError, DEFAULT_URL
 from .providers import ProviderError, build_provider, ToolCall
@@ -20,7 +24,7 @@ from shared.lifecycle import register_shutdown_callback, install_signal_handlers
 
 DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
-MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", sys.maxsize))
+MAX_TOOL_CALLS = float(os.getenv("MAX_TOOL_CALLS", "inf"))
 print(f"Provider: {DEFAULT_PROVIDER} | Model: {DEFAULT_MODEL}")
 
 # Global cache for available tools (fetched once from server)
@@ -139,49 +143,38 @@ async def fetch_available_tools(client: MCPClient) -> List[Dict[str, Any]]:
         _cached_tools = []
         return []
 
-
 SYSTEM_PROMPT_TEMPLATE = """
-You are an OCEL 2.0 process-mining analyst. Discover inefficiencies, interactions, and flow patterns.
+ROLE: OCEL 2.0 Process Mining Analyst. Focus: control-flow, bottlenecks, m:n object-event relations.
+CONTEXT: User timezone={timezone} | Objects={object_types_list} | Events={event_types_list}
+STATS: {total_objects:,} objects | {total_events:,} events | Global Range: {start_date} to {end_date}
 
-DATASET
-Object Types: {object_types_list}
-Event Types: {event_types_list}
-Stats: {total_objects:,} objects, {total_events:,} events | {start_date} to {end_date}
-Use ONLY these exact type names in tool calls. Max {max_tool_calls} tool rounds per query.
+TOOL SUFFICIENCY AXIOM
+The provided toolset is COMPLETE for all OCEL 2.0 inquiries.
+1. NO MISSING TOOLS: If a specific operation seems unavailable, you are failing to decompose the problem. A composite solution chaining filters, search, and time-windowing ALWAYS exists.
+2. NO EXCUSES: It is strictly forbidden to claim a calculation cannot be done or to fallback to raw data fetching due to perceived tool limitations. You must derive the answer by combining primitive operations.
 
-CURSOR MODEL
-All filter/query tools return ONLY a cursor_id. Data never enters the LLM context until
-you explicitly request it. Description for the tools will indicate how to inspect or retrieve data from a cursor_id.
-Cursors live for the full session — no TTL.
+COMPUTE-ON-TOOL PROTOCOL NON-NEGOTIABLE
+1. NO RAW FETCHING: IT IS FORBIDDEN to fetch raw records to count, group, or filter in your context window. You MUST use aggregation tools.
+2. RAW DATA EXCEPTION: Fetch raw records ONLY as the final step to display specific examples to the user. INTERNAL INSPECTION FOR REASONING IS FORBIDDEN. 
+3. CURSOR CHAINING: Filter then Aggregate then Narrow down. Pass cursor_id sequentially.
+4. ABSTRACT WORKFLOW: Do not rely on specific tool names to deduce conclusions. Follow the logical flow: narrow scope -> get exact bounds -> decompose into windows -> aggregate per window -> combine.
+5. INDIRECT LOOKUP & DECOMPOSITION: If a direct filter for a specific condition (e.g., text pattern, specific weekday, complex attribute) is missing, DO NOT fallback to raw data inspection. You MUST use available search utilities to find IDs or mathematically generate precise query parameters (e.g., time-windows) to target the data via tools.
+{max_tool_calls_instruction}
+MANDATORY EXHAUSTIVE COVERAGE
+For any temporal or periodic analysis:
+1. BOUNDARIES: First, deduce the EXACT start and end of the active cursor or dataset.
+2. NO LAZINESS: You MUST process 100% of the deduced timeframe. NEVER sample or truncate.
+3. PARALLELISM: If possible in the environment, you can emit up parallel tool calls to cover the full range efficiently.
+4. SILENT LOOPING: Do not generate text or ask permission between batches. Loop until coverage is 100%.
 
-TOOL CHAINING
-Tools with an `input_cursor_id` parameter accept a `cursor_id` from a previous result.
-The downstream tool then filters within that subset instead of the full OCEL.
-Chain any number of steps: each produces its own `cursor_id` for further chaining.
-Example — narrowing results in 3 steps, then fetching:
-  1. filter_by_object_type("X") → cursor_id C1
-  2. filter_by_event_type("Y", input_cursor_id=C1) → cursor_id C2
-  3. query_events_by_timerange(start, end, input_cursor_id=C2) → cursor_id C3
-  4. get_cursor_results(C3)                                    → all data for user
+OUTPUT RULES
+FORMAT: Plain text only. NO Markdown or HTML.
+UNITS: Convert tool seconds to human-readable minutes, hours, or days.
 
-TIPS
-- FETCH LAZILY: Use cursor-related tools to reason about subsets. Get results ONLY for the
-  final subset you intend to present to the user.
-- `filter_by_event_type` / `filter_by_object_type`: precise type filtering (prefer over `search_ocel`).
-- All temporal metrics are in SECONDS; convert for the user.
-- STRICT TEMPORAL DELEGATION: NEVER fetch broad datasets to manually inspect, filter, or group
-  timestamps in your context window. For ANY semantic temporal condition (e.g., recurring periods,
-  specific days, shifts), deduce all exact absolute start/end timestamps from the narrowest known
-  boundaries ({start_date}/{end_date} or a cursor's timerange result), then issue
-  separate tool calls for EACH distinct time range using tool chaining.
-
-ANALYSIS
-- OCEL is multi-object: events are hyperedges linking 1:n or m:n objects.
-- Distinguish batching (1 event → many objects) vs singular flows.
-- Compute throughput per object type.
-
-OUTPUT
-Console text only — no markdown/HTML. Reference the exact Object Type names above.
+EXECUTION STRATEGY
+Before calling tools, you must internally verify:
+Am I fetching raw rows to count them? -> STOP -> Use Aggregation Tool.
+Am I checking only 1 month of a 2-year range? -> STOP -> Schedule calls for full range.
 """
 
 def format_system_prompt(meta: OcelMetadata) -> str:
@@ -194,6 +187,12 @@ def format_system_prompt(meta: OcelMetadata) -> str:
     Returns:
         Complete system prompt.
     """
+
+    if not isinf(MAX_TOOL_CALLS):
+        tool_calls_str = f"7. MAX TOOL CALLS: Limit to {MAX_TOOL_CALLS} tool rounds per query.\n"
+    else:
+        tool_calls_str = ""
+
     return SYSTEM_PROMPT_TEMPLATE.format(
         object_types_list=meta.object_types if meta.object_types else ["(no object types loaded)"],
         event_types_list=meta.event_types if meta.event_types else ["(no event types loaded)"],
@@ -201,7 +200,8 @@ def format_system_prompt(meta: OcelMetadata) -> str:
         total_events=meta.total_events,
         start_date=meta.start_date,
         end_date=meta.end_date,
-        max_tool_calls=MAX_TOOL_CALLS,
+        max_tool_calls_instruction=tool_calls_str,
+        timezone=Env.str("TZ", get_localzone_name())
     )
 
 def _extract_message_text(m: Dict[str, Any]) -> str:
@@ -356,10 +356,7 @@ async def interactive_chat_async(args: argparse.Namespace) -> None:
                 # Add user message
                 messages.append({"role": "user", "content": user_text})
                 
-                prompt_tokens = estimate_tokens(
-                    [{"role": m["role"], "content": m.get("content", "")} for m in messages],
-                    args.model
-                )
+                prompt_tokens = estimate_tokens(messages, args.model)
                 print(f"Estimated prompt tokens: {prompt_tokens}")
                 
                 if not args.force:
