@@ -1,9 +1,12 @@
 import re
-import logging
+import uuid
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
+from shared.ocel.builder import OCELBuilder
+from shared.ocel.model.models  import Event
+from shared.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 1. Structural Pattern (The "Learner")
 # Captures the components regardless of the type name
@@ -134,8 +137,6 @@ def calculate_duration(start: Optional[str], end: Optional[str]) -> Optional[flo
         logger.debug(f"Failed to calculate duration from {start} to {end}: {e}")
         return None
 
-
-
 # Regex semver oficial (simplificada)
 SEMVER_PATTERN = re.compile(
     r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:-(?P<prerelease>[0-9A-Za-z-]+))?(\+[0-9A-Za-z-]+)?$"
@@ -161,9 +162,26 @@ def parse_semver(tag_name: str) -> Dict[str, Any]:
         "prerelease": parts["prerelease"]
     }
 
-def to_iso8601(dt):
-    if isinstance(dt, str):
-        return dt
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def create_event(
+    builder: OCELBuilder,
+    event_type: str,
+    ts: str,
+    attributes: Dict[str, Any],
+    relationships: List[Tuple[str, str]] = None
+) -> None:
+
+    evt = Event(
+        event_id=str(uuid.uuid4()),
+        event_type=event_type,
+        time=ts,
+        attributes=attributes or {}
+    )
+
+    for rel in (relationships or []):
+        if not rel or len(rel) != 2:
+            continue
+        obj_id, qualifier = rel
+        if obj_id:
+            evt.add_rel(obj_id, qualifier)
+
+    builder.insert_event(evt)
