@@ -1,9 +1,9 @@
-import logging
 from typing import Any, Dict, Optional, List
 from .helper import make_id, parse_commit_message, safe_timestamp
 from shared.ocel.model.models  import ObjectInstance
+from shared.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def _ensure_object(
     builder, 
@@ -33,11 +33,13 @@ def _ensure_object(
     
     # 4. Optional O2O relationships
     if relationships:
-        for rel in relationships:
-            obj_instance.add_rel(target_id=rel['target'], qualifier=rel['qualifier'])
+        for target_id, qualifier in relationships:
+            if target_id:
+                obj_instance.add_rel(target_id, qualifier)
 
     builder.insert_object(obj_instance)
     return object_id
+
 
 def ensure_user(builder, repo_id: str, login: str, timestamp: str = None) -> Optional[str]:
     return _ensure_object(
@@ -105,7 +107,7 @@ def ensure_commit(
         raw_id=sha,
         timestamp=ts,
         attributes=attrs,
-        relationships=[{"target": repo_id, "qualifier": "belongs_to"}]
+        relationships=[(repo_id, "belongs_to")]
     )
 
 
@@ -143,11 +145,23 @@ def ensure_comment(builder, repo_id: str, comment: Dict[str, Any]) -> Optional[s
         }
     )
 
-def ensure_review_comment(builder, repo_id: str, comment: Dict[str, Any]) -> Optional[str]:
+def ensure_review_comment(
+    builder,
+    repo_id: str,
+    comment: Dict[str, Any],
+    related_ids: List[str] = None
+) -> Optional[str]:
     if not comment or not comment.get("id"):
+        logger.warning(f"Review comment missing id, skipping. Comment data: {comment}")
         return None
 
     created_at = comment.get("createdAt") or comment.get("created_at")
+
+    relationships = []
+    for obj_id in (related_ids or []):
+        qualifier = _infer_qualifier_from_type(builder, obj_id)
+        if qualifier:
+            relationships.append((obj_id, qualifier))
 
     return _ensure_object(
         builder=builder,
@@ -159,11 +173,13 @@ def ensure_review_comment(builder, repo_id: str, comment: Dict[str, Any]) -> Opt
             "path": comment.get("path", ""),
             "position": int(comment.get("position", 0) or 0),
             "body": comment.get("body", "")[:500]
-        }
+        },
+        relationships=relationships if relationships else None
     )
 
 def ensure_deployment(builder, repo_id: str, deployment: Dict[str, Any]) -> Optional[str]:
     if not deployment or not deployment.get("id"):
+        logger.warning(f"Deployment missing id, skipping. Deployment data: {deployment}")
         return None
 
     created_at = deployment.get("created_at") or deployment.get("createdAt")
@@ -176,11 +192,15 @@ def ensure_deployment(builder, repo_id: str, deployment: Dict[str, Any]) -> Opti
         timestamp=created_at,
         attributes={
             "environment": deployment.get("environment", "unknown"),
-            "ref": deployment.get("ref", ""),
-            "sha": deployment.get("sha", ""),
-            "description": deployment.get("description", "")
+            # ref can be a dict {"name": "..."} from GraphQL or a plain string from REST
+            "ref": (deployment.get("ref") or {}).get("name", "")
+                   if isinstance(deployment.get("ref"), dict)
+                   else str(deployment.get("ref") or ""),
+            "sha": (deployment.get("commit") or {}).get("oid", "")
+                   or str(deployment.get("sha") or ""),
+            "description": str(deployment.get("description") or "")[:255],
         },
-        relationships=[{"target": repo_id, "qualifier": "deployed_to"}]
+        relationships=[(repo_id, "deployed_to")] 
     )
 
 
@@ -199,3 +219,23 @@ def ensure_team(builder, repo_id: str, team: Dict[str, Any]) -> Optional[str]:
         attributes={"name": team["name"]}
     )
 
+def _infer_qualifier_from_type(builder, obj_id: str) -> Optional[str]:
+    """
+    Infers the O2O qualifier by looking up the object type in the DB.
+    Avoids hardcoding ID formats — works for any object type.
+    """
+    builder.cursor.execute(
+        "SELECT ocel_type FROM object WHERE ocel_id = ?", (obj_id,)
+    )
+    row = builder.cursor.fetchone()
+    if not row:
+        logger.warning(f"Related object with ID {obj_id} not found in DB. Cannot infer qualifier.")
+        return None
+
+    qualifier_map = {
+        "PullRequest": "review_comment_of",
+        "Issue":       "review_comment_of",
+        "File":        "review_comment_on_file",
+        "Repository":  "belongs_to",
+    }
+    return qualifier_map.get(row[0])

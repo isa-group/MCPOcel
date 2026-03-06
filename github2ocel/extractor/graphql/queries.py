@@ -1,145 +1,132 @@
+REPO_STATS_QUERY = """
+query GetRepoStats($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+    issues(states: [OPEN, CLOSED])         { totalCount }
+    pullRequests(states: [OPEN, CLOSED, MERGED]) { totalCount }
+    discussions                             { totalCount }
+    releases                               { totalCount }
+    milestones(states: [OPEN, CLOSED])     { totalCount }
+    refs(refPrefix: "refs/tags/")          { totalCount }
+    refs2: refs(refPrefix: "refs/heads/")  { totalCount }
+
+    defaultBranchRef {
+      target {
+        ... on Commit {
+          history { totalCount }
+        }
+      }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}
+"""
+
 ISSUES_QUERY = """
-query GetIssues($owner: String!, $repo: String!, $cursor: String, $pageSize: Int!) {
+query GetIssues(
+  $owner: String!
+  $repo:  String!
+  $cursor: String
+  $pageSize: Int!
+) {
   repository(owner: $owner, name: $repo) {
     issues(
       first: $pageSize
       after: $cursor
-      states: [OPEN, CLOSED],
-      orderBy: {field: CREATED_AT, direction: ASC}
+      states: [OPEN, CLOSED]
+      orderBy: { field: CREATED_AT, direction: ASC }
     ) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
+      pageInfo { hasNextPage endCursor }
       nodes {
-        # --- Identity ---
-        id                # Global Node ID
+        __typename
+        id
         number
         title
         url
-
-        # --- Lifecycle ---
         state
-        stateReason       # COMPLETED, NOT_PLANNED
+        stateReason
         createdAt
-        closedAt
         updatedAt
+        closedAt
 
-        # --- Planification ---
+        # Metrics
+        reactions(first: 1) { totalCount }
+        participants(first: 0) { totalCount }
+
+        body
+        bodyText
+
+        author {
+          login
+          __typename
+          ... on User { id }
+          ... on Bot  { id }
+        }
+
+        # Relationships -> O2O
+        assignees(first: 10) {
+          nodes { login id }
+        }
+
+        labels(first: 20) {
+          nodes { id name color }
+        }
+
         milestone {
           id
+          number
           title
           state
           dueOn
+          createdAt
+          closedAt
+          progressPercentage
+          creator { login }
         }
 
-        # --- Textx mining ---
-        body              # Markdown
-        bodyText          # Texto plano
-
-        # --- Social ---
-        author { 
-          login
-          ... on User { id }
-          ... on Organization { id }
-          ... on Bot { id }
-        }
-        # Ownership
-        assignees(first: 5) {
-          nodes {
-            login
-            id
-          }
-        }
-        reactions(first: 1) { totalCount }
-        participants(first: 0) { totalCount }
-        labels(first: 10) {
-          nodes {
-            id
-            name
-            color
-          }
-        }
-
-        # --- Comments ---
-        comments(first: 10) {
+        # Comments (events: IssueCommentCreated)
+        comments(first: 50) {
+          pageInfo { hasNextPage endCursor }
           totalCount
           nodes {
             id
             createdAt
             lastEditedAt
             body
-            author {
-              login
-              ... on User { id }
-              ... on Organization { id }
-              ... on Bot { id }
-            }
+            author { login }
             reactions(first: 1) { totalCount }
-          }
-        }
-
-        # --- Process Events ---
-        timelineItems(
-          first: 50
-          itemTypes: [
-            ASSIGNED_EVENT
-            UNASSIGNED_EVENT
-            LABELED_EVENT
-            UNLABELED_EVENT
-            CLOSED_EVENT
-            REOPENED_EVENT
-            LOCKED_EVENT
-            MILESTONED_EVENT
-            DEMILESTONED_EVENT
-          ]
-        ) {
-          nodes {
-            __typename
-            ... on AssignedEvent { createdAt assignee { ... on User { login id } } }
-            ... on UnassignedEvent { createdAt assignee { ... on User { login id } } }
-            ... on LabeledEvent { createdAt label { id name } }
-            ... on ClosedEvent { createdAt }
-            ... on ReopenedEvent { createdAt }
-            ... on MilestonedEvent { createdAt milestoneTitle }
           }
         }
       }
     }
   }
+
+  rateLimit { cost remaining resetAt }
 }
 """
 
-PRS_QUERY = """
+PULL_REQUESTS_QUERY = """
 query GetPullRequests(
   $owner: String!
-  $repo: String!
+  $repo:  String!
   $cursor: String
   $pageSize: Int!
-
-  # Control (Profiles)
-  $withReviews: Boolean! = true
-  $withReviewComments: Boolean! = false
-  $withThreads: Boolean! = false
-  $withTimeline: Boolean! = true
-  $withStatusChecks: Boolean! = true
 ) {
   repository(owner: $owner, name: $repo) {
     pullRequests(
       first: $pageSize
       after: $cursor
-      states: [OPEN, CLOSED, MERGED],
+      states: [OPEN, CLOSED, MERGED]
       orderBy: { field: CREATED_AT, direction: ASC }
     ) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        # --- Identity ---
+        __typename
         id
         number
         title
         url
 
-        # --- State ---
+        # Lifecycle
         state
         isDraft
         createdAt
@@ -147,230 +134,213 @@ query GetPullRequests(
         closedAt
         merged
         mergedAt
+        mergedBy { login }
+        reviewDecision
 
-        # --- Branches & Commits ---
+        # Branch information (-> O2O Branch objects)
         headRefName
         headRefOid
         baseRefName
+        headRepository { nameWithOwner isPrivate }
+        baseRepository { nameWithOwner }
 
-        # --- Metrics ---
+        # Code metrics
         additions
         deletions
         changedFiles
-        commits { totalCount }
 
-        # --- Content ---
+        # Social
         body
         bodyText
-
-        # --- Social ---
         author {
           login
+          __typename
           ... on User { id }
-          ... on Organization { id }
-          ... on Bot { id }
+          ... on Bot  { id }
         }
-        assignees(first: 5) { nodes { login id } }
+        assignees(first: 10) {
+          nodes { login id }
+        }
         participants(first: 0) { totalCount }
         reactions(first: 1) { totalCount }
-        
-        labels(first: 10) {
-          nodes {
-            id
-            name
-            color
-          }
+
+        labels(first: 20) {
+          nodes { id name color }
         }
 
         milestone {
           id
+          number
           title
           state
           dueOn
+          createdAt
+          closedAt
+          progressPercentage
+          creator { login }
         }
 
-        # --- Reviews ---
-        reviews(first: 20) @include(if: $withReviews) {
+        # Lightweight commit list for PR -> Commit linking only
+        # Full commit data comes from COMMITS_QUERY
+        commits(first: 100) {
+          totalCount
+          nodes {
+            commit {
+              oid
+              committedDate
+              author { user { login } }
+            }
+          }
+        }
+
+        # Comments (events: PRCommentCreated)
+        comments(first: 50) {
+          pageInfo { hasNextPage endCursor }
           totalCount
           nodes {
             id
-            state
-            submittedAt
-            author { 
-              login 
-              ... on User { id } 
-            }
-            body
-            comments(first: 10) @include(if: $withReviewComments) {
-              totalCount
-              nodes {
-                id
-                createdAt
-                body
-                path
-                position
-                author { 
-                  login 
-                  ... on User { id }
-                }
-              }
-            }
+            createdAt
+            lastEditedAt
+            bodyText
+            author { login }
           }
         }
 
-        # --- Review Threads ---
-        reviewThreads(first: 20) @include(if: $withThreads) {
-          totalCount
-          nodes {
-          id
-            isResolved
-            resolvedBy { 
-              login 
-              ... on User { id } 
-            }
-            comments(first: 20) {
-              nodes {
-              id
-                createdAt
-                body
-                author { 
-                  login 
-                  ... on User { id }
-                  ... on Organization { id }
-                  ... on Bot { id }
-                }
-              }
-            }
-          }
-        }
-
-        # --- CI/CD ---
-        statusCheckRollup @include(if: $withStatusChecks) {
-          contexts(first: 50) {
+        # CI status on the PR head (cheap, single field)
+        statusCheckRollup {
+          state
+          contexts(first: 30) {
             nodes {
+              __typename
               ... on CheckRun {
+                id
                 name
                 status
                 conclusion
                 startedAt
                 completedAt
-              }
-            }
-          }
-        }
-
-        # --- Timeline ---
-        timelineItems(
-          first: 50
-          itemTypes: [
-            ASSIGNED_EVENT, UNASSIGNED_EVENT,
-            REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT,
-            READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT,
-            MERGED_EVENT, HEAD_REF_FORCE_PUSHED_EVENT,
-            MILESTONED_EVENT, DEMILESTONED_EVENT
-          ]
-        ) @include(if: $withTimeline) {
-          nodes {
-            __typename
-            ... on AssignedEvent {
-              createdAt
-              assignee {
-                ... on User { login id }
-              }
-            }
-            ... on UnassignedEvent {
-              createdAt
-              assignee {
-                ... on User {
-                  login
-                  id
+                detailsUrl
+                checkSuite {
+                  workflowRun {
+                    databaseId
+                  }
                 }
               }
-            }
-            ... on ReviewRequestedEvent {
-              createdAt
-              requestedReviewer {
-                __typename
-                ... on User { login id } 
-                ... on Team { name }
+              ... on StatusContext {
+                context
+                state
+                createdAt
+                targetUrl
               }
             }
-            ... on MergedEvent { createdAt mergeRefName }
-            ... on HeadRefForcePushedEvent { createdAt }
-            ... on MilestonedEvent { createdAt milestoneTitle }
           }
         }
       }
     }
   }
 
-  rateLimit {
-    cost
-    remaining
-    resetAt
-  }
+  rateLimit { cost remaining resetAt }
 }
 """
 
-DISCUSSIONS_QUERY = """
-query GetDiscussions(
+TAGS_QUERY = """
+query GetTags(
   $owner: String!
-  $repo: String!
-  $cursor: String
+  $repo:  String!
   $pageSize: Int!
+  $cursor: String
 ) {
   repository(owner: $owner, name: $repo) {
-    discussions(first: $pageSize, after: $cursor) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
+    refs(
+      refPrefix: "refs/tags/"
+      first: $pageSize
+      after: $cursor
+      orderBy: { field: TAG_COMMIT_DATE, direction: DESC }
+    ) {
+      pageInfo { hasNextPage endCursor }
       nodes {
-        __typename
+        name
+        target {
+          __typename
+          # Lightweight tag -> points directly to a commit
+          ... on Commit {
+            oid
+            committedDate
+            author { user { login id } }
+          }
+          # Annotated tag -> has its own object with tagger info
+          ... on Tag {
+            oid
+            message
+            tagger {
+              date
+              user { login id }
+            }
+            target {
+              ... on Commit {
+                oid
+                committedDate
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+"""
+Milestones query — Milestone is a first-class OCEL object.
+
+Design decisions:
+- Fetched independently so Milestone objects exist before Issue/PR processing
+- progressPercentage gives a continuous attribute that changes over time (ObjectSnapshot)
+- creator included for User -> Milestone relationship
+"""
+
+MILESTONES_QUERY = """
+query GetMilestones(
+  $owner: String!
+  $repo:  String!
+  $pageSize: Int!
+  $cursor: String
+) {
+  repository(owner: $owner, name: $repo) {
+    milestones(
+      first: $pageSize
+      after: $cursor
+      states: [OPEN, CLOSED]
+      orderBy: { field: CREATED_AT, direction: ASC }
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
         id
         number
         title
-        url
+        description
+        state
+        dueOn
         createdAt
         updatedAt
-        answerChosenAt
-        locked
+        closedAt
+        progressPercentage
 
-        body
-        bodyText
+        creator { login }
 
-        author {
-          login
-          ... on User { id }
-          ... on Organization { id }
-          ... on Bot { id }
-        }
-
-        category {
-          id
-          name
-        }
-
-        reactions(first: 1) { totalCount }
-
-        comments(first: 50) {
-          totalCount
-          nodes {
-            id
-            createdAt
-            updatedAt
-            body
-            author {
-              login
-              ... on User { id }
-              ... on Organization { id }
-              ... on Bot { id }
-            }
-            reactions(first: 1) { totalCount }
-          }
-        }
+        # Issue/PR counts give derived metrics for the Milestone object
+        issues(states: [OPEN])   { totalCount }
+        closedIssues: issues(states: [CLOSED]) { totalCount }
+        pullRequests(states: [OPEN])   { totalCount }
+        mergedPRs: pullRequests(states: [MERGED]) { totalCount }
       }
     }
   }
+
+  rateLimit { cost remaining resetAt }
 }
 """
+
+"""Discussions GraphQL query."""

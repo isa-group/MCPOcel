@@ -3,15 +3,18 @@ class Activities:
     """Registry of all Activity names used in the log."""
     ISSUE_OPENED = "IssueOpened"
     ISSUE_CLOSED = "IssueClosed"
-    ISSUE_COMMENT = "IssueCommentCreated"
+    ISSUE_COMMENT_CREATED = "IssueCommentCreated"
     ISSUE_ASSIGNED = "IssueAssigned"
     ISSUE_UNASSIGNED = "IssueUnassigned"
+    ISSUE_REOPENED='IssueReopened'
+    ISSUE_LINKED = "IssueLinked"
+    ISSUE_UNLINKED = "IssueUnlinked"
 
     PR_OPENED = "PROpened"
     PR_MERGED = "PRMerged"
     PR_CLOSED = "PRClosed"
     PR_REVIEW = "PRReviewSubmitted"
-    PR_COMMENT = "PRCommented"
+    PR_COMMENT_CREATED = "PRCommentCreated"
     PR_REVIEW_APPROVED = "PRReviewApproved"
     PR_REVIEW_CHANGES_REQUESTED = "PRReviewChangesRequested"
     PR_REVIEW_COMMENTED = "PRReviewCommented"
@@ -20,6 +23,7 @@ class Activities:
     PR_UNASSIGNED = "PRUnassigned"
     PR_REVIEW_REQUESTED = "PRReviewRequested"
     PR_REVIEW_REQUEST_REMOVED = "PRReviewRequestRemoved"
+    PR_FORCE_PUSHED='PRForcePushed'
 
     # Comments
     COMMENT_CREATED = "CommentCreated"
@@ -44,9 +48,16 @@ class Activities:
     DEPLOYMENT_ERROR = "DeploymentError"
 
     THREAD_RESOLVED = "ReviewThreadResolved"
+
     MILESTONE_ASSIGNED = "MilestoneAssigned"
+    MILESTONE_CREATED = "MilestoneCreated"
+    MILESTONE_CLOSED = "MilestoneClosed"
+    MILESTONE_UPDATED = "MilestoneUpdated"
+
     JOB_STARTED = "WorkflowJobStarted"
     JOB_COMPLETED = "WorkflowJobCompleted"
+
+    CROSS_REFERENCED = 'CrossReferenced'
 
     BRANCH_CREATED = "BranchCreated"
     BRANCH_MERGED = "BranchMerged"

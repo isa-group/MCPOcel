@@ -1,0 +1,222 @@
+
+from typing import Dict, Any
+from shared.ocel.builder import OCELBuilder
+from shared.ocel.model.models import ObjectInstance
+from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
+from github2ocel.transform.utils.ensure import ensure_user, ensure_label
+from github2ocel.transform.utils.activity import Activities
+from shared.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
+    number = node.get("number")
+    if not number:
+        logger.warning("[process_pull_request] Missing number. Skipping.")
+        return
+
+    obj_id = make_id(repo_id, "pr", number)
+    created_at = safe_timestamp(node.get("createdAt"))
+    merged_at  = safe_timestamp(node.get("mergedAt")) if node.get("mergedAt") else None
+    closed_at  = safe_timestamp(node.get("closedAt")) if node.get("closedAt") else None
+
+    # Object: PullRequest
+    obj = ObjectInstance(object_id=obj_id, object_type="PullRequest")
+    obj.add_snapshot(
+        time=created_at,
+        attributes={
+            "number": int(number),
+            "title": (node.get("title") or "")[:255],
+            "state": node.get("state", "OPEN"),
+            "is_draft": int(node.get("isDraft", False)),
+            "merged": int(node.get("merged", False)),
+            "url": node.get("url", ""),
+            "head_ref": node.get("headRefName", ""),
+            "base_ref": node.get("baseRefName", ""),
+            "additions": node.get("additions", 0),
+            "deletions": node.get("deletions", 0),
+            "changed_files": node.get("changedFiles", 0),
+            "total_changes": node.get("additions", 0) + node.get("deletions", 0),
+            "review_decision": node.get("reviewDecision") or "",
+            "commits_count": (node.get("commits") or {}).get("totalCount", 0),
+            "comments_count": (node.get("comments") or {}).get("totalCount", 0),
+            "participants_count": (node.get("participants") or {}).get("totalCount", 0),
+            "reactions_count": (node.get("reactions") or {}).get("totalCount", 0),
+            "body_length": len(node.get("body") or ""),
+            "updated_at": safe_timestamp(node.get("updatedAt")),
+            "merged_at": merged_at,
+            "closed_at": closed_at,
+        }
+    )
+
+    # O2O: PR -> Repository
+    obj.add_rel(repo_id, "contained_in")
+
+    # O2O: PR -> Author
+    author_login = (node.get("author") or {}).get("login")
+    author_id = ensure_user(builder, repo_id, author_login, timestamp=created_at) if author_login else None
+    if author_id:
+        obj.add_rel(author_id, "created_by")
+
+    # O2O: PR -> Assignees
+    for assignee in (node.get("assignees") or {}).get("nodes", []):
+        a_id = ensure_user(builder, repo_id, assignee.get("login"), timestamp=created_at)
+        if a_id:
+            obj.add_rel(a_id, "assigned_to")
+
+    # O2O: PR -> Labels
+    for lbl in (node.get("labels") or {}).get("nodes", []):
+        lbl_id = ensure_label(builder, repo_id, lbl, timestamp=created_at)
+        if lbl_id:
+            obj.add_rel(lbl_id, "has_label")
+
+    # O2O: PR -> Milestone
+    milestone = node.get("milestone")
+    if milestone and milestone.get("id"):
+        ms_id = make_id(repo_id, "milestone", milestone["id"])
+        if builder.object_exists(ms_id):
+            obj.add_rel(ms_id, "belongs_to_milestone")
+
+    # O2O: PR -> Branches (target and source)
+    base_branch_id = make_id(repo_id, "branch", node.get("baseRefName", ""))
+    head_branch_id = make_id(repo_id, "branch", node.get("headRefName", ""))
+    if builder.object_exists(base_branch_id):
+        obj.add_rel(base_branch_id, "targets_branch")
+    if builder.object_exists(head_branch_id):
+        obj.add_rel(head_branch_id, "source_branch")
+
+    # O2O: PR -> Commits (lightweight cross-reference)
+    for commit_node in (node.get("commits") or {}).get("nodes", []):
+        oid = (commit_node.get("commit") or {}).get("oid")
+        if oid:
+            commit_id = make_id(repo_id, "commit", oid)
+            if builder.object_exists(commit_id):
+                obj.add_rel(commit_id, "contains_commit")
+
+    builder.insert_object(obj)
+
+    # Event: PROpened
+    create_event(
+        builder=builder,
+        event_type=Activities.PR_OPENED,
+        ts=created_at,
+        attributes={"is_draft": int(node.get("isDraft", False)), "source": "graphql"},
+        relationships=[
+            (obj_id, "subject"),
+            (repo_id, "context"),
+            (author_id, "actor") if author_id else None,
+        ]
+    )
+
+    # Event: PRMerged
+    if node.get("merged") and merged_at:
+        merger_login = (node.get("mergedBy") or {}).get("login")
+        merger_id = ensure_user(builder, repo_id, merger_login, timestamp=merged_at) if merger_login else None
+
+        create_event(
+            builder=builder,
+            event_type=Activities.PR_MERGED,
+            ts=merged_at,
+            attributes={
+                "merge_ref": node.get("headRefName", ""),
+                "additions": node.get("additions", 0),
+                "deletions": node.get("deletions", 0),
+            },
+            relationships=[
+                (obj_id, "subject"),
+                (repo_id, "context"),
+                (merger_id, "actor") if merger_id else None,
+                (base_branch_id, "merged_into") if builder.object_exists(base_branch_id) else None,
+            ]
+        )
+
+    # Event: PRClosed (without merge)
+    elif node.get("state") == "CLOSED" and closed_at:
+        create_event(
+            builder=builder,
+            event_type=Activities.PR_CLOSED,
+            ts=closed_at,
+            attributes={"source": "graphql"},
+            relationships=[
+                (obj_id, "subject"),
+                (repo_id, "context"),
+                (author_id, "actor") if author_id else None,
+            ]
+        )
+
+    # Events: PRCommentCreated
+    for comment in (node.get("comments") or {}).get("nodes", []):
+        _map_comment(comment, builder, repo_id, obj_id)
+
+    # CI CheckRun events from statusCheckRollup
+    _map_check_runs(node, builder, repo_id, obj_id)
+
+
+def _map_comment(
+    comment: Dict[str, Any],
+    builder: OCELBuilder,
+    repo_id: str,
+    pr_id: str,
+) -> None:
+    if not comment.get("id"):
+        return
+
+    ts = safe_timestamp(comment.get("createdAt"))
+    author_login = (comment.get("author") or {}).get("login")
+    author_id = ensure_user(builder, repo_id, author_login, timestamp=ts) if author_login else None
+
+    create_event(
+        builder=builder,
+        event_type=Activities.PR_COMMENT_CREATED,
+        ts=ts,
+        attributes={
+            "comment_id": comment["id"],
+            "body_length": len(comment.get("bodyText") or ""),
+            "is_edited": 1 if comment.get("lastEditedAt") else 0,
+        },
+        relationships=[
+            (pr_id, "target"),
+            (repo_id, "context"),
+            (author_id, "actor") if author_id else None,
+        ]
+    )
+
+
+def _map_check_runs(
+    node: Dict[str, Any],
+    builder: OCELBuilder,
+    repo_id: str,
+    pr_id: str,
+) -> None:
+    """Map CheckRun nodes from statusCheckRollup as OCEL events."""
+    rollup = node.get("statusCheckRollup")
+    if not rollup:
+        return
+
+    for ctx_node in (rollup.get("contexts") or {}).get("nodes", []):
+        if not ctx_node or ctx_node.get("__typename") != "CheckRun":
+            continue
+
+        started_at   = safe_timestamp(ctx_node.get("startedAt")) if ctx_node.get("startedAt") else None
+        completed_at = safe_timestamp(ctx_node.get("completedAt")) if ctx_node.get("completedAt") else None
+        conclusion   = ctx_node.get("conclusion")
+
+        if not started_at:
+            continue
+
+        create_event(
+            builder=builder,
+            event_type=Activities.JOB_COMPLETED,
+            ts=completed_at or started_at,
+            attributes={
+                "check_name": ctx_node.get("name", ""),
+                "status": ctx_node.get("status", ""),
+                "conclusion": conclusion or "",
+                "source": "pr_status_rollup",
+            },
+            relationships=[
+                (pr_id, "context"),
+                (repo_id, "repository"),
+            ]
+        )
