@@ -6,6 +6,7 @@ from shared.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 def fetch_tags(
     client: GitHubClient,
     page_size: int = 100,

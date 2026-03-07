@@ -11,6 +11,7 @@ def fetch_issues(
     client: GitHubClient,
     page_size: int = 50,
     total: int = 0,
+    since: str = None,
 ) -> Generator[Dict[str, Any], None, None]:
     """Yield all issue nodes. Timeline is NOT included here."""
 
@@ -18,13 +19,16 @@ def fetch_issues(
 
     variables = {"pageSize": page_size}
 
+    if since:
+        variables["since"] = since
+
     for node in paginate_nodes(
         client=client,
         query=ISSUES_QUERY,
         node_type="issues",
         variables=variables,
         total=total,
-        label="prs",
+        label="issues",
     ):
         node["__type"] = "Issue"
         yield node

@@ -24,6 +24,7 @@ def _paginate_connection(
     cursor = None
     page = 1
     extracted = 0
+
     while True:
 
         vars_["cursor"] = cursor
@@ -115,13 +116,18 @@ def paginate_nested(
     query,
     parent_type,
     parent_number,
-    nested_field
+    nested_field,
+    number_var: str = None,
+    page_size: int = 50,
 ):
+
+    var_name = number_var or f"{parent_type}Number"
 
     vars_ = {
         "owner": client.owner,
         "repo": client.repo,
-        f"{parent_type}Number": int(parent_number),
+        var_name: int(parent_number),
+        "pageSize": page_size,
     }
 
     def extract(response):

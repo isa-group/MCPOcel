@@ -11,6 +11,7 @@ def fetch_pull_requests(
     client: GitHubClient,
     page_size: int = 50,
     total: int = 0,
+    since: str = None,
 ) -> Generator[Dict[str, Any], None, None]:
     """
     Yield all PR base nodes.
@@ -18,11 +19,16 @@ def fetch_pull_requests(
     """
     logger.info(f"--- [Fetcher] Pull Requests (pageSize={page_size}) ---")
 
+    variables = {"pageSize": page_size}
+
+    if since:
+        variables["since"] = since
+
     for node in paginate_nodes(
         client=client,
         query=PULL_REQUESTS_QUERY,
         node_type="pullRequests",
-        variables={"pageSize": page_size},
+        variables=variables,
         total=total,
         label="prs",
     ):

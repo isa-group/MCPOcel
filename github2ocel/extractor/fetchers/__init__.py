@@ -4,6 +4,9 @@ from .fetch_issues import fetch_issues
 from .fetch_pull_requests import fetch_pull_requests
 from .fetch_branches import fetch_branches
 from .fetch_tags import fetch_tags
+from .fetch_issue_comments import fetch_issue_comments
+from .fetch_pr_comments import fetch_pr_comments
+from .fetch_pr_commits import fetch_pr_commits
 
 __all__ = [
     "fetch_repo_stats",
@@ -12,4 +15,8 @@ __all__ = [
     "fetch_pull_requests",
     "fetch_branches",
     "fetch_tags",
+    "fetch_issue_comments",
+    "fetch_pr_comments",
+    "fetch_pr_commits",
+
 ]
