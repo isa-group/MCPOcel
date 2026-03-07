@@ -220,3 +220,92 @@ def _map_check_runs(
                 (repo_id, "repository"),
             ]
         )
+
+# -------------------------------------------------------
+
+
+def enrich_pr_detail(detail: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
+    """
+    Enrich an already-inserted PR object with commits, comments and CI checks.
+    'detail' is the payload from PULL_REQUEST_DETAIL_QUERY.
+    """
+    pr_number = detail.get("__pr_number") or detail.get("number")
+    if not pr_number:
+        return
+
+    pr_id = make_id(repo_id, "pr", pr_number)
+    if not builder.object_exists(pr_id):
+        logger.warning(f"[enrich_pr_detail] PR#{pr_number} object not found in builder. Skipping.")
+        return
+
+    # Commit -> PR O2O links
+    for commit_node in (detail.get("commits") or {}).get("nodes", []):
+        oid = (commit_node.get("commit") or {}).get("oid")
+        if not oid:
+            continue
+        commit_id = make_id(repo_id, "commit", oid)
+        if builder.object_exists(commit_id):
+            from shared.ocel.model.models import ObjectInstance as _OI
+            proxy = _OI(object_id=pr_id, object_type="PullRequest")
+            proxy.add_rel(commit_id, "contains_commit")
+            builder.insert_object(proxy)
+
+    # PR comment events
+    for comment in (detail.get("comments") or {}).get("nodes", []):
+        _map_comment(comment, builder, repo_id, pr_id)
+
+    # CI check events from statusCheckRollup
+    _map_check_runs(detail, builder, repo_id, pr_id)
+
+
+# Phase 1b: standalone mappers (called from fetch_pr_commits / fetch_pr_comments)
+def process_pr_commit_link(link: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
+    """
+    Create PullRequest -> Commit O2O link.
+
+    The link dict must have "__pr_number" and "oid" injected by fetch_pr_commits().
+    Full Commit objects are created by process_commit_graphql() in Phase 3.
+    Here we only create the O2O relationship if the Commit object already exists
+    (which it won't in Phase 1b — it will be resolved retroactively when Phase 3
+    inserts commits and process_commit_graphql links back to PRs via commit message parsing).
+
+    We still record the link so it's available if the commit was already inserted
+    by a previous run or if the order changes.
+    """
+    pr_number = link.get("__pr_number")
+    oid       = link.get("oid")
+    if not pr_number or not oid:
+        return
+
+    pr_id     = make_id(repo_id, "pr", pr_number)
+    commit_id = make_id(repo_id, "commit", oid)
+
+    if not builder.object_exists(pr_id):
+        return
+
+    # Only add the O2O if the Commit object already exists in the builder.
+    # If it doesn't yet (Phase 3 hasn't run), process_commit_graphql will
+    # handle the reverse link (commit -> PR) via commit message parsing.
+    if builder.object_exists(commit_id):
+        from shared.ocel.model.models import ObjectInstance as _OI
+        proxy = _OI(object_id=pr_id, object_type="PullRequest")
+        proxy.add_rel(commit_id, "contains_commit")
+        builder.insert_object(proxy)
+
+
+def process_pr_comment(comment: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
+    """
+    Map a single PR comment to a PRCommentCreated event.
+    Called from Phase 1b with fully paginated comment nodes.
+
+    The comment dict must have "__pr_number" injected by fetch_pr_comments().
+    """
+    pr_number = comment.get("__pr_number")
+    if not pr_number:
+        return
+
+    pr_id = make_id(repo_id, "pr", pr_number)
+    if not builder.object_exists(pr_id):
+        return
+
+    _map_comment(comment, builder, repo_id, pr_id)

@@ -27,6 +27,7 @@ query GetIssues(
   $repo:  String!
   $cursor: String
   $pageSize: Int!
+  $since: DateTime
 ) {
   repository(owner: $owner, name: $repo) {
     issues(
@@ -34,6 +35,7 @@ query GetIssues(
       after: $cursor
       states: [OPEN, CLOSED]
       orderBy: { field: CREATED_AT, direction: ASC }
+      filterBy: { since: $since }
     ) {
       pageInfo { hasNextPage endCursor }
       nodes {
@@ -292,15 +294,6 @@ query GetTags(
 }
 """
 
-"""
-Milestones query — Milestone is a first-class OCEL object.
-
-Design decisions:
-- Fetched independently so Milestone objects exist before Issue/PR processing
-- progressPercentage gives a continuous attribute that changes over time (ObjectSnapshot)
-- creator included for User -> Milestone relationship
-"""
-
 MILESTONES_QUERY = """
 query GetMilestones(
   $owner: String!
@@ -343,4 +336,92 @@ query GetMilestones(
 }
 """
 
-"""Discussions GraphQL query."""
+ISSUE_COMMENTS_QUERY = """
+query GetIssueComments(
+  $owner:       String!
+  $repo:        String!
+  $issueNumber: Int!
+  $cursor:      String
+  $pageSize:    Int!
+) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $issueNumber) {
+      number
+      comments(first: $pageSize, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        totalCount
+        nodes {
+          id
+          createdAt
+          lastEditedAt
+          bodyText
+          body
+          author { login }
+          reactions(first: 1) { totalCount }
+        }
+      }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+
+PR_COMMENTS_QUERY = """
+query GetPRComments(
+  $owner:    String!
+  $repo:     String!
+  $prNumber: Int!
+  $cursor:   String
+  $pageSize: Int!
+) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $prNumber) {
+      number
+      comments(first: $pageSize, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        totalCount
+        nodes {
+          id
+          createdAt
+          lastEditedAt
+          bodyText
+          body
+          author { login }
+          reactions(first: 1) { totalCount }
+        }
+      }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+
+PR_COMMITS_QUERY = """
+query GetPRCommits(
+  $owner:    String!
+  $repo:     String!
+  $prNumber: Int!
+  $cursor:   String
+  $pageSize: Int!
+) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $prNumber) {
+      number
+      commits(first: $pageSize, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        totalCount
+        nodes {
+          commit {
+            oid
+            committedDate
+            author { user { login } }
+          }
+        }
+      }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}
+"""

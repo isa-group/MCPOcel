@@ -4,7 +4,7 @@ Provides functions for parsing and formatting ISO 8601 timestamps.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -68,3 +68,10 @@ def make_id(*parts) -> str:
         s = str(p).replace(" ", "_").replace("/", "_").replace(":", "")
         cleaned.append(s)
     return "_".join(cleaned)
+
+def to_iso8601(dt):
+    if isinstance(dt, str):
+        return dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

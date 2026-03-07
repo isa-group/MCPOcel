@@ -18,14 +18,17 @@ from github2ocel.extractor.fetchers import (
     fetch_pull_requests,
     fetch_branches,
     fetch_tags,
+    fetch_pr_comments,
+    fetch_pr_commits,
+    fetch_issue_comments
 )
 
 # Mappers
 from github2ocel.transform.mappers.process_milestone import process_milestone
 from github2ocel.transform.mappers.process_branch import process_branch
 from github2ocel.transform.mappers.process_tag import process_tag
-from github2ocel.transform.mappers.process_issue import process_issue
-from github2ocel.transform.mappers.process_pull_request import process_pull_request
+from github2ocel.transform.mappers.process_issue import process_issue, process_issue_comment
+from github2ocel.transform.mappers.process_pull_request import process_pull_request, process_pr_comment, process_pr_commit_link
 
 logger = get_logger(__name__)
 
@@ -68,7 +71,7 @@ class Orchestrator:
             ("Setup - Repo stats",                self._phase_stats),
             ("Initialization  — Seed objects",    self._initialization),
             ("Phase 1  — Core objects",           self._phase1_core),
-
+             ("Phase 2  — Per-node detail",        self._phase2_detail),
         ]
 
         for name, fn in phases:
@@ -133,3 +136,28 @@ class Orchestrator:
             self._pr_numbers.append(int(node["number"]))
             self.stats["prs"] += 1
         logger.info(f"  prs={self.stats['prs']}")
+
+    # Phase 2: per-node detail (requires Phase 1 objects)
+    def _phase2_detail(self):
+        """
+        Fully paginated comments and commit O2O links.
+        Kept separate from Phase 1 so the base pass runs at full pageSize
+        without being slowed down by nested pagination.
+        """
+        # Issue comments — fully paginated
+        for comment in fetch_issue_comments(self.client, self._issue_numbers, page_size=self._ps.issue_comments):
+            process_issue_comment(comment, self.builder, self.repo_id)
+            self.stats["issue_comments"] += 1
+        logger.info(f"  issue_comments={self.stats['issue_comments']}")
+
+        # PR commit OIDs — for PullRequest -> Commit O2O links
+        for link in fetch_pr_commits(self.client, self._pr_numbers, page_size=self._ps.pr_commits):
+            process_pr_commit_link(link, self.builder, self.repo_id)
+            self.stats["pr_commit_links"] += 1
+        logger.info(f"  pr_commit_links={self.stats['pr_commit_links']}")
+
+        # PR comments — fully paginated
+        for comment in fetch_pr_comments(self.client, self._pr_numbers, page_size=self._ps.pr_comments):
+            process_pr_comment(comment, self.builder, self.repo_id)
+            self.stats["pr_comments"] += 1
+        logger.info(f"  pr_comments={self.stats['pr_comments']}")
