@@ -24,6 +24,7 @@ from github2ocel.extractor.fetchers import (
     fetch_pr_reviews,
     fetch_issue_timeline,
     fetch_pr_timeline,
+    fetch_commits
 )
 
 # Mappers
@@ -34,6 +35,8 @@ from github2ocel.transform.mappers.process_issue import process_issue, process_i
 from github2ocel.transform.mappers.process_pull_request import process_pull_request, process_pr_comment, process_pr_commit_link
 from github2ocel.transform.mappers.process_review import process_review
 from github2ocel.transform.mappers.process_timeline import process_timeline_event
+from github2ocel.transform.mappers.process_commit import process_commit_graphql
+
 
 logger = get_logger(__name__)
 
@@ -185,3 +188,10 @@ class Orchestrator:
             self.stats["timeline_events"] += 1
 
         logger.info(f"  timeline_events={self.stats['timeline_events']}")
+
+    # Phase 4: commits
+    def _phase4_commits(self):
+        for node in fetch_commits(self.client):
+            process_commit_graphql(node, self.builder, self.repo_id)
+            self.stats["commits"] += 1
+        logger.info(f"  commits={self.stats['commits']}")
