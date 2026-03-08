@@ -1,0 +1,431 @@
+
+from typing import Dict, Any, Optional
+from shared.ocel.builder import OCELBuilder
+from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
+from github2ocel.transform.utils.ensure import ensure_user, ensure_team, ensure_label
+from github2ocel.transform.utils.activity import Activities
+from shared.ocel.model.models import ObjectInstance
+from shared.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def process_timeline_event(
+    item: Dict[str, Any],
+    builder: OCELBuilder,
+    repo_id: str,
+) -> None:
+    typename    = item.get("__typename")
+    parent_type = item.get("__parent_type", "PullRequest")
+    is_pr       = parent_type == "PullRequest"
+
+    # Resolve parent object ID
+    if is_pr:
+        pr_num = item.get("__pr_number")
+        if not pr_num:
+            return
+        parent_id = make_id(repo_id, "pr", pr_num)
+    else:
+        issue_num = item.get("__issue_number")
+        if not issue_num:
+            return
+        parent_id = make_id(repo_id, "issue", issue_num)
+
+    if not builder.object_exists(parent_id):
+        logger.debug(f"[timeline] Parent {parent_id} not in builder yet. Skipping {typename}.")
+        return
+
+    handler = _HANDLERS.get(typename)
+    if not handler:
+        return  # unknown/unsupported type — silent skip
+
+    try:
+        handler(item, builder, repo_id, parent_id, is_pr)
+    except Exception as e:
+        logger.warning(f"[timeline] Failed to process {typename} on {parent_id}: {e}")
+
+
+# Handlers
+def _handle_assigned(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id    = _resolve_user(builder, repo_id, item.get("actor"), ts)
+    assignee_id = _resolve_user(builder, repo_id, item.get("assignee"), ts)
+
+    activity = Activities.PR_ASSIGNED if is_pr else Activities.ISSUE_ASSIGNED
+
+    create_event(
+        builder=builder, event_type=activity, ts=ts,
+        attributes={"source": "timeline"},
+        relationships=[
+            (parent_id, "target"),
+            (actor_id,  "actor")    if actor_id    else None,
+            (assignee_id, "assignee") if assignee_id else None,
+        ]
+    )
+    # Update O2O object relationship
+    if assignee_id:
+        _add_o2o(builder, parent_id, "PullRequest" if is_pr else "Issue",
+                 assignee_id, "assigned_to")
+
+
+def _handle_unassigned(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id    = _resolve_user(builder, repo_id, item.get("actor"), ts)
+    assignee_id = _resolve_user(builder, repo_id, item.get("assignee"), ts)
+
+    activity = Activities.PR_UNASSIGNED if is_pr else Activities.ISSUE_UNASSIGNED
+
+    create_event(
+        builder=builder, event_type=activity, ts=ts,
+        attributes={"source": "timeline"},
+        relationships=[
+            (parent_id,   "target"),
+            (actor_id,    "actor")      if actor_id    else None,
+            (assignee_id, "unassigned") if assignee_id else None,
+        ]
+    )
+
+
+def _handle_review_requested(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+
+    reviewer_node = item.get("requestedReviewer") or {}
+    reviewer_type = reviewer_node.get("__typename")
+
+    if reviewer_type == "User":
+        reviewer_id = _resolve_user(builder, repo_id, reviewer_node, ts)
+    elif reviewer_type == "Team":
+        reviewer_id = ensure_team(builder, repo_id, reviewer_node)
+    else:
+        reviewer_id = None
+
+    create_event(
+        builder=builder, event_type=Activities.PR_REVIEW_REQUESTED, ts=ts,
+        attributes={"reviewer_type": reviewer_type or "", "source": "timeline"},
+        relationships=[
+            (parent_id,   "target"),
+            (actor_id,    "actor")    if actor_id    else None,
+            (reviewer_id, "reviewer") if reviewer_id else None,
+        ]
+    )
+
+
+def _handle_review_request_removed(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+
+    create_event(
+        builder=builder, event_type=Activities.PR_REVIEW_REQUEST_REMOVED, ts=ts,
+        attributes={"source": "timeline"},
+        relationships=[
+            (parent_id, "target"),
+            (actor_id,  "actor") if actor_id else None,
+        ]
+    )
+
+
+def _handle_ready_for_review(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+
+    create_event(
+        builder=builder, event_type="PRReadyForReview", ts=ts,
+        attributes={"source": "timeline"},
+        relationships=[
+            (parent_id, "subject"),
+            (actor_id,  "actor") if actor_id else None,
+        ]
+    )
+
+
+def _handle_convert_to_draft(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+
+    create_event(
+        builder=builder, event_type="PRConvertedToDraft", ts=ts,
+        attributes={"source": "timeline"},
+        relationships=[
+            (parent_id, "subject"),
+            (actor_id,  "actor") if actor_id else None,
+        ]
+    )
+
+
+def _handle_labeled(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+    lbl = item.get("label") or {}
+    lbl_id = ensure_label(builder, repo_id, lbl, timestamp=ts) if lbl.get("id") else None
+
+    create_event(
+        builder=builder, event_type=Activities.LABEL_ADDED, ts=ts,
+        attributes={"label_name": lbl.get("name", ""), "source": "timeline"},
+        relationships=[
+            (parent_id, "target"),
+            (lbl_id,    "label_applied") if lbl_id   else None,
+            (actor_id,  "actor")         if actor_id else None,
+        ]
+    )
+    if lbl_id:
+        _add_o2o(builder, parent_id, "PullRequest" if is_pr else "Issue",
+                 lbl_id, "has_label")
+
+
+def _handle_unlabeled(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+    lbl = item.get("label") or {}
+
+    create_event(
+        builder=builder, event_type="LabelRemoved", ts=ts,
+        attributes={"label_name": lbl.get("name", ""), "source": "timeline"},
+        relationships=[
+            (parent_id, "target"),
+            (actor_id,  "actor") if actor_id else None,
+        ]
+    )
+
+
+def _handle_milestoned(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+
+    create_event(
+        builder=builder, event_type=Activities.MILESTONE_ASSIGNED, ts=ts,
+        attributes={"milestone_title": item.get("milestoneTitle", ""), "source": "timeline"},
+        relationships=[
+            (parent_id, "target"),
+            (actor_id,  "actor") if actor_id else None,
+        ]
+    )
+
+
+def _handle_demilestoned(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+
+    create_event(
+        builder=builder, event_type="MilestoneRemoved", ts=ts,
+        attributes={"milestone_title": item.get("milestoneTitle", ""), "source": "timeline"},
+        relationships=[
+            (parent_id, "target"),
+            (actor_id,  "actor") if actor_id else None,
+        ]
+    )
+
+
+def _handle_closed(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+    activity = Activities.PR_CLOSED if is_pr else Activities.ISSUE_CLOSED
+
+    # Closer can be a PR or Commit
+    closer = item.get("closer") or {}
+    closer_type = closer.get("__typename", "")
+    closer_ref = closer.get("number") or closer.get("oid", "")
+
+    create_event(
+        builder=builder, event_type=activity, ts=ts,
+        attributes={
+            "closer_type": closer_type,
+            "closer_ref": str(closer_ref),
+            "source": "timeline",
+        },
+        relationships=[
+            (parent_id, "subject"),
+            (actor_id,  "actor") if actor_id else None,
+        ]
+    )
+
+
+def _handle_reopened(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+    activity = Activities.ISSUE_REOPENED  # same for PRs conceptually
+
+    create_event(
+        builder=builder, event_type=activity, ts=ts,
+        attributes={"source": "timeline"},
+        relationships=[
+            (parent_id, "subject"),
+            (actor_id,  "actor") if actor_id else None,
+        ]
+    )
+
+
+def _handle_merged(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+    merge_commit_oid = (item.get("commit") or {}).get("oid")
+    merge_commit_id = make_id(repo_id, "commit", merge_commit_oid) if merge_commit_oid else None
+
+    create_event(
+        builder=builder, event_type=Activities.PR_MERGED, ts=ts,
+        attributes={"merge_ref": item.get("mergeRefName", ""), "source": "timeline"},
+        relationships=[
+            (parent_id,      "subject"),
+            (actor_id,       "actor")        if actor_id        else None,
+            (merge_commit_id, "merge_commit") if merge_commit_id and builder.object_exists(merge_commit_id) else None,
+        ]
+    )
+
+
+def _handle_force_pushed(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+    before_oid = (item.get("beforeCommit") or {}).get("oid", "")
+    after_oid  = (item.get("afterCommit")  or {}).get("oid", "")
+
+    create_event(
+        builder=builder, event_type=Activities.PR_FORCE_PUSHED, ts=ts,
+        attributes={"before_sha": before_oid[:12], "after_sha": after_oid[:12], "source": "timeline"},
+        relationships=[
+            (parent_id, "target"),
+            (actor_id,  "actor") if actor_id else None,
+        ]
+    )
+
+
+def _handle_deployed(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    dep = item.get("deployment") or {}
+    dep_db_id = dep.get("databaseId")
+
+    if dep_db_id:
+        dep_id = make_id(repo_id, "deployment", dep_db_id)
+        dep_rel = (dep_id, "deployment") if builder.object_exists(dep_id) else None
+    else:
+        dep_rel = None
+
+    create_event(
+        builder=builder, event_type=Activities.DEPLOYMENT_CREATED, ts=ts,
+        attributes={
+            "environment": dep.get("environment", ""),
+            "state": dep.get("state", ""),
+            "source": "timeline",
+        },
+        relationships=[
+            (parent_id, "context"),
+            dep_rel,
+        ]
+    )
+
+
+def _handle_cross_referenced(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    source = item.get("source") or {}
+    source_type = source.get("__typename", "")
+    source_num  = source.get("number")
+
+    if source_num:
+        if source_type == "PullRequest":
+            source_id = make_id(repo_id, "pr", source_num)
+        elif source_type == "Issue":
+            source_id = make_id(repo_id, "issue", source_num)
+        else:
+            source_id = None
+    else:
+        source_id = None
+
+    create_event(
+        builder=builder, event_type=Activities.CROSS_REFERENCED, ts=ts,
+        attributes={"source_type": source_type, "source": "timeline"},
+        relationships=[
+            (parent_id, "target"),
+            (source_id, "referenced_by") if source_id and builder.object_exists(source_id) else None,
+        ]
+    )
+
+
+def _handle_connected(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+    subject = item.get("subject") or {}
+    subject_type = subject.get("__typename", "")
+    subject_num  = subject.get("number")
+
+    if subject_num:
+        if subject_type == "Issue":
+            linked_id = make_id(repo_id, "issue", subject_num)
+        elif subject_type == "PullRequest":
+            linked_id = make_id(repo_id, "pr", subject_num)
+        else:
+            linked_id = None
+    else:
+        linked_id = None
+
+    # O2O: PR -> Issue (or vice versa)
+    if linked_id and builder.object_exists(linked_id):
+        _add_o2o(
+            builder, parent_id, "PullRequest" if is_pr else "Issue",
+            linked_id, "linked_issue"
+        )
+
+    create_event(
+        builder=builder, event_type=Activities.ISSUE_LINKED, ts=ts,
+        attributes={"linked_type": subject_type, "source": "timeline"},
+        relationships=[
+            (parent_id, "subject"),
+            (linked_id, "linked_to") if linked_id and builder.object_exists(linked_id) else None,
+        ]
+    )
+
+
+def _handle_disconnected(item, builder, repo_id, parent_id, is_pr):
+    ts = safe_timestamp(item["createdAt"])
+
+    create_event(
+        builder=builder, event_type=Activities.ISSUE_UNLINKED, ts=ts,
+        attributes={"source": "timeline"},
+        relationships=[(parent_id, "subject")]
+    )
+
+
+# Dispatch table
+_HANDLERS = {
+    "AssignedEvent":              _handle_assigned,
+    "UnassignedEvent":            _handle_unassigned,
+    "ReviewRequestedEvent":       _handle_review_requested,
+    "ReviewRequestRemovedEvent":  _handle_review_request_removed,
+    "ReadyForReviewEvent":        _handle_ready_for_review,
+    "ConvertToDraftEvent":        _handle_convert_to_draft,
+    "LabeledEvent":               _handle_labeled,
+    "UnlabeledEvent":             _handle_unlabeled,
+    "MilestonedEvent":            _handle_milestoned,
+    "DemilestonedEvent":          _handle_demilestoned,
+    "ClosedEvent":                _handle_closed,
+    "ReopenedEvent":              _handle_reopened,
+    "MergedEvent":                _handle_merged,
+    "HeadRefForcePushedEvent":    _handle_force_pushed,
+    "DeployedEvent":              _handle_deployed,
+    "CrossReferencedEvent":       _handle_cross_referenced,
+    "ConnectedEvent":             _handle_connected,
+    "DisconnectedEvent":          _handle_disconnected,
+}
+
+
+# Helpers
+def _resolve_user(
+    builder: OCELBuilder,
+    repo_id: str,
+    actor_node: Optional[Dict],
+    ts: str,
+) -> Optional[str]:
+    if not actor_node:
+        return None
+    login = actor_node.get("login")
+    return ensure_user(builder, repo_id, login, timestamp=ts) if login else None
+
+
+def _add_o2o(
+    builder: OCELBuilder,
+    source_id: str,
+    source_type: str,
+    target_id: str,
+    qualifier: str,
+) -> None:
+    """Add an O2O relationship using a proxy ObjectInstance (idempotent)."""
+    proxy = ObjectInstance(object_id=source_id, object_type=source_type)
+    proxy.add_rel(target_id, qualifier)
+    builder.insert_object(proxy)

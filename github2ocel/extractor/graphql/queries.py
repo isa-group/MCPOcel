@@ -425,3 +425,383 @@ query GetPRCommits(
   rateLimit { cost remaining resetAt }
 }
 """
+
+
+PR_REVIEWS_QUERY = """
+query GetPRReviews(
+  $owner: String!
+  $repo:  String!
+  $prNumber: Int!
+  $cursor: String
+  $pageSize: Int!
+) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $prNumber) {
+      id
+      number
+
+      reviews(first: $pageSize, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        totalCount
+        nodes {
+          id
+          state          # APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING
+          submittedAt
+          body
+          author {
+            login
+            __typename
+            ... on User { id }
+          }
+
+          # Inline code comments within this review (ReviewComment objects)
+          comments(first: 50) {
+            pageInfo { hasNextPage endCursor }
+            totalCount
+            nodes {
+              id
+              createdAt
+              updatedAt: lastEditedAt
+              body
+              path
+              line
+              position
+              diffHunk
+              author { login }
+              reactions(first: 1) { totalCount }
+            }
+          }
+        }
+      }
+
+      # Review threads (resolved/unresolved — separate from reviews)
+      reviewThreads(first: 50) {
+        pageInfo { hasNextPage endCursor }
+        totalCount
+        nodes {
+          id
+          isResolved
+          isOutdated
+          resolvedBy { login }
+          comments(first: 10) {
+            nodes {
+              id
+              createdAt
+              body
+              path
+              author { login }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+PR_TIMELINE_QUERY = """
+query GetTimeline(
+  $owner: String!
+  $repo:  String!
+  $prNumber: Int!
+  $cursor: String
+  $pageSize: Int!
+) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $prNumber) {
+      id
+      number
+      timelineItems(
+        first: $pageSize
+        after: $cursor
+        itemTypes: [
+          ASSIGNED_EVENT
+          UNASSIGNED_EVENT
+          REVIEW_REQUESTED_EVENT
+          REVIEW_REQUEST_REMOVED_EVENT
+          READY_FOR_REVIEW_EVENT
+          CONVERT_TO_DRAFT_EVENT
+          LABELED_EVENT
+          UNLABELED_EVENT
+          MILESTONED_EVENT
+          DEMILESTONED_EVENT
+          CLOSED_EVENT
+          REOPENED_EVENT
+          MERGED_EVENT
+          HEAD_REF_FORCE_PUSHED_EVENT
+          DEPLOYED_EVENT
+          CROSS_REFERENCED_EVENT
+          CONNECTED_EVENT
+          DISCONNECTED_EVENT
+        ]
+      ) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          __typename
+
+          ... on AssignedEvent {
+            createdAt
+            actor { login ... on User { id } }
+            assignee { ... on User { login id } }
+          }
+
+          ... on UnassignedEvent {
+            createdAt
+            actor { login ... on User { id } }
+            assignee { ... on User { login id } }
+          }
+
+          ... on ReviewRequestedEvent {
+            createdAt
+            actor { login }
+            requestedReviewer {
+              __typename
+              ... on User { login id }
+              ... on Team { name id }
+            }
+          }
+
+          ... on ReviewRequestRemovedEvent {
+            createdAt
+            actor { login }
+            requestedReviewer {
+              __typename
+              ... on User { login id }
+              ... on Team { name id }
+            }
+          }
+
+          ... on ReadyForReviewEvent {
+            createdAt
+            actor { login }
+          }
+
+          ... on ConvertToDraftEvent {
+            createdAt
+            actor { login }
+          }
+
+          ... on LabeledEvent {
+            createdAt
+            actor { login }
+            label { id name color }
+          }
+
+          ... on UnlabeledEvent {
+            createdAt
+            actor { login }
+            label { id name color }
+          }
+
+          ... on MilestonedEvent {
+            createdAt
+            actor { login }
+            milestoneTitle
+          }
+
+          ... on DemilestonedEvent {
+            createdAt
+            actor { login }
+            milestoneTitle
+          }
+
+          ... on ClosedEvent {
+            createdAt
+            actor { login ... on User { id } }
+            closer {
+              __typename
+              ... on PullRequest { id number }
+              ... on Commit { oid }
+            }
+          }
+
+          ... on ReopenedEvent {
+            createdAt
+            actor { login }
+          }
+
+          ... on MergedEvent {
+            createdAt
+            actor { login }
+            mergeRefName
+            commit { oid }
+          }
+
+          ... on HeadRefForcePushedEvent {
+            createdAt
+            actor { login }
+            beforeCommit { oid }
+            afterCommit { oid }
+          }
+
+          ... on DeployedEvent {
+            createdAt
+            actor { login }
+            deployment {
+              databaseId
+              state
+              environment
+              creator { login }
+            }
+          }
+
+          ... on CrossReferencedEvent {
+            createdAt
+            actor { login }
+            source {
+              __typename
+              ... on PullRequest { id number }
+              ... on Issue { id number }
+            }
+          }
+
+          ... on ConnectedEvent {
+            createdAt
+            actor { login }
+            subject {
+              __typename
+              ... on Issue { id number }
+              ... on PullRequest { id number }
+            }
+          }
+
+          ... on DisconnectedEvent {
+            createdAt
+            actor { login }
+            subject {
+              __typename
+              ... on Issue { id number }
+              ... on PullRequest { id number }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+ISSUE_TIMELINE_QUERY = """
+query GetIssueTimeline(
+  $owner: String!
+  $repo:  String!
+  $issueNumber: Int!
+  $cursor: String
+  $pageSize: Int!
+) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $issueNumber) {
+      id
+      number
+      timelineItems(
+        first: $pageSize
+        after: $cursor
+        itemTypes: [
+          ASSIGNED_EVENT
+          UNASSIGNED_EVENT
+          LABELED_EVENT
+          UNLABELED_EVENT
+          MILESTONED_EVENT
+          DEMILESTONED_EVENT
+          CLOSED_EVENT
+          REOPENED_EVENT
+          CROSS_REFERENCED_EVENT
+          CONNECTED_EVENT
+          DISCONNECTED_EVENT
+        ]
+      ) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          __typename
+
+          ... on AssignedEvent {
+            createdAt
+            actor { login ... on User { id } }
+            assignee { ... on User { login id } }
+          }
+
+          ... on UnassignedEvent {
+            createdAt
+            actor { login ... on User { id } }
+            assignee { ... on User { login id } }
+          }
+
+          ... on LabeledEvent {
+            createdAt
+            actor { login }
+            label { id name color }
+          }
+
+          ... on UnlabeledEvent {
+            createdAt
+            actor { login }
+            label { id name color }
+          }
+
+          ... on MilestonedEvent {
+            createdAt
+            actor { login }
+            milestoneTitle
+          }
+
+          ... on DemilestonedEvent {
+            createdAt
+            actor { login }
+            milestoneTitle
+          }
+
+          ... on ClosedEvent {
+            createdAt
+            actor { login ... on User { id } }
+            closer {
+              __typename
+              ... on PullRequest { id number }
+              ... on Commit { oid }
+            }
+          }
+
+          ... on ReopenedEvent {
+            createdAt
+            actor { login }
+          }
+
+          ... on CrossReferencedEvent {
+            createdAt
+            actor { login }
+            source {
+              __typename
+              ... on PullRequest { id number }
+              ... on Issue { id number }
+            }
+          }
+
+          ... on ConnectedEvent {
+            createdAt
+            actor { login }
+            subject {
+              __typename
+              ... on Issue { id number }
+              ... on PullRequest { id number }
+            }
+          }
+
+          ... on DisconnectedEvent {
+            createdAt
+            actor { login }
+            subject {
+              __typename
+              ... on Issue { id number }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  rateLimit { cost remaining resetAt }
+}
+"""
