@@ -805,3 +805,96 @@ query GetIssueTimeline(
   rateLimit { cost remaining resetAt }
 }
 """
+
+
+COMMITS_QUERY = """
+query GetCommits(
+  $owner: String!
+  $repo:  String!
+  $pageSize: Int!
+  $cursor: String
+  $since: GitTimestamp
+) {
+  repository(owner: $owner, name: $repo) {
+    defaultBranchRef {
+      name
+      target {
+        ... on Commit {
+          history(first: $pageSize, after: $cursor, since: $since) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              oid
+              message
+              committedDate
+              authoredDate
+
+              # Code diff metrics (counts only — paths not available in GraphQL)
+              additions
+              deletions
+              changedFilesIfAvailable
+
+              # Author / committer
+              author {
+                name
+                email
+                date
+                user { login id }
+              }
+              committer {
+                name
+                date
+                user { login id }
+              }
+
+              # Signature
+              signature {
+                isValid
+                signer { login }
+              }
+
+              # Merge detection
+              parents(first: 3) {
+                totalCount
+                nodes { oid }
+              }
+
+              # PR association (→ Commit–PR O2O)
+              associatedPullRequests(first: 5) {
+                nodes {
+                  number
+                  id
+                }
+              }
+
+              # CI checks on this commit
+              checkSuites(first: 3) {
+                nodes {
+                  conclusion
+                  status
+                  workflowRun {
+                    databaseId
+                    event
+                    workflow { name }
+                  }
+                  checkRuns(first: 10) {
+                    nodes {
+                      id
+                      name
+                      status
+                      conclusion
+                      startedAt
+                      completedAt
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  rateLimit { cost remaining resetAt }
+}
+"""
