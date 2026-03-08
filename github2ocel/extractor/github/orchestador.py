@@ -20,7 +20,10 @@ from github2ocel.extractor.fetchers import (
     fetch_tags,
     fetch_pr_comments,
     fetch_pr_commits,
-    fetch_issue_comments
+    fetch_issue_comments,
+    fetch_pr_reviews,
+    fetch_issue_timeline,
+    fetch_pr_timeline,
 )
 
 # Mappers
@@ -29,6 +32,8 @@ from github2ocel.transform.mappers.process_branch import process_branch
 from github2ocel.transform.mappers.process_tag import process_tag
 from github2ocel.transform.mappers.process_issue import process_issue, process_issue_comment
 from github2ocel.transform.mappers.process_pull_request import process_pull_request, process_pr_comment, process_pr_commit_link
+from github2ocel.transform.mappers.process_review import process_review
+from github2ocel.transform.mappers.process_timeline import process_timeline_event
 
 logger = get_logger(__name__)
 
@@ -161,3 +166,22 @@ class Orchestrator:
             process_pr_comment(comment, self.builder, self.repo_id)
             self.stats["pr_comments"] += 1
         logger.info(f"  pr_comments={self.stats['pr_comments']}")
+
+
+    # Phase 3: dependent objects
+    def _phase3_dependent(self):
+
+        for review in fetch_pr_reviews(self.client, self._pr_numbers, page_size=self._ps.pr_reviews):
+            process_review(review, self.builder, self.repo_id)
+            self.stats["reviews"] += 1
+        logger.info(f"  reviews={self.stats['reviews']}")
+
+        for event in fetch_pr_timeline(self.client, self._pr_numbers, page_size=self._ps.pr_timeline):
+            process_timeline_event(event, self.builder, self.repo_id)
+            self.stats["timeline_events"] += 1
+
+        for event in fetch_issue_timeline(self.client, self._issue_numbers, page_size=self._ps.issue_timeline):
+            process_timeline_event(event, self.builder, self.repo_id)
+            self.stats["timeline_events"] += 1
+
+        logger.info(f"  timeline_events={self.stats['timeline_events']}")
