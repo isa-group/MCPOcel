@@ -1,5 +1,6 @@
 from enum import Enum
 from typing import Dict
+from shared.config.env import Env
 
 class ExtractionProfile(Enum):
     MINIMAL = "minimal"
@@ -42,3 +43,12 @@ def get_profile_vars(profile_name: str = "standard") -> Dict[str, bool]:
         selected = ExtractionProfile.STANDARD
 
     return PROFILES[selected]
+
+
+def get_profile_from_env() -> ExtractionProfile:
+    """Reads EXTRACTION_PROFILE from environment, defaults to STANDARD."""
+    name = Env.optional_str("EXTRACTION_PROFILE", default="standard")
+    try:
+        return ExtractionProfile(name.lower())
+    except ValueError:
+        return ExtractionProfile.STANDARD

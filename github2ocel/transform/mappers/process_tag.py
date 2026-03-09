@@ -32,6 +32,8 @@ def process_tag(tag_node: Dict[str, Any], builder: OCELBuilder, repo_id: str) ->
         time=ts,
         attributes={
             "name": tag_name,
+            "is_annotated": tag_node.get("is_annotated", 0),
+            "message": (tag_node.get("message") or "")[:500],
             "is_semver": semver["is_semver"],
             "major": semver["major"],
             "minor": semver["minor"],
@@ -76,6 +78,8 @@ def process_tag(tag_node: Dict[str, Any], builder: OCELBuilder, repo_id: str) ->
         attributes={
             "version": tag_name,
             "change_type": change_type,
+            "is_annotated": tag_node.get("is_annotated", 0),
+            "message": (tag_node.get("message") or "")[:500],
             "source": "github_api"
          },
         relationships=[

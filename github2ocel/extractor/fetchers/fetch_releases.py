@@ -37,11 +37,22 @@ def fetch_releases(
 ) -> Generator[Dict[str, Any], None, None]:
     logger.info("--- [Fetcher] Releases ---")
 
+    since_iso, until_iso = client.time_window_iso
+
+    count = 0
     for node in paginate_nodes(
         client=client,
         query=RELEASES_QUERY,
         node_type="releases",
         variables={"pageSize": page_size},
     ):
+        created_at = node.get("createdAt", "")
+        if since_iso and created_at < since_iso:
+            continue
+        if created_at > until_iso:
+            continue
         node["__type"] = "Release"
         yield node
+        count += 1
+
+    logger.info(f"--- [Fetcher] Releases done — {count} ---")

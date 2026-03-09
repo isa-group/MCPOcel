@@ -15,6 +15,9 @@ def compute_page_sizes(stats: RepoStats, remaining_points: Optional[int] = None)
      - Very large  (≥3000 PRs): pageSize=10
 
    commits pageSize is independent — no embedded fields, safe at 50.
+
+   pr_reviews is adaptive based on reviews_est (estimated total reviews).
+   discussions is adaptive based on discussion count (each has embedded comments+replies).
    """
    ps = PageSizes()
 
@@ -41,21 +44,38 @@ def compute_page_sizes(stats: RepoStats, remaining_points: Optional[int] = None)
        ps.issues = 30
 
    # Commits — independent query, no nested cost
-   if stats.commits < 2000:
-       ps.commits = 50
-   else:
-       ps.commits = 50  # already safe, history query is cheap
+   ps.commits = 50  # history query is cheap regardless of repo size
 
-   # If points are critically low, be more conservative
+   # PR reviews — per-PR nested query; page size controls items per call.
+   reviews_est = stats.reviews_est
+   if reviews_est < 200:
+       ps.pr_reviews = 30   # default, safe
+   elif reviews_est < 1000:
+       ps.pr_reviews = 20
+   else:
+       ps.pr_reviews = 10   # large review volume — conservative per call
+
+   # Discussions
+   if stats.discussions < 200:
+       ps.discussions = 50
+   elif stats.discussions < 500:
+       ps.discussions = 30
+   else:
+       ps.discussions = 20
+
+   # If points are critically low, be more conservative across the board
    if remaining_points is not None and remaining_points < 1000:
        logger.warning(f"[Adaptive] Low points ({remaining_points}) — reducing page sizes")
        ps.pull_requests = min(ps.pull_requests, 10)
        ps.issues        = min(ps.issues, 30)
+       ps.pr_reviews    = min(ps.pr_reviews, 10)
+       ps.discussions   = min(ps.discussions, 20)
 
    logger.info(
        f"[Adaptive] Page sizes → "
        f"prs={ps.pull_requests} issues={ps.issues} "
-       f"commits={ps.commits} discussions={ps.discussions}"
+       f"commits={ps.commits} pr_reviews={ps.pr_reviews} "
+       f"discussions={ps.discussions} "
+       f"(reviews_est={reviews_est})"
    )
    return ps
-

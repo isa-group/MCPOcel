@@ -3,6 +3,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Tuple, Optional
 from shared.config.env import Env
 from github2ocel.config.settings import APIConfig
+from github2ocel.config.profiles import ExtractionProfile, get_profile_from_env, get_profile_vars
+from typing import Dict
 
 
 @dataclass(frozen=True)
@@ -12,6 +14,7 @@ class RepoContext:
     token: str
     visibility: str
     api: APIConfig
+    profile: ExtractionProfile
 
     @classmethod
     def from_env(cls) -> "RepoContext":
@@ -21,7 +24,13 @@ class RepoContext:
             token=Env.str("GITHUB_TOKEN"),
             visibility=Env.str("GITHUB_VISIBILITY", default="public"),
             api=APIConfig.from_env(),
+            profile=get_profile_from_env(),
         )
+
+    @property
+    def profile_vars(self) -> Dict[str, bool]:
+        """Returns the boolean flags for the active profile."""
+        return get_profile_vars(self.profile.value)
 
     @property
     def time_window_iso(self) -> Tuple[Optional[str], str]:
