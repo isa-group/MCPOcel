@@ -10,6 +10,8 @@ from .fetch_pr_commits import fetch_pr_commits
 from .fetch_pr_reviews import fetch_pr_reviews
 from .fetch_timeline import fetch_issue_timeline, fetch_pr_timeline
 from .fetch_commits import fetch_commits
+from .fetch_deployments import fetch_deployments
+from .fetch_workflow_runs import fetch_workflow_runs
 
 __all__ = [
     "fetch_repo_stats",
@@ -24,6 +26,8 @@ __all__ = [
     "fetch_pr_reviews",
     "fetch_issue_timeline",
     "fetch_pr_timeline",
-    "fetch_commits"
+    "fetch_commits",
+    "fetch_deployments",
+    "fetch_workflow_runs",
 
 ]
