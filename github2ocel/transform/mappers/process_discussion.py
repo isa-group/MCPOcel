@@ -1,12 +1,10 @@
-import logging
-import uuid
 from typing import Dict, Any
 
 from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.utils.activity import Activities
-from github2ocel.transform.utils.helper import safe_timestamp
+from github2ocel.transform.utils.helper import safe_timestamp, create_event
 from github2ocel.transform.utils.ensure import make_id, ensure_user
-from shared.ocel.model.models  import Event, ObjectInstance
+from shared.ocel.model.models  import ObjectInstance
 
 def process_discussion(
     discussion: Dict[str, Any],
@@ -23,7 +21,7 @@ def process_discussion(
     discussion_id = make_id(repo_id, "discussion", discussion_number)
 
     ts_created = safe_timestamp(discussion.get("createdAt"))
-    
+
     # Object
     discussion_obj = ObjectInstance(
         object_id=discussion_id,
@@ -44,37 +42,43 @@ def process_discussion(
 
     discussion_obj.add_rel(repo_id, "discussion_of_repo")
 
+    author_login = (discussion.get("author") or {}).get("login")
+    user_id = None
+    if author_login:
+        user_id = ensure_user(builder, repo_id, author_login, timestamp=ts_created)
+        discussion_obj.add_rel(target_id=user_id, qualifier="created_by")
+
     builder.insert_object(discussion_obj)
 
-    # Created Event    
-    evt = Event(
-        event_id=str(uuid.uuid4()),
+    # Created Event
+    create_event(
+        builder=builder,
         event_type=Activities.DISCUSSION_CREATED,
-        time=ts_created,
-        attributes={}
+        ts=ts_created,
+        attributes={},
+        relationships=[
+            (user_id, "actor") if user_id else None,
+            (discussion_id, "created_discussion"),
+            (repo_id, "context")
+        ]
     )
-    author_login = (discussion.get("author") or {}).get("login")
-    if author_login:
-        user_id = ensure_user(builder, repo_id, author_login)
-        evt.add_rel(user_id, "actor")
-
-    evt.add_rel(discussion_id, "created_discussion")
-    evt.add_rel(repo_id, "context")
-
-    builder.insert_event(evt)
 
     # Answered Event (Q&A only)
     if discussion.get("answerChosenAt"):
-        evt_answered = Event(
-            event_id=str(uuid.uuid4()),
+        ts_answered = safe_timestamp(discussion["answerChosenAt"])
+        answerer_login = (discussion.get("answerChosenBy") or {}).get("login")
+        answerer_id = ensure_user(builder, repo_id, answerer_login, timestamp=ts_answered)
+
+        create_event(
+            builder=builder,
             event_type=Activities.DISCUSSION_ANSWERED,
-            time=safe_timestamp(discussion["answerChosenAt"]),
-            attributes={}
+            ts=ts_answered,
+            attributes={},
+            relationships=[
+                (discussion_id, "answered_discussion"),
+                (repo_id, "context"),
+                (answerer_id, "actor") if answerer_login else None
+            ]
         )
-
-        evt_answered.add_rel(discussion_id, "answered_discussion")
-        evt_answered.add_rel(repo_id, "context")
-
-        builder.insert_event(evt_answered)
 
     return discussion_id

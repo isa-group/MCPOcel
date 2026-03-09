@@ -1062,3 +1062,80 @@ query GetReleases(
 
 """Tags GraphQL query — handles both lightweight and annotated tags."""
 
+
+DISCUSSIONS_QUERY = """
+query GetDiscussions(
+  $owner: String!
+  $repo:  String!
+  $pageSize: Int!
+  $cursor: String
+) {
+  repository(owner: $owner, name: $repo) {
+    discussions(
+      first: $pageSize
+      after: $cursor
+      orderBy: { field: CREATED_AT, direction: ASC }
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        __typename
+        id
+        number
+        title
+        url
+        createdAt
+        updatedAt
+        answerChosenAt
+        locked
+        upvoteCount
+        body
+        bodyText
+
+        answerChosenBy { login }
+
+        author {
+          login
+          __typename
+          ... on User { id }
+          ... on Bot  { id }
+        }
+
+        category { id name }
+
+        labels(first: 10) {
+          nodes { id name color }
+        }
+
+        reactions(first: 1) { totalCount }
+
+        comments(first: 50) {
+          pageInfo { hasNextPage endCursor }
+          totalCount
+          nodes {
+            id
+            createdAt
+            updatedAt
+            body
+            bodyText
+            isAnswer
+            author { login }
+            reactions(first: 1) { totalCount }
+            replies(first: 10) {
+              pageInfo { hasNextPage endCursor }
+              totalCount
+              nodes {
+                id
+                body
+                createdAt
+                author { login }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  rateLimit { cost remaining resetAt }
+}
+"""
