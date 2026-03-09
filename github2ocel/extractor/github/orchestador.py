@@ -9,6 +9,7 @@ from github2ocel.client.github_client import GitHubClient
 from github2ocel.client.exceptions import (
     RateLimitError, RetryableError, GraphQLError, FatalError
 )
+from github2ocel.config.profiles import ExtractionProfile, PROFILES
 
 # Fetchers
 from github2ocel.extractor.fetchers import (
@@ -84,20 +85,29 @@ class Orchestrator:
         # Date extraction
         self.since, self.until = self.client.ctx.time_window_iso
 
+        # Active profile flags
+        self._profile = client.ctx.profile
+        self._flags = PROFILES[self._profile]
+        logger.info(f"Extraction profile: {self._profile.value} — {self._flags}")
+
     # Runner
     def run(self) -> bool:
         phases = [
-            ("Setup - Repo stats",                self._phase_stats),
-            ("Initialization  — Seed objects",    self._initialization),
-            ("Phase 1  — Core objects",           self._phase1_core),
-            ("Phase 2  — Per-node detail",        self._phase2_detail),
-            ("Phase 3  — Dependent objects",      self._phase3_dependent),
-            ("Phase 4  — Code pipeline",          self._phase4_commits),
-            ("Phase 5  — DevOps pipeline",        self._phase5_devops),
-            ("Phase 6  — Knowledge base",         self._phase6_knowledge),
+            ("Setup - Repo stats",                self._phase_stats,      True),
+            ("Initialization  — Seed objects",    self._initialization,   True),
+            ("Phase 1  — Core objects",           self._phase1_core,      True),
+            ("Phase 2  — Per-node detail",        self._phase2_detail,    True),
+            ("Phase 3  — Reviews & Timeline",     self._phase3_dependent, self._flags["withReviews"] or self._flags["withTimeline"]),
+            ("Phase 4  — Commits",                self._phase4_commits,   True),
+            ("Phase 5  — DevOps",                 self._phase5_devops,    True),
+            ("Phase 6  — Knowledge base",         self._phase6_knowledge, self._flags["withDiscussions"]),
         ]
 
-        for name, fn in phases:
+        for name, fn, enabled in phases:
+            if not enabled:
+                logger.info(f" - {name} [SKIPPED by profile '{self._profile.value}']")
+                continue
+
             logger.info(f" - {name}")
             t0 = time.time()
             ok = self._run_phase(name, fn)
@@ -148,13 +158,13 @@ class Orchestrator:
 
     # Phase 1: core objects
     def _phase1_core(self):
-        for node in fetch_issues(self.client, page_size=self._ps.issues, total=self.repo_metrics.issues):
+        for node in fetch_issues(self.client, page_size=self._ps.issues, total=self.repo_metrics.issues, since=self.since):
             process_issue(node, self.builder, self.repo_id)
             self._issue_numbers.append(int(node["number"]))
             self.stats["issues"] += 1
         logger.info(f"  issues={self.stats['issues']}")
 
-        for node in fetch_pull_requests(self.client, page_size=self._ps.pull_requests, total=self.repo_metrics.pull_requests):
+        for node in fetch_pull_requests(self.client, page_size=self._ps.pull_requests, total=self.repo_metrics.pull_requests, since=self.since):
             process_pull_request(node, self.builder, self.repo_id)
             self._pr_numbers.append(int(node["number"]))
             self.stats["prs"] += 1
@@ -189,20 +199,26 @@ class Orchestrator:
     # Phase 3: dependent objects
     def _phase3_dependent(self):
 
-        for review in fetch_pr_reviews(self.client, self._pr_numbers, page_size=self._ps.pr_reviews):
-            process_review(review, self.builder, self.repo_id)
-            self.stats["reviews"] += 1
-        logger.info(f"  reviews={self.stats['reviews']}")
+        if self._flags["withReviews"]:
+            for review in fetch_pr_reviews(self.client, self._pr_numbers, page_size=self._ps.pr_reviews):
+                process_review(review, self.builder, self.repo_id)
+                self.stats["reviews"] += 1
+            logger.info(f"  reviews={self.stats['reviews']}")
+        else:
+            logger.info("  reviews=SKIPPED (profile)")
 
-        for event in fetch_pr_timeline(self.client, self._pr_numbers, page_size=self._ps.pr_timeline):
-            process_timeline_event(event, self.builder, self.repo_id)
-            self.stats["timeline_events"] += 1
+        if self._flags["withTimeline"]:
+            for event in fetch_pr_timeline(self.client, self._pr_numbers, page_size=self._ps.pr_timeline):
+                process_timeline_event(event, self.builder, self.repo_id)
+                self.stats["timeline_events"] += 1
 
-        for event in fetch_issue_timeline(self.client, self._issue_numbers, page_size=self._ps.issue_timeline):
-            process_timeline_event(event, self.builder, self.repo_id)
-            self.stats["timeline_events"] += 1
+            for event in fetch_issue_timeline(self.client, self._issue_numbers, page_size=self._ps.issue_timeline):
+                process_timeline_event(event, self.builder, self.repo_id)
+                self.stats["timeline_events"] += 1
 
-        logger.info(f"  timeline_events={self.stats['timeline_events']}")
+            logger.info(f"  timeline_events={self.stats['timeline_events']}")
+        else:
+            logger.info("  timeline=SKIPPED (profile)")
 
     # Phase 4: commits
     def _phase4_commits(self):
@@ -227,7 +243,7 @@ class Orchestrator:
             f"workflow_jobs={self.stats['workflow_jobs']}"
         )
 
-            # Phase 6: knowledge base
+    # Phase 6: knowledge base
     def _phase6_knowledge(self):
         for node in fetch_releases(self.client, page_size=self._ps.releases):
             process_release(node, self.builder, self.repo_id)

@@ -35,8 +35,15 @@ def fetch_repo_stats(client: GitHubClient) -> RepoStats:
            commits       = commits,
            reviews_est   = 0,  # estimated below
        )
-       # Rough estimate: avg 2 reviews per merged PR
-       stats.reviews_est = stats.pull_requests * 2
+       # Reviews estimation based on repo size:
+       prs = stats.pull_requests
+       if prs < 200: # Small repos (avg ~1.5/PR).
+           avg_reviews = 1.5
+       elif prs < 1000: # Medium repos (avg ~2.5/PR).
+           avg_reviews = 2.5
+       else: # Large repos with formal workflows can reach 3-4 reviews per PR.
+           avg_reviews = 3.5
+       stats.reviews_est = int(prs * avg_reviews)
 
        logger.info(
            f"  issues={stats.issues} prs={stats.pull_requests} "

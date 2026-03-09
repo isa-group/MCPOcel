@@ -20,7 +20,7 @@ def process_milestone(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) 
     closed_at  = safe_timestamp(node.get("closedAt")) if node.get("closedAt") else None
     is_closed  = node.get("state") == "CLOSED"
 
-    # ── Object ────────────────────────────────────────────────────────────
+    # Object
     obj = ObjectInstance(object_id=ms_id, object_type="Milestone")
 
     obj.add_snapshot(
@@ -48,7 +48,7 @@ def process_milestone(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) 
             }
         )
 
-    # ── Relationships ─────────────────────────────────────────────────────
+    # Relationships
     obj.add_rel(repo_id, "contained_in")
 
     creator_id    = None
@@ -60,7 +60,7 @@ def process_milestone(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) 
 
     builder.insert_object(obj)
 
-    # ── Events ────────────────────────────────────────────────────────────
+    # Events
     base_rels = [
         (ms_id,       "subject"),
         (repo_id,     "context"),
@@ -97,7 +97,7 @@ def process_milestone(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) 
     if updated_at and updated_at != created_at:
         create_event(
             builder=builder,
-            event_type=Activities.MILESTONE_UPDATED,  # ← añadir al enum
+            event_type=Activities.MILESTONE_UPDATED,
             ts=updated_at,
             attributes={
                 "title":        node.get("title", "")[:255],

@@ -71,7 +71,7 @@ def main() -> None:
         stats_extractor, extraction_success = run_extractor(ctx, builder, repo_id)
 
         if extraction_success:
-            logger.info("Iniciando auditoría de integridad de datos...")
+            logger.info("Starting data integrity audit...")
             verify_data_integrity(stats_extractor, builder.stats)
             print_pipeline_audit(builder)
         else:
