@@ -27,19 +27,27 @@ from github2ocel.extractor.fetchers import (
     fetch_commits,
     fetch_deployments,
     fetch_workflow_runs,
+    fetch_releases,
+    fetch_discussions
 )
 
 # Mappers
-from github2ocel.transform.mappers.process_milestone import process_milestone
-from github2ocel.transform.mappers.process_branch import process_branch
-from github2ocel.transform.mappers.process_tag import process_tag
-from github2ocel.transform.mappers.process_issue import process_issue, process_issue_comment
-from github2ocel.transform.mappers.process_pull_request import process_pull_request, process_pr_comment, process_pr_commit_link
-from github2ocel.transform.mappers.process_review import process_review
-from github2ocel.transform.mappers.process_timeline import process_timeline_event
-from github2ocel.transform.mappers.process_commit import process_commit_graphql
-from github2ocel.transform.mappers.process_workflow_run import process_workflow_run
-from github2ocel.transform.mappers.process_deployment import process_deployment
+from github2ocel.transform.mappers import (
+    process_milestone,
+    process_branch,
+    process_tag,
+    process_issue,
+    process_issue_comment,
+    process_pull_request,
+    process_pr_comment,
+    process_pr_commit_link,
+    process_review,
+    process_timeline_event,
+    process_commit_graphql,
+    process_deployment,
+    process_workflow_run,
+    process_release,
+    process_discussion_node)
 
 logger = get_logger(__name__)
 
@@ -82,7 +90,11 @@ class Orchestrator:
             ("Setup - Repo stats",                self._phase_stats),
             ("Initialization  — Seed objects",    self._initialization),
             ("Phase 1  — Core objects",           self._phase1_core),
-             ("Phase 2  — Per-node detail",        self._phase2_detail),
+            ("Phase 2  — Per-node detail",        self._phase2_detail),
+            ("Phase 3  — Dependent objects",      self._phase3_dependent),
+            ("Phase 4  — Code pipeline",          self._phase4_commits),
+            ("Phase 5  — DevOps pipeline",        self._phase5_devops),
+            ("Phase 6  — Knowledge base",         self._phase6_knowledge),
         ]
 
         for name, fn in phases:
@@ -214,3 +226,15 @@ class Orchestrator:
             f"  workflow_runs={self.stats['workflow_runs']} "
             f"workflow_jobs={self.stats['workflow_jobs']}"
         )
+
+            # Phase 6: knowledge base
+    def _phase6_knowledge(self):
+        for node in fetch_releases(self.client, page_size=self._ps.releases):
+            process_release(node, self.builder, self.repo_id)
+            self.stats["releases"] += 1
+        logger.info(f"  releases={self.stats['releases']}")
+
+        for node in fetch_discussions(self.client, page_size=self._ps.discussions):
+            process_discussion_node(node, self.builder, self.repo_id)
+            self.stats["discussions"] += 1
+        logger.info(f"  discussions={self.stats['discussions']}")
