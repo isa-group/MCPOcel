@@ -1,20 +1,20 @@
 import logging
-import uuid
 from typing import Dict, Any
 
 from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.utils.activity import Activities
-from github2ocel.transform.utils.helper import make_id, calculate_duration, safe_timestamp
+from github2ocel.transform.utils.helper import make_id, calculate_duration, safe_timestamp, create_event
 from github2ocel.transform.utils.ensure import ensure_commit, ensure_user
-from shared.ocel.model.models  import Event, ObjectInstance
+from shared.ocel.model.models  import ObjectInstance
 
 logger = logging.getLogger(__name__)
 
 
-# REST Section (Workflow Runs)
 def process_workflow_run(run: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     """
     Process a workflow run from REST API.
+    Creates WorkflowRun object, WorkflowJob objects with job_of_run O2O,
+    and WorkflowJobStarted/Completed events.
     """
     workflow_name = run.get("name", "Unknown_workflow")
     run_raw_id = run.get("id")
@@ -57,7 +57,7 @@ def process_workflow_run(run: Dict[str, Any], builder: OCELBuilder, repo_id: str
     if actor_id:
         run_obj.add_rel(target_id=actor_id, qualifier="triggered_by")
 
-    # 2. Dependencies (Commit & User)
+    # Dependencies (Commit & User)
     head_sha = run.get("head_sha")
     commit_id = None
     if head_sha:
@@ -68,60 +68,96 @@ def process_workflow_run(run: Dict[str, Any], builder: OCELBuilder, repo_id: str
 
     builder.insert_object(run_obj)
 
-    # Events
-    evt_start = Event(
-        event_id=str(uuid.uuid4()),
+    # Event: WorkflowRunStarted
+    create_event(
+        builder=builder,
         event_type=Activities.WORKFLOW_STARTED,
-        time=ts_start,
+        ts=ts_start,
         attributes={
             "trigger": run.get("event", "manual"),
             "attempt": int(run.get("run_attempt", 1))
-        }
+        },
+        relationships=[
+            (run_id, "run_started"),
+            (repo_id, "context"),
+            (actor_id, "actor") if actor_id else None
+        ]
     )
-    evt_start.add_rel(run_id, "run_started")
-    evt_start.add_rel(repo_id, "context")
-    if actor_id:
-        evt_start.add_rel(actor_id, "actor")
 
-    builder.insert_event(evt_start)
-
-    # B. Completed
+    # Event: WorkflowRunCompleted
     if run.get("status") == "completed":
-        evt_end = Event(
-            event_id=str(uuid.uuid4()),
+        create_event(
+            builder=builder,
             event_type=Activities.WORKFLOW_COMPLETED,
-            time=ts_update,
+            ts=ts_update,
             attributes={
                 "conclusion": run.get("conclusion", "unknown"),
                 "duration_seconds": duration_seconds
-            }
+            },
+            relationships=[
+                (run_id, "run_completed"),
+                (repo_id, "context")
+            ]
         )
-        evt_end.add_rel(run_id, "run_completed")
-        evt_end.add_rel(repo_id, "context")
-
-        builder.insert_event(evt_end)
 
     # Process individual jobs as OCEL events
-    jobs_data = run.get("jobs", [])
+    jobs_data = run.get("extracted_jobs", [])
     for job in jobs_data:
+        job_raw_id = job.get("id")
+        if not job_raw_id:
+            logger.warning(f"Skipping job without ID in workflow run {run_id}")
+            continue
+
+        try:
+            job_obj_id = make_id(repo_id, "job", job_raw_id)
+        except ValueError as e:
+            logger.error(f"Failed to create job ID: {e}")
+            continue
+
+
         start_raw = job.get("started_at")
         end_raw = job.get("completed_at")
-
+        ts_job_start = safe_timestamp(start_raw) or ts_start
         duration = calculate_duration(start_raw, end_raw)
 
-        job_evt = Event(
-            event_id=f"job_{job['id']}", # Unique Job ID
-            event_type="WorkflowJobCompleted",
-            time=safe_timestamp(end_raw) or ts_update,
+        # O2O: WorkflowJob -> WorkflowRun
+        job_obj = ObjectInstance(object_id=job_obj_id, object_type="WorkflowJob")
+        job_obj.add_snapshot(
+            time=safe_timestamp(start_raw) or ts_start,
             attributes={
                 "name": job.get("name"),
-                "conclusion": job.get("conclusion"),
-                "duration_seconds": duration,
-                "runner_name": job.get("runner_name")
+                "runner_name": job.get("runner_name"),
+                "conclusion": job.get("conclusion", "pending")
             }
         )
+        job_obj.add_rel(target_id=run_id, qualifier="job_of_run")
+        builder.insert_object(job_obj)
 
-        # Relate Job EVENT to WorkflowRun OBJECT
-        job_evt.add_rel(run_id, "belongs_to_run")
+        # Event: WorkflowJobStarted
+        if start_raw:
+            create_event(
+                builder=builder,
+                event_type=Activities.JOB_STARTED,
+                ts=ts_job_start,
+                attributes={"source": "rest_api"},
+                relationships=[
+                    (job_obj_id, "job_execution"),
+                    (run_id, "belongs_to_run")
+                ]
+            )
 
-        builder.insert_event(job_evt)
+        # Event: WorkflowJobCompleted
+        if end_raw:
+            create_event(
+                builder=builder,
+                event_type=Activities.JOB_COMPLETED,
+                ts=safe_timestamp(end_raw) or ts_update,
+                attributes={
+                    "conclusion": job.get("conclusion"),
+                    "duration_seconds": duration
+                },
+                relationships=[
+                    (job_obj_id, "job_completed"),
+                    (run_id, "belongs_to_run")
+                ]
+            )

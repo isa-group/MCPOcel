@@ -1,110 +1,89 @@
-import logging
 import uuid
+import logging
 from typing import Dict, Any
-
 from shared.ocel.builder import OCELBuilder
+from github2ocel.transform.utils.helper import safe_timestamp, create_event
+from github2ocel.transform.utils.ensure import ensure_user, ensure_commit, ensure_deployment
+from shared.ocel.model.models  import ObjectInstance
 from github2ocel.transform.utils.activity import Activities
-from github2ocel.transform.utils.helper import safe_timestamp
-from github2ocel.transform.utils.ensure import ensure_user, ensure_deployment, ensure_commit
-from shared.ocel.model.models  import Event, ObjectInstance
 
 logger = logging.getLogger(__name__)
 
-
 def process_deployment(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     """
-    Process a deployment from REST API with OCEL 2.0 compliance.
+    Map a GraphQL deployment to OCEL 2.0.
     """
-    if not node.get("id"):
-        return
-
-    # 1. Ensure Object (Deployment)
-    # Note: ensure_deployment calculates its own timestamp internally from the dict
     dep_id = ensure_deployment(builder, repo_id, node)
     if not dep_id:
+        logger.warning(f"Failed to ensure deployment object for node {node.get('id')}")
         return
 
-    # Extract timestamp for events/relationships
-    ts_created = safe_timestamp(node.get("created_at"))
+    ts_created = safe_timestamp(node.get("createdAt"))
+    env_name = node.get("environment", "unknown")
 
-    # 2. Dependencies (Commit & User)
-    sha = node.get("sha")
-    commit_id = None
+    # Commit and User
+    commit_oid = (node.get("commit") or {}).get("oid")
 
-    deployment = ObjectInstance(object_id=dep_id, object_type="Deployment")
-
-    if sha:
-        commit_id = ensure_commit(builder, repo_id, sha, timestamp=ts_created)
-        if commit_id:
-            # O2O Relationship
-            deployment.add_rel(target_id=commit_id, qualifier="deploys_commit")
+    commit_ref_id = None
+    if commit_oid:
+        commit_ref_id = ensure_commit(builder, repo_id, commit_oid, timestamp=ts_created)
+        if commit_ref_id:
+            dep_obj = ObjectInstance(object_id=dep_id, object_type="Deployment")
+            dep_obj.add_rel(commit_ref_id, "deploys_commit")
+            builder.insert_object(dep_obj)
 
     creator_login = node.get("creator", {}).get("login")
-    creator_id = ensure_user(builder, repo_id, creator_login, timestamp=ts_created)
+    user_id = None
+    if creator_login:
+        user_id = ensure_user(builder, repo_id, creator_login, timestamp=ts_created)
 
-    builder.insert_object(deployment)
+    create_event(
+        builder=builder,
+        event_type=Activities.DEPLOYMENT_CREATED,
+        ts=ts_created,
+        attributes={
+            "environment": env_name,
+            "source": "graphql"
+        },
+        relationships=[
+            (user_id, "deployment_creator") if user_id else None,
+            (repo_id, "context"),
+            (dep_id, "subject")
+        ]
+    )
 
-    # 4. Event: Deployment Created
-    try:
-        evt_create = Event(
-            event_id=str(uuid.uuid4()),
-            event_type=Activities.DEPLOYMENT_CREATED,
-            time=ts_created,
-            attributes={
-                "environment": node.get("environment", "unknown"),
-                "ref": node.get("ref", ""),
-                "source": "rest_api"
-            }
-        )
-        evt_create.add_rel(dep_id, "deployment_target")
-        evt_create.add_rel(repo_id, "repository_context")
-        if commit_id:
-            evt_create.add_rel(commit_id, "commit_deployed")
-        if creator_id:
-            evt_create.add_rel(creator_id, "deployment_creator")
+    # Event (Success/Failure)
+    statuses_data = node.get("statuses") or {}
+    statuses = statuses_data.get("nodes") or []
 
-        builder.insert_event(evt_create)
-    except Exception as e:
-        logger.error(f"Failed to create deployment created event: {e}")
+    for status in statuses:
+        if not status:
+            continue
 
-    # 5. Process Deployment Statuses
-    # We only take the latest status usually, or iterate if historical data is available
-    statuses = node.get("statuses", [])
+        state = status.get("state", "").upper()
+        status_ts = safe_timestamp(status.get("createdAt"))
 
-    if statuses:
-        latest_status = statuses[0]
-        state = latest_status.get("state", "pending")
+        if not status_ts:
+            continue
 
-        ts_updated = safe_timestamp(
-            latest_status.get("updated_at"),
-            fallback=latest_status.get("created_at")
-        )
+        event_type = None
+        if state == "SUCCESS":
+            event_type = Activities.DEPLOYMENT_SUCCEEDED
+        elif state in ["FAILURE", "ERROR"]:
+            event_type = Activities.DEPLOYMENT_FAILED
 
-        activity_map = {
-            "success": Activities.DEPLOYMENT_SUCCEEDED,
-            "failure": Activities.DEPLOYMENT_FAILED,
-            "error": Activities.DEPLOYMENT_ERROR
-        }
-
-        activity = activity_map.get(state)
-
-        if activity:
-            try:
-                evt_status = Event(
-                    event_id=str(uuid.uuid4()),
-                    event_type=activity,
-                    time=ts_updated,
-                    attributes={
-                        "state": state,
-                        "environment": node.get("environment", "unknown"),
-                        "description": latest_status.get("description", "")[:255]
-                    }
-                )
-                evt_status.add_rel(dep_id, "deployment_target")
-                evt_status.add_rel(repo_id, "repository_context")
-                if commit_id:
-                    evt_status.add_rel(commit_id, "commit_deployed")
-
-                builder.insert_event(evt_status)
-            except Exception as e:
-                logger.error(f"Failed to create deployment status event: {e}")
+        if event_type:
+            create_event(
+                builder=builder,
+                event_type=event_type,
+                ts=status_ts,
+                attributes={
+                    "description": status.get("description", ""),
+                    "state": state,
+                    "source": "graphql"
+                },
+                relationships=[
+                    (dep_id, "subject"),
+                    (repo_id, "context")
+                ]
+            )

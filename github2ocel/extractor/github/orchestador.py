@@ -24,7 +24,9 @@ from github2ocel.extractor.fetchers import (
     fetch_pr_reviews,
     fetch_issue_timeline,
     fetch_pr_timeline,
-    fetch_commits
+    fetch_commits,
+    fetch_deployments,
+    fetch_workflow_runs,
 )
 
 # Mappers
@@ -36,7 +38,8 @@ from github2ocel.transform.mappers.process_pull_request import process_pull_requ
 from github2ocel.transform.mappers.process_review import process_review
 from github2ocel.transform.mappers.process_timeline import process_timeline_event
 from github2ocel.transform.mappers.process_commit import process_commit_graphql
-
+from github2ocel.transform.mappers.process_workflow_run import process_workflow_run
+from github2ocel.transform.mappers.process_deployment import process_deployment
 
 logger = get_logger(__name__)
 
@@ -195,3 +198,19 @@ class Orchestrator:
             process_commit_graphql(node, self.builder, self.repo_id)
             self.stats["commits"] += 1
         logger.info(f"  commits={self.stats['commits']}")
+
+    # Phase 5: DevOps
+    def _phase5_devops(self):
+        for node in fetch_deployments(self.client):
+            process_deployment(node, self.builder, self.repo_id)
+            self.stats["deployments"] += 1
+        logger.info(f"  deployments={self.stats['deployments']}")
+
+        for node in fetch_workflow_runs(self.client):
+            process_workflow_run(node, self.builder, self.repo_id)
+            self.stats["workflow_runs"] += 1
+            self.stats["workflow_jobs"] += len(node.get("extracted_jobs", []))
+        logger.info(
+            f"  workflow_runs={self.stats['workflow_runs']} "
+            f"workflow_jobs={self.stats['workflow_jobs']}"
+        )

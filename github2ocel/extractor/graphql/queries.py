@@ -898,3 +898,167 @@ query GetCommits(
   rateLimit { cost remaining resetAt }
 }
 """
+
+
+DEPLOYMENTS_QUERY = """
+query GetDeployments(
+  $owner: String!
+  $repo:  String!
+  $pageSize: Int!
+  $cursor: String
+) {
+  repository(owner: $owner, name: $repo) {
+    deployments(
+      first: $pageSize
+      after: $cursor
+      orderBy: { field: CREATED_AT, direction: DESC }
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        databaseId
+        environment
+        state
+        description
+        task
+        createdAt
+        updatedAt
+
+        # Commit deployed (-> O2O Commit)
+        commit { oid committedDate }
+
+        # Branch/ref (-> O2O Branch)
+        ref { name }
+
+        creator {
+          login
+          __typename
+          ... on User { id }
+          ... on Bot  { id }
+        }
+
+        # Full status history (events: DeploymentCreated, Succeeded, Failed)
+        statuses(first: 10) {
+          nodes {
+            state        # PENDING | SUCCESS | FAILURE | ERROR | INACTIVE | IN_PROGRESS | QUEUED | WAITING
+            description
+            logUrl
+            environmentUrl
+            createdAt
+            creator {
+              login
+              ... on User { id }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+WORKFLOW_RUN_FIELDS = [
+    "id",               # run_id
+    "name",             # workflow name
+    "display_title",
+    "event",            # push | pull_request | schedule | workflow_dispatch …
+    "status",           # queued | in_progress | completed
+    "conclusion",       # success | failure | cancelled | skipped | timed_out | action_required
+    "workflow_id",
+    "run_number",
+    "run_attempt",
+    "head_branch",
+    "head_sha",
+    "head_commit",      # message, author, timestamp
+    "created_at",
+    "updated_at",
+    "run_started_at",
+    "triggering_actor", # login
+    "actor",            # login (who triggered)
+    "repository",       # nameWithOwner
+    "html_url",
+]
+
+# Fields extracted per WorkflowJob:
+WORKFLOW_JOB_FIELDS = [
+    "id",
+    "run_id",
+    "name",
+    "status",
+    "conclusion",
+    "started_at",
+    "completed_at",
+    "runner_name",
+    "runner_group_name",
+    "steps",            # list: name, status, conclusion, number, started_at, completed_at
+    "html_url",
+]
+
+"""Releases GraphQL query."""
+
+RELEASES_QUERY = """
+query GetReleases(
+  $owner: String!
+  $repo:  String!
+  $pageSize: Int!
+  $cursor: String
+) {
+  repository(owner: $owner, name: $repo) {
+    releases(
+      first: $pageSize
+      after: $cursor
+      orderBy: { field: CREATED_AT, direction: ASC }
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        name
+        tagName
+        description
+        createdAt
+        publishedAt
+        isPrerelease
+        isDraft
+
+        author { login }
+
+        # Commit the tag points to (-> O2O Commit)
+        tag {
+          target {
+            __typename
+            ... on Commit {
+              oid
+              committedDate
+              author { user { login } }
+            }
+            ... on Tag {
+              oid
+              tagger { date user { login } }
+              target {
+                ... on Commit { oid }
+              }
+            }
+          }
+        }
+
+        releaseAssets(first: 10) {
+          totalCount
+          nodes {
+            name
+            downloadCount
+            size
+            contentType
+          }
+        }
+      }
+    }
+  }
+
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+"""Tags GraphQL query — handles both lightweight and annotated tags."""
+
