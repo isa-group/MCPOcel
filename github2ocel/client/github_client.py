@@ -65,18 +65,6 @@ class GitHubClient:
 
         response.raise_for_status()
 
-    def _log_graphql_points(self) -> None:
-        """Logs remaining GraphQL points every 10 requests."""
-        if self.rate_limiter.total_requests % 10 != 0:
-            return
-        gql      = self.rate_limiter.resources["graphql"]
-        remaining = gql.get("remaining", "?")
-        reset_ts  = gql.get("reset")
-        reset_str = time.strftime("%H:%M:%S", time.localtime(reset_ts)) if reset_ts else "?"
-        logger.info(
-            f"[graphql] remaining={remaining} pts | resets at {reset_str}"
-        )
-
 
     #  Public API
     def rest(
@@ -137,7 +125,6 @@ class GitHubClient:
                 self._handle_request_error(e)
 
             self.rate_limiter.update_from_response(r, "graphql")
-            self._log_graphql_points()
             self._check_status_code(r)
 
             data = r.json()
@@ -157,6 +144,23 @@ class GitHubClient:
             return payload
 
         return self.retry.run(_request)
+
+    # Convenience properties — delegate to ctx / ctx.api
+    @property
+    def time_window_iso(self):
+        return self.ctx.time_window_iso
+
+    @property
+    def rest_per_page(self) -> int:
+        return self.ctx.api.rest_per_page
+
+    @property
+    def graphql_per_page(self) -> int:
+        return self.ctx.api.graphql_per_page
+
+    @property
+    def max_pages(self):
+        return self.ctx.api.max_pages
 
     # Lifecycle
     def print_rate_limit_stats(self) -> None:

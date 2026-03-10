@@ -68,11 +68,11 @@ class Orchestrator:
         self.stats    = stats
 
         # Collected
-        self.repo_metrics: RepoStats = RepoStats() # Los contadores del repo
+        self.repo_metrics: RepoStats = RepoStats()
         self._pr_numbers:    List[int] = []
         self._issue_numbers: List[int] = []
 
-        # PRs/Issues that exceeded embedded limits → need overflow pagination
+        # PRs/Issues that exceeded embedded limits -> need overflow pagination
         self._overflow_pr_reviews:   List[int] = []
         self._overflow_pr_comments:  List[int] = []
         self._overflow_pr_commits:   List[int] = []
@@ -222,19 +222,19 @@ class Orchestrator:
 
     # Phase 4: commits
     def _phase4_commits(self):
-        for node in fetch_commits(self.client):
+        for node in fetch_commits(self.client, page_size=self._ps.commits):
             process_commit_graphql(node, self.builder, self.repo_id)
             self.stats["commits"] += 1
         logger.info(f"  commits={self.stats['commits']}")
 
     # Phase 5: DevOps
     def _phase5_devops(self):
-        for node in fetch_deployments(self.client):
+        for node in fetch_deployments(self.client, page_size=self._ps.deployments):
             process_deployment(node, self.builder, self.repo_id)
             self.stats["deployments"] += 1
         logger.info(f"  deployments={self.stats['deployments']}")
 
-        for node in fetch_workflow_runs(self.client):
+        for node in fetch_workflow_runs(self.client, page_size=self._ps.workflow_runs):
             process_workflow_run(node, self.builder, self.repo_id)
             self.stats["workflow_runs"] += 1
             self.stats["workflow_jobs"] += len(node.get("extracted_jobs", []))

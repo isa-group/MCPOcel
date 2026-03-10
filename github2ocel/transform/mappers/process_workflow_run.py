@@ -116,14 +116,19 @@ def process_workflow_run(run: Dict[str, Any], builder: OCELBuilder, repo_id: str
 
 
         start_raw = job.get("started_at")
-        end_raw = job.get("completed_at")
-        ts_job_start = safe_timestamp(start_raw) or ts_start
+        end_raw   = job.get("completed_at")
+
+        # Some jobs (queued-then-cancelled) have completed_at but no started_at.
+        # Use completed_at as a fallback so Started/Completed events stay paired.
+        effective_start_raw = start_raw or end_raw
+
+        ts_job_start = safe_timestamp(effective_start_raw) or ts_start
         duration = calculate_duration(start_raw, end_raw)
 
         # O2O: WorkflowJob -> WorkflowRun
         job_obj = ObjectInstance(object_id=job_obj_id, object_type="WorkflowJob")
         job_obj.add_snapshot(
-            time=safe_timestamp(start_raw) or ts_start,
+            time=safe_timestamp(effective_start_raw) or ts_start,
             attributes={
                 "name": job.get("name"),
                 "runner_name": job.get("runner_name"),
@@ -134,7 +139,7 @@ def process_workflow_run(run: Dict[str, Any], builder: OCELBuilder, repo_id: str
         builder.insert_object(job_obj)
 
         # Event: WorkflowJobStarted
-        if start_raw:
+        if effective_start_raw:
             create_event(
                 builder=builder,
                 event_type=Activities.JOB_STARTED,

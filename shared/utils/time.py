@@ -70,8 +70,10 @@ def make_id(*parts) -> str:
     return "_".join(cleaned)
 
 def to_iso8601(dt):
+    if dt is None:
+        return None
     if isinstance(dt, str):
-        return dt
+        return dt if dt else None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

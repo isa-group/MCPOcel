@@ -165,6 +165,8 @@ class OCELBuilder:
     def insert_object(self, obj: ObjectInstance):
         # 1. Base Table
         self.cursor.execute("INSERT OR IGNORE INTO object VALUES (?, ?)", (obj.id, obj.type))
+        if self.cursor.rowcount > 0:
+            self.stats["objects"] += 1
 
         # 2. Snapshots (Change History)
         for snap in obj.snapshots:
@@ -187,8 +189,6 @@ class OCELBuilder:
              data = [(obj.id, target_id, qual) for target_id, qual in obj.related_objects]
              self.cursor.executemany("INSERT OR IGNORE INTO object_object VALUES (?, ?, ?)", data)
              self.stats["relationships"] += len(data)
-
-        self.stats["objects"] += 1
 
     def object_exists(self, object_id: str) -> bool:
         self.cursor.execute("SELECT 1 FROM object WHERE ocel_id = ?", (object_id,))

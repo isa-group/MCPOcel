@@ -50,16 +50,17 @@ def _paginate_connection(
         if new_cursor == cursor:
             logger.warning("Cursor stuck — stopping pagination")
             break
-        if page % 5 == 0:
+        if page % 10 == 0:
             gql       = client.rate_limiter.resources["graphql"]
             remaining = gql.get("remaining", "?")
             cost      = client.rate_limiter._last_graphql_cost
             reset_ts  = gql.get("reset")
             reset_str = time.strftime("%H:%M:%S", time.localtime(reset_ts)) if reset_ts else "?"
             total_str = f"/{total}" if total else ""
-            logger.info(
+            log_fn = logger.info if total else logger.debug
+            log_fn(
                 f"[paginator] page={page} | {label}={extracted}{total_str} | "
-                f"cost={cost} remaining={remaining} pts"
+                f"cost={cost} pts_left={remaining} resets={reset_str}"
             )
 
         cursor = new_cursor
@@ -124,10 +125,9 @@ def paginate_nested(
     var_name = number_var or f"{parent_type}Number"
 
     vars_ = {
-        "owner": client.owner,
-        "repo": client.repo,
         var_name: int(parent_number),
         "pageSize": page_size,
+        "cursor": None
     }
 
     def extract(response):

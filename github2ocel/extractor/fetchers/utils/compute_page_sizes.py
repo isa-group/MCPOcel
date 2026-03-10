@@ -71,6 +71,11 @@ def compute_page_sizes(stats: RepoStats, remaining_points: Optional[int] = None)
        ps.pr_reviews    = min(ps.pr_reviews, 10)
        ps.discussions   = min(ps.discussions, 20)
 
+   # REST fetchers — always safe at 100 (REST doesn't have GraphQL cost)
+   # but reduce if points are critically low to give the system breathing room
+   ps.workflow_runs = 100
+   ps.deployments   = 100
+
    logger.info(
        f"[Adaptive] Page sizes → "
        f"prs={ps.pull_requests} issues={ps.issues} "
