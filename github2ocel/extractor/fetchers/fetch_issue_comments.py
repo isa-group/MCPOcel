@@ -1,7 +1,3 @@
-"""
-Issue Comments fetcher — fully paginated per Issue number.
-"""
-
 from typing import Generator, Dict, Any, List
 from github2ocel.client.github_client import GitHubClient
 from github2ocel.client.paginator import paginate_nested
@@ -22,7 +18,10 @@ def fetch_issue_comments(
     total = 0
     skipped = 0
 
-    for issue_number in (int(float(n)) for n in issue_numbers):
+    for i, issue_number in enumerate(int(float(n)) for n in issue_numbers):
+        if i > 0 and i % 50 == 0:
+            gql = client.rate_limiter.resources["graphql"]
+            logger.info(f"  [issue_comments] {i}/{len(issue_numbers)} issues | {total} comments | pts_left={gql.get('remaining','?')}")
         try:
             for comment in paginate_nested(
                 client=client,

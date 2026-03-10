@@ -1,7 +1,3 @@
-"""
-Fetch PR Reviews — separate query per PR number.
-"""
-
 from typing import Generator, Dict, Any, List
 from github2ocel.client.github_client import GitHubClient
 from github2ocel.client.paginator import paginate_nested
@@ -16,10 +12,15 @@ def fetch_pr_reviews(
     pr_numbers: List[int],
     page_size: int = 30,
 ) -> Generator[Dict[str, Any], None, None]:
-    logger.info(f"=== [Fetcher] PR Reviews for {len(pr_numbers)} PRs ===")
+
+    logger.info(f"--- [Fetcher] PR Reviews for {len(pr_numbers)} PRs ---")
     total_reviews = 0
 
-    for pr_number in (int(float(n)) for n in pr_numbers):
+    for i, pr_number in enumerate(int(float(n)) for n in pr_numbers):
+        if i > 0 and i % 100 == 0:
+            gql = client.rate_limiter.resources["graphql"]
+            logger.info(f"  [reviews] {i}/{len(pr_numbers)} PRs | {total_reviews} reviews | pts_left={gql.get('remaining','?')}")
+
         try:
             for review in paginate_nested(
                 client=client,
@@ -39,4 +40,4 @@ def fetch_pr_reviews(
             logger.warning(f"[fetch_pr_reviews] Failed for PR#{pr_number}: {e}")
             continue
 
-    logger.info(f"=== [Fetcher] PR Reviews done — {total_reviews} reviews ===")
+    logger.info(f"--- [Fetcher] PR Reviews done — {total_reviews} reviews ---")

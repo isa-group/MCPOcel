@@ -55,17 +55,29 @@ def verify_data_integrity(extractor_stats: dict, builder_stats: dict) -> dict:
     # 3. Development-Level Breakdown
     if any(k in extractor_stats for k in ("commits", "issues")):
         print("\n[DEVELOPMENT LINKS]")
-        commits_ext = extractor_stats.get("commits", 0)
-        issues_ext = extractor_stats.get("issues", 0)
+        commits_ext  = extractor_stats.get("commits", 0)
+        issues_ext   = extractor_stats.get("issues", 0)
+        prs_ext      = extractor_stats.get("prs", 0)
+        issues_prs   = issues_ext + prs_ext
 
         print(f"    - Commits Extracted:      {commits_ext}")
-        print(f"    - Issues/PRs Extracted:   {issues_ext}")
+        print(f"    - Issues Extracted:       {issues_ext}")
+        print(f"    - PRs Extracted:          {prs_ext}")
 
-        if issues_ext > 0:
-            rel_density = total_relationships / issues_ext
-            print(f"    - Avg Relationships per Issue/PR: {rel_density:.2f}")
-        else:
-            rel_density = 0
+        if issues_prs > 0:
+            # Relationships directly linked to issues/PRs (event_object + object_object)
+            # We use pr_commit_links as a proxy for O2O, rest are event-object
+            pr_commit_links = extractor_stats.get("pr_commit_links", 0)
+            issue_pr_rels = (
+                extractor_stats.get("issue_comments", 0) +
+                extractor_stats.get("pr_comments", 0) +
+                extractor_stats.get("reviews", 0) +
+                extractor_stats.get("timeline_events", 0) +
+                pr_commit_links
+            )
+            rel_density = issue_pr_rels / issues_prs
+            print(f"    - Relationships (issue/PR-scoped): {issue_pr_rels}")
+            print(f"    - Avg Relationships per Issue/PR:  {rel_density:.2f}")
 
     # 4. DevOps / CI-CD Breakdown
     if "runs" in extractor_stats:

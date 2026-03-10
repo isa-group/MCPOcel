@@ -5,9 +5,7 @@ from typing import Dict, Tuple
 from github2ocel.config.context import RepoContext
 from github2ocel.client.github_client import GitHubClient
 from shared.ocel.builder import OCELBuilder
-from github2ocel.extractor.github.orchestador import Orchestrator
-
-logger = get_logger(__name__)
+from github2ocel.extractor.github.orchestrator import Orchestrator
 
 logger = get_logger(__name__)
 

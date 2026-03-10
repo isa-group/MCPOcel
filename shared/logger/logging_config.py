@@ -59,7 +59,7 @@ def setup_logging(config: Optional[LoggingConfig] = None) -> None:
 
     # Simplified format for the terminal
     console_formatter = logging.Formatter(
-        '%(levelname)s - %(message)s'
+        '%(levelname)s - %(name)s - %(message)s'
     )
     try:
         # File handler (detailed)

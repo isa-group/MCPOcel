@@ -28,7 +28,10 @@ def fetch_pr_commits(
     total = 0
     skipped = 0
 
-    for pr_number in (int(float(n)) for n in pr_numbers):
+    for i, pr_number in enumerate(int(float(n)) for n in pr_numbers):
+        if i > 0 and i % 100 == 0:
+            gql = client.rate_limiter.resources["graphql"]
+            logger.info(f"  [pr_commits] {i}/{len(pr_numbers)} PRs | {total} links | pts_left={gql.get('remaining','?')}")
         try:
             pr_total = 0
             for commit_node in paginate_nested(

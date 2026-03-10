@@ -1,7 +1,3 @@
-"""
-Timeline fetchers — separate query per PR/Issue number.
-"""
-
 from typing import Generator, Dict, Any, List
 from github2ocel.client.github_client import GitHubClient
 from github2ocel.client.paginator import paginate_nested
@@ -16,10 +12,13 @@ def fetch_pr_timeline(
     pr_numbers: List[int],
     page_size: int = 100,
 ) -> Generator[Dict[str, Any], None, None]:
-    logger.info(f"=== [Fetcher] PR Timelines for {len(pr_numbers)} PRs ===")
+    logger.info(f"--- [Fetcher] PR Timelines for {len(pr_numbers)} PRs ---")
     total = 0
 
-    for pr_number in (int(float(n)) for n in pr_numbers):
+    for i, pr_number in enumerate(int(float(n)) for n in pr_numbers):
+        if i > 0 and i % 100 == 0:
+            gql = client.rate_limiter.resources["graphql"]
+            logger.info(f"  [pr_timeline] {i}/{len(pr_numbers)} PRs | {total} events | pts_left={gql.get('remaining','?')}")
         try:
             for item in paginate_nested(
                 client=client,
@@ -41,7 +40,7 @@ def fetch_pr_timeline(
             logger.warning(f"[fetch_pr_timeline] Failed for PR#{pr_number}: {e}")
             continue
 
-    logger.info(f"=== [Fetcher] PR Timelines done — {total} events ===")
+    logger.info(f"--- [Fetcher] PR Timelines done — {total} events ---")
 
 
 def fetch_issue_timeline(
@@ -49,10 +48,13 @@ def fetch_issue_timeline(
     issue_numbers: List[int],
     page_size: int = 100,
 ) -> Generator[Dict[str, Any], None, None]:
-    logger.info(f"=== [Fetcher] Issue Timelines for {len(issue_numbers)} Issues ===")
+    logger.info(f"--- [Fetcher] Issue Timelines for {len(issue_numbers)} Issues ---")
     total = 0
 
-    for issue_number in (int(float(n)) for n in issue_numbers):
+    for i, issue_number in enumerate(int(float(n)) for n in issue_numbers):
+        if i > 0 and i % 50 == 0:
+            gql = client.rate_limiter.resources["graphql"]
+            logger.info(f"  [issue_timeline] {i}/{len(issue_numbers)} issues | {total} events | pts_left={gql.get('remaining','?')}")
         try:
             for item in paginate_nested(
                 client=client,
@@ -74,4 +76,4 @@ def fetch_issue_timeline(
             logger.warning(f"[fetch_issue_timeline] Failed for Issue#{issue_number}: {e}")
             continue
 
-    logger.info(f"=== [Fetcher] Issue Timelines done — {total} events ===")
+    logger.info(f"--- [Fetcher] Issue Timelines done — {total} events ---")

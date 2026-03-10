@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Tuple, Optional
 from shared.config.env import Env
+from shared.utils.time import to_iso8601
 from github2ocel.config.settings import APIConfig
 from github2ocel.config.profiles import ExtractionProfile, get_profile_from_env, get_profile_vars
 from typing import Dict
@@ -52,4 +53,4 @@ class RepoContext:
         if date_since > date_until:
             raise ValueError("Configuration Error: 'since' cannot be after 'until'")
 
-        return date_since.isoformat(), until_iso
+        return to_iso8601(date_since), until_iso
