@@ -29,6 +29,14 @@ class OcelInfo:
     total_events: int
     start_date: str
     end_date: str
+    events_attributes: Dict[str, List[str]] = None
+    object_attributes: Dict[str, List[str]] = None
+
+    def __post_init__(self):
+        if self.events_attributes is None:
+            self.events_attributes = {}
+        if self.object_attributes is None:
+            self.object_attributes = {}
 
 
 class MCPClientError(Exception):
@@ -286,7 +294,9 @@ class MCPClient:
             total_objects=data.get("total_objects", 0),
             total_events=data.get("total_events", 0),
             start_date=data.get("start_date", "N/A"),
-            end_date=data.get("end_date", "N/A")
+            end_date=data.get("end_date", "N/A"),
+            events_attributes=data.get("events_attributes", {}),
+            object_attributes=data.get("object_attributes", {}),
         )
 
     async def get_schema_section(self, section: str) -> Dict[str, Any]:

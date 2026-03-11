@@ -1210,6 +1210,15 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             start_date = timestamps.min().isoformat() if len(timestamps) > 0 else "N/A"
             end_date = timestamps.max().isoformat() if len(timestamps) > 0 else "N/A"
 
+            events_attributes = {
+                et: ocel_config.attribute_names.get(et, [])
+                for et in ocel_config.event_types
+            }
+            object_attributes = {
+                ot: ocel_config.attribute_names.get(ot, [])
+                for ot in ocel_config.object_types
+            }
+
             info = {
                 "file_path": ocel_path,
                 "event_types": list(ocel_config.event_types),
@@ -1219,6 +1228,8 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                 "total_relations": len(ocel_data.relations),
                 "start_date": start_date,
                 "end_date": end_date,
+                "events_attributes": events_attributes,
+                "object_attributes": object_attributes,
                 "generated_at": datetime.now().isoformat()
             }
             return json.dumps(info, indent=2)
