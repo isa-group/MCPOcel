@@ -146,7 +146,7 @@ class OpenAIProvider(BaseProvider):
         input_items = self._build_input(messages)
         openai_tools = self._convert_mcp_tools(tools)
 
-        kwargs: Dict[str, Any] = {"model": model, "input": input_items}
+        kwargs: Dict[str, Any] = {"model": model, "input": input_items, "reasoning": {"effort": "high"}}
         if openai_tools:
             kwargs["tools"] = openai_tools
 
