@@ -3,59 +3,86 @@ from shared.ocel.builder import OCELBuilder
 def print_pipeline_audit(builder: OCELBuilder):
     cursor = builder.cursor
 
-    # General Counts
-    cursor.execute("SELECT ocel_type, COUNT(*) FROM event GROUP BY ocel_type")
+    cursor.execute("SELECT ocel_type, COUNT(*) FROM event GROUP BY ocel_type ORDER BY COUNT(*) DESC")
     e_types = cursor.fetchall()
-    cursor.execute("SELECT ocel_type, COUNT(*) FROM object GROUP BY ocel_type")
+    cursor.execute("SELECT ocel_type, COUNT(*) FROM object GROUP BY ocel_type ORDER BY COUNT(*) DESC")
     o_types = cursor.fetchall()
 
     print("\n" + "="*60)
     print(f"{'GITHUB EXTRACTION REPORT':^60}")
     print("="*60)
 
-    # Summary Events
     print(f"\n[EVENTS] Total: {sum(row[1] for row in e_types)}")
     for name, count in e_types:
-        print(f"  - {name:<30} | {count:>7}")
+        print(f"  - {name:<35} | {count:>7}")
 
-    # Summary Objects
     print(f"\n[OBJECTS] Total: {sum(row[1] for row in o_types)}")
     for name, count in o_types:
-        print(f"  - {name:<30} | {count:>7}")
+        print(f"  - {name:<35} | {count:>7}")
 
-    # Action Check (Workflow -> Jobs)
-    print("\n[VÍNCULOS DE CI/CD: Workflow -> Jobs]")
+    # CI/CD: Workflow -> Jobs
+    print("\n[CI/CD: WorkflowRun → WorkflowJob]")
     cursor.execute("""
-        SELECT COUNT(DISTINCT e.ocel_id)
-        FROM event e
-        JOIN event_object eo ON e.ocel_id = eo.ocel_event_id
-        JOIN object o ON eo.ocel_object_id = o.ocel_id
-        WHERE e.ocel_type LIKE '%job%' AND o.ocel_type = 'WorkflowRun'
+        SELECT COUNT(DISTINCT ocel_source_id)
+        FROM object_object
+        WHERE ocel_qualifier = 'job_of_run'
     """)
     linked_jobs = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM event WHERE ocel_type LIKE '%job%'")
+    cursor.execute("SELECT COUNT(*) FROM object WHERE ocel_type = 'WorkflowJob'")
     total_jobs = cursor.fetchone()[0]
-
     if total_jobs > 0:
-        ratio = (linked_jobs / total_jobs) * 100
-        print(f"Jobs ratio: {linked_jobs}/{total_jobs} ({ratio:.1f}%)")
+        print(f"  Jobs linked to a run : {linked_jobs}/{total_jobs} ({linked_jobs/total_jobs*100:.1f}%)")
 
-    # Development Check (Commits -> Pull Requests)
-    print("\n[DEVELOPMENT LINKS: Commits -> PRs]")
+    # Commits
+    print("\n[COMMITS]")
+    cursor.execute("SELECT COUNT(*) FROM object WHERE ocel_type = 'Commit'")
+    total_commit_objs = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM event WHERE ocel_type = 'CommitCreated'")
+    total_commit_events = cursor.fetchone()[0]
+    # Commits from direct push (have CommitCreated event) vs embedded in PRs only
+    print(f"  Commit objects       : {total_commit_objs}")
+    print(f"  CommitCreated events : {total_commit_events}")
+    if total_commit_objs > total_commit_events:
+        print(f"  PR-only commits      : {total_commit_objs - total_commit_events}  (inserted via PR O2O, no push event)")
+
+    # Commits -> PRs
+    # Relation is PR→Commit (source=PR, target=Commit, qualifier='contains_commit')
     cursor.execute("""
-        SELECT COUNT(DISTINCT e.ocel_id)
-        FROM event e
-        JOIN event_object eo ON e.ocel_id = eo.ocel_event_id
-        JOIN object o ON eo.ocel_object_id = o.ocel_id
-        WHERE e.ocel_type = 'Commit' AND o.ocel_type = 'PullRequest'
+        SELECT COUNT(DISTINCT oo.ocel_target_id)
+        FROM object_object oo
+        JOIN object o ON oo.ocel_target_id = o.ocel_id
+        WHERE o.ocel_type = 'Commit'
+          AND oo.ocel_qualifier = 'contains_commit'
     """)
-    linked_commits = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM event WHERE ocel_type = 'Commit'")
-    total_commits = cursor.fetchone()[0]
+    commits_in_prs = cursor.fetchone()[0]
+    if total_commit_objs > 0:
+        print(f"  Commits linked to PR : {commits_in_prs}/{total_commit_objs} ({commits_in_prs/total_commit_objs*100:.1f}%)")
+        print(f"  Direct push commits  : {total_commit_objs - commits_in_prs}")
 
-    if total_commits > 0:
-        c_ratio = (linked_commits / total_commits) * 100
-        print(f"Commits associated with PRs: {linked_commits}/{total_commits} ({c_ratio:.1f}%)")
-        print(f"Direct commits (push to main): {total_commits - linked_commits}")
+    # Files (only present in COMPLETE profile with small time window)
+    cursor.execute("SELECT COUNT(*) FROM object WHERE ocel_type = 'File'")
+    total_files = cursor.fetchone()[0]
+    if total_files > 0:
+        print("\n[FILES]")
+        print(f"  File objects         : {total_files}")
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM object_object oo
+            JOIN object o ON oo.ocel_source_id = o.ocel_id
+            WHERE o.ocel_type = 'Commit'
+              AND oo.ocel_qualifier LIKE 'modifies_file_%'
+        """)
+        file_links = cursor.fetchone()[0]
+        print(f"  Commit→File links    : {file_links}")
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM object_object oo
+            JOIN object o ON oo.ocel_source_id = o.ocel_id
+            WHERE o.ocel_type = 'Commit'
+              AND oo.ocel_qualifier = 'modifies_file_renamed'
+        """)
+        renames = cursor.fetchone()[0]
+        if renames > 0:
+            print(f"  Renames tracked      : {renames}")
 
     print("\n" + "="*60 + "\n")

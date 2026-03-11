@@ -29,7 +29,8 @@ from github2ocel.extractor.fetchers import (
     fetch_deployments,
     fetch_workflow_runs,
     fetch_releases,
-    fetch_discussions
+    fetch_discussions,
+    fetch_commit_files
 )
 
 # Mappers
@@ -48,7 +49,9 @@ from github2ocel.transform.mappers import (
     process_deployment,
     process_workflow_run,
     process_release,
-    process_discussion_node)
+    process_discussion_node,
+    process_commit_files
+)
 
 logger = get_logger(__name__)
 
@@ -68,11 +71,14 @@ class Orchestrator:
         self.stats    = stats
 
         # Collected
-        self.repo_metrics: RepoStats = RepoStats()
+        self.repo_metrics: RepoStats = RepoStats() # Los contadores del repo
         self._pr_numbers:    List[int] = []
         self._issue_numbers: List[int] = []
 
-        # PRs/Issues that exceeded embedded limits -> need overflow pagination
+        # Collected commit SHAs for file enrichment (Phase 4b)
+        self._commit_shas: List[str] = []
+
+        # PRs/Issues that exceeded embedded limits → need overflow pagination
         self._overflow_pr_reviews:   List[int] = []
         self._overflow_pr_comments:  List[int] = []
         self._overflow_pr_commits:   List[int] = []
@@ -99,6 +105,7 @@ class Orchestrator:
             ("Phase 2  — Per-node detail",        self._phase2_detail,    True),
             ("Phase 3  — Reviews & Timeline",     self._phase3_dependent, self._flags["withReviews"] or self._flags["withTimeline"]),
             ("Phase 4  — Commits",                self._phase4_commits,   True),
+            ("Phase 4b — Commit files",            self._phase4b_commit_files, self._flags.get("withFileObjects", False)),
             ("Phase 5  — DevOps",                 self._phase5_devops,    True),
             ("Phase 6  — Knowledge base",         self._phase6_knowledge, self._flags["withDiscussions"]),
         ]
@@ -170,6 +177,18 @@ class Orchestrator:
             self.stats["prs"] += 1
         logger.info(f"  prs={self.stats['prs']}")
 
+        # Recalculate page sizes using actual extracted counts.
+        # repo_metrics.pull_requests is the total repo count (no since filter),
+        # but the per-PR nested phases (reviews, timeline, comments) only run
+        # against the actual extracted PRs — recalibrate accordingly.
+        actual_prs = self.stats["prs"]
+        if actual_prs < self.repo_metrics.pull_requests:
+            self.repo_metrics.pull_requests = actual_prs
+            self.repo_metrics.issues = self.stats["issues"]
+            remaining = self.client.rate_limiter.resources["graphql"].get("remaining")
+            self._ps = compute_page_sizes(self.repo_metrics, remaining_points=remaining)
+            logger.info(f"  [page sizes recalibrated for windowed extraction]")
+
     # Phase 2: per-node detail (requires Phase 1 objects)
     def _phase2_detail(self):
         """
@@ -225,7 +244,24 @@ class Orchestrator:
         for node in fetch_commits(self.client, page_size=self._ps.commits):
             process_commit_graphql(node, self.builder, self.repo_id)
             self.stats["commits"] += 1
-        logger.info(f"  commits={self.stats['commits']}")
+            if node.get("oid"):
+                self._commit_shas.append(node["oid"])
+        logger.info(f"  commits={self.stats['commits']} (SHAs queued for Phase 4b: {len(self._commit_shas)})")
+
+    # Phase 4b: file enrichment via REST (COMPLETE profile only)
+    def _phase4b_commit_files(self):
+        file_links = 0
+        new_files  = 0
+        for payload in fetch_commit_files(self.client, self._commit_shas, max_commits=self.client.config.max_commits_for_files):
+            links, files = process_commit_files(payload, self.builder, self.repo_id)
+            file_links += links
+            new_files  += files
+        self.stats["file_links"] = file_links
+        self.stats["files"]      = new_files
+        if file_links == 0 and new_files == 0:
+            logger.info(f"  file enrichment skipped (see warning above)")
+        else:
+            logger.info(f"  file_objects={new_files} | commit_file_links={file_links}")
 
     # Phase 5: DevOps
     def _phase5_devops(self):

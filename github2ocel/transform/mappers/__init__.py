@@ -11,6 +11,7 @@ from .process_workflow_run import process_workflow_run
 from .process_deployment import process_deployment
 from .process_release import process_release
 from .process_discussion_node import process_discussion_node
+from .process_commit_files import process_commit_files
 
 __all__ = [
     "process_milestone",
@@ -28,4 +29,5 @@ __all__ = [
     "process_deployment",
     "process_release",
     "process_discussion_node",
+    "process_commit_files",
 ]

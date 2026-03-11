@@ -34,14 +34,14 @@ def verify_data_integrity(extractor_stats: dict, builder_stats: dict) -> dict:
 
     if discrepancy == 0:
         status = "perfect_match"
-        print("  ✅ RECONCILIATION SUCCESS: Perfect entity alignment.")
+        print("  RECONCILIATION SUCCESS: Perfect entity alignment.")
     elif discrepancy > 0:
         status = "missing_records"
-        print(f"  ⚠️  DISCREPANCY: {discrepancy} extracted records not injected.")
+        print(f"  DISCREPANCY: {discrepancy} extracted records not injected.")
         print("      Possible causes: validation rejection, duplicate IDs, filtering.")
     else:
         status = "over_injection"
-        print(f"  ⚠️  WARNING: {abs(discrepancy)} more events than extracted entities.")
+        print(f"  WARNING: {abs(discrepancy)} more events than extracted entities.")
         print("      Possible cause: lifecycle expansion (1 entity → multiple events).")
 
     # Success ratio
