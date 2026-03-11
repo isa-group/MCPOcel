@@ -60,6 +60,13 @@ class BaseProvider:
         """Build a message containing a tool result."""
         raise NotImplementedError
 
+    def build_user_turn(
+        self, user_text: str, append_instruction: str = ""
+    ) -> List[Dict[str, Any]]:
+        """Build the messages to add for a user turn, injecting the reminder
+        instruction in the most effective way for this provider."""
+        raise NotImplementedError
+
 
 class OpenAIProvider(BaseProvider):
     """OpenAI API provider using the /v1/responses endpoint.
@@ -197,6 +204,16 @@ class OpenAIProvider(BaseProvider):
             "call_id": tool_call.id,
             "output": result,
         }
+
+    def build_user_turn(
+        self, user_text: str, append_instruction: str = ""
+    ) -> List[Dict[str, Any]]:
+        """Inject the instruction as a separate system (→ developer) message
+        for maximum priority, followed by the user message."""
+        return [
+            {"role": "user", "content": user_text.strip()},
+            {"role": "developer", "content": append_instruction.strip()},
+        ]
 
 
 class GeminiProvider(BaseProvider):
@@ -382,6 +399,13 @@ class GeminiProvider(BaseProvider):
             "name": tool_call.name,
             "content": result,
         }
+
+    def build_user_turn(
+        self, user_text: str, append_instruction: str = ""
+    ) -> List[Dict[str, Any]]:
+        """Embed the instruction in the user content (Gemini only supports
+        user/model/tool_result roles, not system mid-conversation)."""
+        return [{"role": "user", "content": f"{user_text}\n\n{append_instruction}".strip()}]
 
 
 def build_provider(name: str) -> BaseProvider:

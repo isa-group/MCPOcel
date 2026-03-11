@@ -3,7 +3,7 @@ Server-side cursor store for tool results.
 
 Stores full result sets from tool invocations, allowing LLMs to reason
 about subsets without materialising data into context until explicitly
-requested via ``get_cursor_results``.
+requested via ``get_cursor_data``.
 Cursors persist for the full lifetime of the MCP lifespan.
 They are cleared on server shutdown via ``clear()``.
 """

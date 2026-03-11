@@ -410,7 +410,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
         Each result item is {object_id, status: "orphaned"}.
         For a richer anomaly report (including events with no objects) use detect_anomalies instead.
-        Prefer get_total_from_cursor_id over get_cursor_results when only the count is needed.
+        Prefer get_total_from_cursor_id over get_cursor_data when only the count is needed.
 
         Returns:
             Dict with cursor_id for the orphaned object items.
@@ -958,7 +958,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         """
         Return the item count of a cursor without loading any data.
 
-        Use this instead of get_cursor_results when only a count is needed.
+        Use this instead of get_cursor_data when only a count is needed.
         For a richer summary (activity types, object types, time range)
         use get_summary_from_cursor_id instead.
 
@@ -1110,7 +1110,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         time_start and time_end (ISO 8601).
         Activity/object/time fields are only populated for event-reference cursors
         (from event-filtering tools); other cursor types return those fields as None.
-        Call this before get_cursor_results to characterise a subset and decide whether to fetch.
+        Call this before get_cursor_data to characterise a subset and decide whether to fetch.
 
         Args:
             cursor_id: The cursor identifier returned by a previous tool call.
@@ -1138,9 +1138,9 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
     @mcp.tool()
     @debug_log_tool
-    def get_cursor_results(cursor_id: str) -> Dict[str, Any]:
+    def get_cursor_data(cursor_id: str) -> Dict[str, Any]:
         """
-        Fetch ALL items stored in a cursor — use only for the final subset to present to the user.
+        Fetch ALL items stored in a cursor — USE ONLY for the final subset to present to the user.
 
         This loads the full dataset into context; prefer cheaper inspection tools first:
           - get_total_from_cursor_id    → count only
@@ -1164,7 +1164,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         except KeyError as e:
             return {"error": str(e)}
         except Exception as e:
-            logger.error(f"Error in get_cursor_results: {e}")
+            logger.error(f"Error in get_cursor_data: {e}")
             return {"error": f"Internal error: {str(e)}"}
 
     # =========================================================================
