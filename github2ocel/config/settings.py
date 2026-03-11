@@ -19,6 +19,7 @@ class APIConfig:
     graphql_per_page: int  # GraphQL (Issues, PRs)
     since_days: Optional[int]
     until_days: int
+    max_commits_for_files: int  # 0 = unlimited
 
 
     @classmethod
@@ -48,6 +49,7 @@ class APIConfig:
             max_pages=Env.optional_int("GITHUB_MAX_PAGES"),
             rest_per_page=safe_per_page,
             graphql_per_page=safe_gql_page,
-            since_days=Env.optional_int("EXTRACT_SINCE_DAYS"), #
-            until_days=Env.int("EXTRACT_UNTIL_DAYS", default=0) # today
+            since_days=Env.optional_int("EXTRACT_SINCE_DAYS"),
+            until_days=Env.int("EXTRACT_UNTIL_DAYS", default=0),  # today
+            max_commits_for_files=Env.int("MAX_COMMITS_FOR_FILES", default=0),  # 0 = unlimited
         )

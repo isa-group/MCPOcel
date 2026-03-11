@@ -1,18 +1,20 @@
 REPO_STATS_QUERY = """
-query GetRepoStats($owner: String!, $repo: String!) {
+query GetRepoStats($owner: String!, $repo: String!, $since: DateTime, $sinceGit: GitTimestamp) {
   repository(owner: $owner, name: $repo) {
-    issues(states: [OPEN, CLOSED])         { totalCount }
-    pullRequests(states: [OPEN, CLOSED, MERGED]) { totalCount }
-    discussions                             { totalCount }
-    releases                               { totalCount }
-    milestones(states: [OPEN, CLOSED])     { totalCount }
-    refs(refPrefix: "refs/tags/")          { totalCount }
-    refs2: refs(refPrefix: "refs/heads/")  { totalCount }
+    issues(states: [OPEN, CLOSED], filterBy: { since: $since })  { totalCount }
+    allIssues: issues(states: [OPEN, CLOSED])                    { totalCount }
+    pullRequests(states: [OPEN, CLOSED, MERGED])                 { totalCount }
+    discussions                                                   { totalCount }
+    releases                                                      { totalCount }
+    milestones(states: [OPEN, CLOSED])                           { totalCount }
+    refs(refPrefix: "refs/tags/")                                { totalCount }
+    refs2: refs(refPrefix: "refs/heads/")                        { totalCount }
 
     defaultBranchRef {
       target {
         ... on Commit {
-          history { totalCount }
+          history(since: $sinceGit) { totalCount }
+          allHistory: history      { totalCount }
         }
       }
     }
@@ -118,7 +120,7 @@ query GetPullRequests(
       first: $pageSize
       after: $cursor
       states: [OPEN, CLOSED, MERGED]
-      orderBy: { field: CREATED_AT, direction: ASC }
+      orderBy: { field: UPDATED_AT, direction: ASC }
     ) {
       pageInfo { hasNextPage endCursor }
       nodes {
@@ -473,7 +475,6 @@ query GetPRReviews(
           }
         }
       }
-
       # Review threads (resolved/unresolved — separate from reviews)
       reviewThreads(first: 50) {
         pageInfo { hasNextPage endCursor }

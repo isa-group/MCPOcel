@@ -6,16 +6,22 @@ from shared.logger import get_logger
 logger = get_logger(__name__)
 
 def _ensure_object(
-    builder, 
-    repo_id: str, 
-    obj_type: str, 
-    raw_id: str, 
-    timestamp: str = None, 
+    builder,
+    repo_id: str,
+    obj_type: str,
+    raw_id: str,
+    timestamp: str = None,
     attributes: Dict[str, Any] = None,
-    relationships: List[Dict[str, str]] = None
+    relationships: List[Dict[str, str]] = None,
+    allow_update: bool = False,
 ) -> Optional[str]:
     """
     Register any object generically for OCEL 2.0.
+
+    If the object already exists in the builder and allow_update=False (default),
+    only new O2O relationships are added — no duplicate snapshot is written.
+    Set allow_update=True for objects that legitimately evolve over time
+    (e.g. Milestone state changes, PR status transitions).
     """
     if not raw_id:
         logger.warning(f"Skipping {obj_type} with empty raw_id")
@@ -23,15 +29,15 @@ def _ensure_object(
 
     # 1. Unique identity
     object_id = make_id(repo_id, obj_type.lower(), str(raw_id))
-    
-    # 2. Time (Snapshot)
-    ts = safe_timestamp(timestamp, fallback="1970-01-01T00:00:00Z")
 
-    # 3. Constructor
     obj_instance = ObjectInstance(object_id=object_id, object_type=obj_type)
-    obj_instance.add_snapshot(time=ts, attributes=attributes or {})
-    
-    # 4. Optional O2O relationships
+
+    # 2. Snapshot — only on first insert, or when explicitly allowed
+    if allow_update or not builder.object_exists(object_id):
+        ts = safe_timestamp(timestamp, fallback="1970-01-01T00:00:00Z")
+        obj_instance.add_snapshot(time=ts, attributes=attributes or {})
+
+    # 3. Optional O2O relationships
     if relationships:
         for target_id, qualifier in relationships:
             if target_id:

@@ -10,19 +10,26 @@ def fetch_repo_stats(client: GitHubClient) -> RepoStats:
    """Single cheap request (cost=1) to get all entity counts."""
    logger.info("--- [Adaptive] Fetching repository stats ---")
 
+   since_iso, _ = client.time_window_iso   # None if no EXTRACT_SINCE_DAYS
+
    try:
        payload = client.graphql(
            REPO_STATS_QUERY,
-           {"owner": client.owner, "repo": client.repo},
+           {
+               "owner":    client.owner,
+               "repo":     client.repo,
+               "since":    since_iso,       # DateTime  — for issues filterBy
+               "sinceGit": since_iso,       # GitTimestamp — for commit history
+           },
        )
        repo = payload.get("repository", {})
        rl   = payload.get("rateLimit", {})
 
-       commits = 0
-       default_ref = repo.get("defaultBranchRef") or {}
-       target = default_ref.get("target") or {}
-       history = target.get("history") or {}
-       commits = history.get("totalCount", 0)
+       target = (repo.get("defaultBranchRef") or {}).get("target") or {}
+
+       # With since: windowed count. Without since: both point to same totalCount.
+       commits     = (target.get("history")    or {}).get("totalCount", 0)
+       all_commits = (target.get("allHistory") or {}).get("totalCount", 0)
 
        stats = RepoStats(
            issues        = repo.get("issues",       {}).get("totalCount", 0),
@@ -33,22 +40,24 @@ def fetch_repo_stats(client: GitHubClient) -> RepoStats:
            tags          = (repo.get("refs")  or {}).get("totalCount", 0),
            branches      = (repo.get("refs2") or {}).get("totalCount", 0),
            commits       = commits,
-           reviews_est   = 0,  # estimated below
+           reviews_est   = 0,
        )
-       # Reviews estimation based on repo size:
+
+       # Reviews estimation uses windowed PR count (all PRs — no since filter available)
        prs = stats.pull_requests
-       if prs < 200: # Small repos (avg ~1.5/PR).
+       if prs < 200:
            avg_reviews = 1.5
-       elif prs < 1000: # Medium repos (avg ~2.5/PR).
+       elif prs < 1000:
            avg_reviews = 2.5
-       else: # Large repos with formal workflows can reach 3-4 reviews per PR.
+       else:
            avg_reviews = 3.5
        stats.reviews_est = int(prs * avg_reviews)
 
+       window_str = f"since={since_iso[:10]}" if since_iso else "full history"
        logger.info(
-           f"  issues={stats.issues} prs={stats.pull_requests} "
-           f"commits={stats.commits} discussions={stats.discussions} "
-           f"remaining_points={rl.get('remaining', '?')}"
+           f"  [{window_str}] issues={stats.issues} prs={stats.pull_requests} "
+           f"commits={commits} (total={all_commits}) "
+           f"discussions={stats.discussions} remaining_points={rl.get('remaining', '?')}"
        )
        return stats
 

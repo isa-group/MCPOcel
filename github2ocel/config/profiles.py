@@ -16,6 +16,7 @@ PROFILES: Dict[ExtractionProfile, Dict[str, bool]] = {
         "withTimeline": False,
         "withStatusChecks": False,
         "withDiscussions": True,
+        "withFileObjects": False,
     },
     ExtractionProfile.STANDARD: {
         "withReviews": True,           # Reviews
@@ -24,6 +25,7 @@ PROFILES: Dict[ExtractionProfile, Dict[str, bool]] = {
         "withTimeline": True,          # Timeline
         "withStatusChecks": True,      # CI
         "withDiscussions": True,
+        "withFileObjects": False,
     },
     ExtractionProfile.COMPLETE: {
         "withReviews": True,
@@ -32,6 +34,7 @@ PROFILES: Dict[ExtractionProfile, Dict[str, bool]] = {
         "withTimeline": True,
         "withStatusChecks": True,
         "withDiscussions": True,
+        "withFileObjects": True,       # REST file enrichment per commit (COMPLETE only)
     }
 }
 
