@@ -142,7 +142,8 @@ class Orchestrator:
             return False
 
     def _phase_stats(self):
-        self.repo_metrics = fetch_repo_stats(self.client)
+        self.repo_metrics, repo_obj = fetch_repo_stats(self.client, self.repo_id)
+        self.builder.insert_object(repo_obj)
         remaining = self.client.rate_limiter.resources["graphql"].get("remaining")
         self._ps = compute_page_sizes(self.repo_metrics, remaining_points=remaining)
 

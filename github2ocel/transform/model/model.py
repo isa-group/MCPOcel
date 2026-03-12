@@ -3,15 +3,41 @@ from typing import Optional
 
 @dataclass
 class RepoStats:
-   issues:       int = 0
-   pull_requests: int = 0
-   discussions:  int = 0
-   releases:     int = 0
-   milestones:   int = 0
-   tags:         int = 0
-   branches:     int = 0
-   commits:      int = 0
-   reviews_est:  int = 0   # estimated: prs * avg_reviews_per_pr
+    # --- Entity counts (adaptive page sizing) ---
+    issues:        int = 0
+    pull_requests: int = 0
+    discussions:   int = 0
+    releases:      int = 0
+    milestones:    int = 0
+    tags:          int = 0
+    branches:      int = 0
+    commits:       int = 0        # windowed (since filter applied)
+    all_commits:   int = 0        # full history, no time filter
+    deployments:   int = 0
+    reviews_est:   int = 0        # estimated: prs * avg_reviews_per_pr
+
+    # --- Repository metadata (for the Repository OCEL object) ---
+    name_with_owner:   str  = ""
+    description:       str  = ""
+    created_at:        str  = ""
+    updated_at:        str  = ""
+    pushed_at:         str  = ""
+    default_branch:    str  = "main"
+    is_private:        bool = False
+    is_fork:           bool = False
+    is_archived:       bool = False
+    is_disabled:       bool = False
+    stars:             int  = 0
+    forks:             int  = 0
+    watchers:          int  = 0
+    disk_usage_kb:     int  = 0
+    primary_language:  str  = ""
+    license_spdx:      str  = ""
+    license_name:      str  = ""
+    has_issues:        bool = True
+    has_discussions:   bool = False
+    has_wiki:          bool = False
+
 
 @dataclass
 class PageSizes:

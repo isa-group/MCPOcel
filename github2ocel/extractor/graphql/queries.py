@@ -1,16 +1,20 @@
 REPO_STATS_QUERY = """
 query GetRepoStats($owner: String!, $repo: String!, $since: DateTime, $sinceGit: GitTimestamp) {
   repository(owner: $owner, name: $repo) {
+
+    # --- Counts (adaptive page sizing) ---
     issues(states: [OPEN, CLOSED], filterBy: { since: $since })  { totalCount }
     allIssues: issues(states: [OPEN, CLOSED])                    { totalCount }
     pullRequests(states: [OPEN, CLOSED, MERGED])                 { totalCount }
     discussions                                                   { totalCount }
     releases                                                      { totalCount }
     milestones(states: [OPEN, CLOSED])                           { totalCount }
+    deployments                                                   { totalCount }
     refs(refPrefix: "refs/tags/")                                { totalCount }
     refs2: refs(refPrefix: "refs/heads/")                        { totalCount }
 
     defaultBranchRef {
+      name
       target {
         ... on Commit {
           history(since: $sinceGit) { totalCount }
@@ -18,6 +22,26 @@ query GetRepoStats($owner: String!, $repo: String!, $since: DateTime, $sinceGit:
         }
       }
     }
+
+    # --- Repository metadata (for the Repository object) ---
+    nameWithOwner
+    description
+    createdAt
+    updatedAt
+    pushedAt
+    isPrivate
+    isFork
+    isArchived
+    isDisabled
+    stargazerCount
+    forkCount
+    watchers    { totalCount }
+    diskUsage
+    primaryLanguage { name }
+    licenseInfo     { spdxId name }
+    hasIssuesEnabled
+    hasDiscussionsEnabled
+    hasWikiEnabled
   }
   rateLimit { cost remaining resetAt }
 }
