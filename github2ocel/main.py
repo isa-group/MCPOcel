@@ -1,7 +1,6 @@
 import sys
 from datetime import datetime
 from pathlib import Path
-from datetime import datetime, timezone
 # shared
 from shared.logger import setup_logging, get_logger
 from shared.config.env import Env
@@ -12,7 +11,6 @@ from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.mappers.OCEL2Json import OCEL2JsonExporter
 from github2ocel.extractor.extractor import run_extractor
 from github2ocel.validate.validate_ocel import validate_ocel
-from shared.ocel.model.models import ObjectInstance
 from github2ocel.utils.summary import print_pipeline_audit
 from github2ocel.utils.verify_extractor import verify_data_integrity
 
@@ -50,21 +48,6 @@ def main() -> None:
     extraction_success = False
 
     with OCELBuilder(db_path=db_path) as builder:
-
-        now_ts = datetime.now(timezone.utc)
-
-        repo_obj = ObjectInstance(object_id=repo_id, object_type="Repository")
-        repo_obj.add_snapshot(
-                time=now_ts,
-                attributes={
-                    "name": ctx.repo,
-                    "full_name": fullname,
-                    "visibility": ctx.visibility,
-                    "owner": ctx.owner
-                }
-            )
-
-        builder.insert_object(repo_obj)
 
         logger.info(f"Database initialized at: {db_filename}")
 

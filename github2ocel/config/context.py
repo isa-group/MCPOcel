@@ -13,7 +13,6 @@ class RepoContext:
     owner: str
     repo: str
     token: str
-    visibility: str
     api: APIConfig
     profile: ExtractionProfile
 
@@ -23,7 +22,6 @@ class RepoContext:
             owner=Env.str("GITHUB_OWNER"),
             repo=Env.str("GITHUB_REPO"),
             token=Env.str("GITHUB_TOKEN"),
-            visibility=Env.str("GITHUB_VISIBILITY", default="public"),
             api=APIConfig.from_env(),
             profile=get_profile_from_env(),
         )
