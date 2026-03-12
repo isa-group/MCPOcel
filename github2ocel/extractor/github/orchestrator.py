@@ -99,20 +99,26 @@ class Orchestrator:
     # Runner
     def run(self) -> bool:
         phases = [
-            ("Setup - Repo stats",                self._phase_stats,      True),
-            ("Initialization  — Seed objects",    self._initialization,   True),
-            ("Phase 1  — Core objects",           self._phase1_core,      True),
-            ("Phase 2  — Per-node detail",        self._phase2_detail,    True),
-            ("Phase 3  — Reviews & Timeline",     self._phase3_dependent, self._flags["withReviews"] or self._flags["withTimeline"]),
-            ("Phase 4  — Commits",                self._phase4_commits,   True),
-            ("Phase 4b — Commit files",            self._phase4b_commit_files, self._flags.get("withFileObjects", False)),
-            ("Phase 5  — DevOps",                 self._phase5_devops,    True),
-            ("Phase 6  — Knowledge base",         self._phase6_knowledge, self._flags["withDiscussions"]),
+            ("Setup       — Repo stats",         self._phase_stats,          True),
+            ("Init        — Seed objects",        self._initialization,       True),
+            ("Phase 1     — Core objects",        self._phase1_core,          True),
+            ("Phase 2     — Per-node detail",     self._phase2_detail,        True),
+            ("Phase 3     — Reviews & Timeline",  self._phase3_dependent,     self._flags["withReviews"] or self._flags["withTimeline"]),
+            ("Phase 4     — Commits",             self._phase4_commits,       True),
+            ("Phase 4b    — Commit files",        self._phase4b_commit_files, self._flags.get("withFileObjects", False)),
+            ("Phase 5     — Releases",            self._phase5_releases,      True),
+            ("Phase 6     — DevOps",              self._phase6_devops,        True),
+            ("Phase 7     — Knowledge base",      self._phase7_knowledge,     self._flags["withDiscussions"]),
         ]
 
         for name, fn, enabled in phases:
             if not enabled:
                 logger.info(f" - {name} [SKIPPED by profile '{self._profile.value}']")
+                continue
+
+            # Phase 4b requires commits extracted in Phase 4
+            if fn == self._phase4b_commit_files and not self._commit_shas:
+                logger.info(f" - {name} [SKIPPED — no commits extracted in Phase 4]")
                 continue
 
             logger.info(f" - {name}")
@@ -264,8 +270,15 @@ class Orchestrator:
         else:
             logger.info(f"  file_objects={new_files} | commit_file_links={file_links}")
 
-    # Phase 5: DevOps
-    def _phase5_devops(self):
+    # Phase 5: releases (after commits so O2O to tags/commits resolves correctly)
+    def _phase5_releases(self):
+        for node in fetch_releases(self.client, page_size=self._ps.releases):
+            process_release(node, self.builder, self.repo_id)
+            self.stats["releases"] += 1
+        logger.info(f"  releases={self.stats['releases']}")
+
+    # Phase 6: DevOps
+    def _phase6_devops(self):
         for node in fetch_deployments(self.client, page_size=self._ps.deployments):
             process_deployment(node, self.builder, self.repo_id)
             self.stats["deployments"] += 1
@@ -280,13 +293,8 @@ class Orchestrator:
             f"workflow_jobs={self.stats['workflow_jobs']}"
         )
 
-    # Phase 6: knowledge base
-    def _phase6_knowledge(self):
-        for node in fetch_releases(self.client, page_size=self._ps.releases):
-            process_release(node, self.builder, self.repo_id)
-            self.stats["releases"] += 1
-        logger.info(f"  releases={self.stats['releases']}")
-
+    # Phase 7: knowledge base
+    def _phase7_knowledge(self):
         for node in fetch_discussions(self.client, page_size=self._ps.discussions):
             process_discussion_node(node, self.builder, self.repo_id)
             self.stats["discussions"] += 1

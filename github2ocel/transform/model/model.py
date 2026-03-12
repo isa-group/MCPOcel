@@ -4,7 +4,8 @@ from typing import Optional
 @dataclass
 class RepoStats:
     # --- Entity counts (adaptive page sizing) ---
-    issues:        int = 0
+    issues:        int = 0            # windowed (since filter applied)
+    all_issues:    int = 0            # full history, no time filter
     pull_requests: int = 0
     discussions:   int = 0
     releases:      int = 0
@@ -63,19 +64,3 @@ class PageSizes:
    # REST-based fetchers
    workflow_runs:  int = 100
    deployments:    int = 100
-
-@dataclass
-class ExtractionRange:
-    since: Optional[str] = None  # ISO format
-    until: Optional[str] = None  # ISO format
-
-    @property
-    def is_active(self) -> bool:
-        return self.since is not None
-
-@dataclass
-class ExtractionContext:
-    owner: str
-    repo: str
-    range: ExtractionRange
-    page_sizes: PageSizes
