@@ -1,8 +1,11 @@
 import sqlite3
 import re
+import logging
 from pathlib import Path
 from typing import Any, Dict, Set
 from shared.ocel.model.models import Event, ObjectInstance
+
+logger = logging.getLogger(__name__)
 
 class OCELBuilder:
     def __init__(self, db_path: Path):
@@ -32,8 +35,11 @@ class OCELBuilder:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.conn:
-            self.conn.commit()
-            self._print_stats()
+            if exc_type is not None:
+                self.conn.rollback()
+            else:
+                self.conn.commit()
+                self._print_stats()
             self.conn.close()
 
     def _configure_sqlite(self):
@@ -201,7 +207,7 @@ class OCELBuilder:
         return object_id in self.object_registry
 
     def _print_stats(self):
-        print(f"--- OCEL 2.0 Generation Completed ---")
-        print(f"Events: {self.stats['events']}")
-        print(f"Objects: {self.stats['objects']}")
-        print(f"Relations: {self.stats['relationships']}")
+        logger.info("--- OCEL 2.0 Generation Completed ---")
+        logger.info(f"Events: {self.stats['events']}")
+        logger.info(f"Objects: {self.stats['objects']}")
+        logger.info(f"Relations: {self.stats['relationships']}")

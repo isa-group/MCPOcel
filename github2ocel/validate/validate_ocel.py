@@ -1,7 +1,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from .syntax import validate_ocel_structure
 from .semantic import validate_ocel_semantics
@@ -31,7 +31,7 @@ def resolve_ocel_version(ocel: dict) -> Optional[str]:
 
 
 # Main orchestrator
-def validate_ocel(ocel_path: str, schema_path: Optional[str] = None) -> bool:
+def validate_ocel(ocel_path: Union[str, Path], schema_path: Optional[str] = None) -> bool:
     """
     Validate an OCEL file.
 
