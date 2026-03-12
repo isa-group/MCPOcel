@@ -14,17 +14,17 @@ def fetch_pull_requests(
     since: Optional[str] = None,
 ) -> Generator[Dict[str, Any], None, None]:
     """
-    Yield PR nodes ordered by updatedAt ASC.
+    Yield PR nodes with activity in the time window, ordered by updatedAt ASC.
 
-    With since: include PRs created OR updated within the window.
-      - createdAt >= since  → new PR in window
-      - updatedAt >= since  → existing PR with activity in window
-    Without since: yield all PRs.
-
-    Note: GitHub GraphQL has no native since filter for PRs,
-    so filtering is post-pagination on both createdAt and updatedAt.
+    Filtering strategy (GitHub GraphQL has no native since/until for PRs):
+      - since: post-filter — include if createdAt >= since OR updatedAt >= since
+                             (new PR in window, OR existing PR with activity in window)
+      - until: post-filter — exclude if createdAt > until AND updatedAt > until
+    Without since/until: yield all PRs.
     """
     logger.info(f"--- [Fetcher] Pull Requests (pageSize={page_size}) ---")
+
+    _, until_iso = client.ctx.time_window_iso
 
     count = 0
     skipped = 0
@@ -37,16 +37,22 @@ def fetch_pull_requests(
         total=total,
         label="prs",
     ):
-        if since:
-            created_at = node.get("createdAt", "")
-            updated_at = node.get("updatedAt", "")
-            if created_at < since and updated_at < since:
-                skipped += 1
-                continue
+        created_at = node.get("createdAt", "")
+        updated_at = node.get("updatedAt", "")
+
+        # since: drop PRs with no activity in the window
+        if since and created_at < since and updated_at < since:
+            skipped += 1
+            continue
+
+        # until: drop PRs that only exist after the window
+        if created_at > until_iso and updated_at > until_iso:
+            skipped += 1
+            continue
 
         node["__type"] = "PullRequest"
         yield node
         count += 1
 
-    if since and skipped:
-        logger.info(f"  [fetch_pull_requests] {skipped} PRs skipped (createdAt and updatedAt < {since[:10]})")
+    if skipped:
+        logger.info(f"  [fetch_pull_requests] {skipped} PRs skipped (outside time window)")

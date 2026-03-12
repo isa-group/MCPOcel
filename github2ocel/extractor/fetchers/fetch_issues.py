@@ -1,4 +1,4 @@
-from typing import Generator, Dict, Any
+from typing import Generator, Dict, Any, Optional
 from github2ocel.client.github_client import GitHubClient
 from github2ocel.client.paginator import paginate_nodes
 from github2ocel.extractor.graphql.queries import ISSUES_QUERY
@@ -11,17 +11,27 @@ def fetch_issues(
     client: GitHubClient,
     page_size: int = 50,
     total: int = 0,
-    since: str = None,
+    since: Optional[str] = None,
 ) -> Generator[Dict[str, Any], None, None]:
-    """Yield all issue nodes. Timeline is NOT included here."""
+    """
+    Yield issue nodes with activity in the time window.
 
+    Filtering strategy:
+      - API-level: filterBy: { since } → updatedAt >= since  (server-side, efficient)
+      - Post-filter: updatedAt <= until  (client-side, GitHub has no native until for issues)
+
+    orderBy UPDATED_AT ASC is coherent with the since filter: both operate on updatedAt,
+    so paginación cursor advances correctly through the filtered set.
+    """
     logger.info(f"--- [Fetcher] Issues (pageSize={page_size}) ---")
 
-    variables = {"pageSize": page_size}
+    _, until_iso = client.ctx.time_window_iso
 
+    variables = {"pageSize": page_size}
     if since:
         variables["since"] = since
 
+    skipped = 0
     for node in paginate_nodes(
         client=client,
         query=ISSUES_QUERY,
@@ -30,5 +40,14 @@ def fetch_issues(
         total=total,
         label="issues",
     ):
+        # Post-filter: drop issues whose updatedAt is beyond the until boundary
+        updated_at = node.get("updatedAt", "")
+        if updated_at > until_iso:
+            skipped += 1
+            continue
+
         node["__type"] = "Issue"
         yield node
+
+    if skipped:
+        logger.info(f"  [fetch_issues] {skipped} issues skipped (updatedAt > {until_iso[:10]})")
