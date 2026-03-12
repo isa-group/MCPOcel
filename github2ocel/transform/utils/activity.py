@@ -24,6 +24,7 @@ class Activities:
     PR_REVIEW_REQUESTED = "PRReviewRequested"
     PR_REVIEW_REQUEST_REMOVED = "PRReviewRequestRemoved"
     PR_FORCE_PUSHED='PRForcePushed'
+    PR_CI_STATE = "PRCIState"
 
     # Comments
     COMMENT_CREATED = "CommentCreated"

@@ -1,4 +1,3 @@
-
 from typing import Dict, Any
 from shared.ocel.builder import OCELBuilder
 from shared.ocel.model.models import ObjectInstance
@@ -16,37 +15,41 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
         logger.warning("[process_pull_request] Missing number. Skipping.")
         return
 
-    obj_id = make_id(repo_id, "pr", number)
+    obj_id     = make_id(repo_id, "pr", number)
     created_at = safe_timestamp(node.get("createdAt"))
-    merged_at  = safe_timestamp(node.get("mergedAt")) if node.get("mergedAt") else None
-    closed_at  = safe_timestamp(node.get("closedAt")) if node.get("closedAt") else None
+    merged_at  = safe_timestamp(node.get("mergedAt"))  if node.get("mergedAt")  else None
+    closed_at  = safe_timestamp(node.get("closedAt"))  if node.get("closedAt")  else None
+
+    body_text = node.get("bodyText") or ""
 
     # Object: PullRequest
     obj = ObjectInstance(object_id=obj_id, object_type="PullRequest")
     obj.add_snapshot(
         time=created_at,
         attributes={
-            "number": int(number),
-            "title": (node.get("title") or "")[:255],
-            "state": node.get("state", "OPEN"),
-            "is_draft": int(node.get("isDraft", False)),
-            "merged": int(node.get("merged", False)),
-            "url": node.get("url", ""),
-            "head_ref": node.get("headRefName", ""),
-            "base_ref": node.get("baseRefName", ""),
-            "additions": node.get("additions", 0),
-            "deletions": node.get("deletions", 0),
-            "changed_files": node.get("changedFiles", 0),
-            "total_changes": node.get("additions", 0) + node.get("deletions", 0),
-            "review_decision": node.get("reviewDecision") or "",
-            "commits_count": (node.get("commits") or {}).get("totalCount", 0),
-            "comments_count": (node.get("comments") or {}).get("totalCount", 0),
-            "participants_count": (node.get("participants") or {}).get("totalCount", 0),
-            "reactions_count": (node.get("reactions") or {}).get("totalCount", 0),
-            "body_length": len(node.get("body") or ""),
-            "updated_at": safe_timestamp(node.get("updatedAt")),
-            "merged_at": merged_at,
-            "closed_at": closed_at,
+            "number":             int(number),
+            "title":              (node.get("title") or "")[:255],
+            "state":              node.get("state", "OPEN"),
+            "is_draft":           int(node.get("isDraft", False)),
+            "locked":             1 if node.get("locked") else 0,
+            "locked_reason":      node.get("lockedReason") or "",
+            "merged":             int(node.get("merged", False)),
+            "url":                node.get("url", ""),
+            "head_ref":           node.get("headRefName", ""),
+            "base_ref":           node.get("baseRefName", ""),
+            "additions":          node.get("additions", 0),
+            "deletions":          node.get("deletions", 0),
+            "changed_files":      node.get("changedFiles", 0),
+            "total_changes":      node.get("additions", 0) + node.get("deletions", 0),
+            "review_decision":    node.get("reviewDecision") or "",
+            "commits_count":      (node.get("commits")      or {}).get("totalCount", 0),
+            "comments_count":     (node.get("comments")     or {}).get("totalCount", 0),
+            "participants_count": (node.get("participants")  or {}).get("totalCount", 0),
+            "reactions_count":    (node.get("reactions")     or {}).get("totalCount", 0),
+            "body_length":        len(body_text),
+            "updated_at":         safe_timestamp(node.get("updatedAt")),
+            "merged_at":          merged_at,
+            "closed_at":          closed_at,
         }
     )
 
@@ -71,14 +74,14 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
         if lbl_id:
             obj.add_rel(lbl_id, "has_label")
 
-    # O2O: PR -> Milestone
+    # O2O: PR -> Milestone (object already exists from Phase 0)
     milestone = node.get("milestone")
     if milestone and milestone.get("id"):
         ms_id = make_id(repo_id, "milestone", milestone["id"])
         if builder.object_exists(ms_id):
             obj.add_rel(ms_id, "belongs_to_milestone")
 
-    # O2O: PR -> Branches (target and source)
+    # O2O: PR -> Branches
     base_branch_id = make_id(repo_id, "branch", node.get("baseRefName", ""))
     head_branch_id = make_id(repo_id, "branch", node.get("headRefName", ""))
     if builder.object_exists(base_branch_id):
@@ -86,13 +89,9 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
     if builder.object_exists(head_branch_id):
         obj.add_rel(head_branch_id, "source_branch")
 
-    # O2O: PR -> Commits (lightweight cross-reference)
-    for commit_node in (node.get("commits") or {}).get("nodes", []):
-        oid = (commit_node.get("commit") or {}).get("oid")
-        if oid:
-            commit_id = make_id(repo_id, "commit", oid)
-            if builder.object_exists(commit_id):
-                obj.add_rel(commit_id, "contains_commit")
+    # NOTE: PR -> Commit O2O links are NOT built here.
+    # fetch_pr_commits (Phase 2) fully paginates commits per PR.
+    # process_commit_graphql (Phase 4) resolves the reverse link commit -> PR.
 
     builder.insert_object(obj)
 
@@ -103,9 +102,9 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
         ts=created_at,
         attributes={"is_draft": int(node.get("isDraft", False)), "source": "graphql"},
         relationships=[
-            (obj_id, "subject"),
-            (repo_id, "context"),
-            (author_id, "actor") if author_id else None,
+            (obj_id,     "subject"),
+            (repo_id,    "context"),
+            (author_id,  "actor") if author_id else None,
         ]
     )
 
@@ -124,10 +123,10 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
                 "deletions": node.get("deletions", 0),
             },
             relationships=[
-                (obj_id, "subject"),
-                (repo_id, "context"),
-                (merger_id, "actor") if merger_id else None,
-                (base_branch_id, "merged_into") if builder.object_exists(base_branch_id) else None,
+                (obj_id,          "subject"),
+                (repo_id,         "context"),
+                (merger_id,       "actor")       if merger_id else None,
+                (base_branch_id,  "merged_into") if builder.object_exists(base_branch_id) else None,
             ]
         )
 
@@ -139,18 +138,30 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
             ts=closed_at,
             attributes={"source": "graphql"},
             relationships=[
-                (obj_id, "subject"),
-                (repo_id, "context"),
+                (obj_id,    "subject"),
+                (repo_id,   "context"),
                 (author_id, "actor") if author_id else None,
             ]
         )
 
-    # Events: PRCommentCreated
-    for comment in (node.get("comments") or {}).get("nodes", []):
-        _map_comment(comment, builder, repo_id, obj_id)
+    # Event: PRCIState — lightweight CI summary from statusCheckRollup.state
+    # Detailed CI is modelled via WorkflowRun/Job objects in Phase 6.
+    ci_state = (node.get("statusCheckRollup") or {}).get("state")
+    if ci_state:
+        create_event(
+            builder=builder,
+            event_type=Activities.PR_CI_STATE,
+            ts=safe_timestamp(node.get("updatedAt")),
+            attributes={"ci_state": ci_state},
+            relationships=[
+                (obj_id,  "subject"),
+                (repo_id, "context"),
+            ]
+        )
 
-    # CI CheckRun events from statusCheckRollup
-    _map_check_runs(node, builder, repo_id, obj_id)
+    # NOTE: PRCommentCreated events are NOT mapped here.
+    # All comments are fetched and mapped in Phase 2 (fetch_pr_comments)
+    # to avoid duplicate events and ensure full pagination coverage.
 
 
 def _map_comment(
@@ -171,70 +182,28 @@ def _map_comment(
         event_type=Activities.PR_COMMENT_CREATED,
         ts=ts,
         attributes={
-            "comment_id": comment["id"],
+            "comment_id":  comment["id"],
             "body_length": len(comment.get("bodyText") or ""),
-            "is_edited": 1 if comment.get("lastEditedAt") else 0,
+            "is_edited":   1 if comment.get("lastEditedAt") else 0,
         },
         relationships=[
-            (pr_id, "target"),
-            (repo_id, "context"),
+            (pr_id,     "target"),
+            (repo_id,   "context"),
             (author_id, "actor") if author_id else None,
         ]
     )
 
 
-def _map_check_runs(
-    node: Dict[str, Any],
-    builder: OCELBuilder,
-    repo_id: str,
-    pr_id: str,
-) -> None:
-    """Map CheckRun nodes from statusCheckRollup as OCEL events."""
-    rollup = node.get("statusCheckRollup")
-    if not rollup:
-        return
-
-    for ctx_node in (rollup.get("contexts") or {}).get("nodes", []):
-        if not ctx_node or ctx_node.get("__typename") != "CheckRun":
-            continue
-
-        started_at   = safe_timestamp(ctx_node.get("startedAt")) if ctx_node.get("startedAt") else None
-        completed_at = safe_timestamp(ctx_node.get("completedAt")) if ctx_node.get("completedAt") else None
-        conclusion   = ctx_node.get("conclusion")
-
-        if not started_at:
-            continue
-
-        create_event(
-            builder=builder,
-            event_type=Activities.JOB_COMPLETED,
-            ts=completed_at or started_at,
-            attributes={
-                "check_name": ctx_node.get("name", ""),
-                "status": ctx_node.get("status", ""),
-                "conclusion": conclusion or "",
-                "source": "pr_status_rollup",
-            },
-            relationships=[
-                (pr_id, "context"),
-                (repo_id, "repository"),
-            ]
-        )
-
-
 # Phase 2: standalone mappers (called from fetch_pr_commits / fetch_pr_comments)
+
 def process_pr_commit_link(link: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     """
     Create PullRequest -> Commit O2O link.
 
-    The link dict must have "__pr_number" and "oid" injected by fetch_pr_commits().
-    Full Commit objects are created by process_commit_graphql() in Phase 3.
-    Here we only create the O2O relationship if the Commit object already exists
-    (which it won't in Phase 2 — it will be resolved retroactively when Phase 3
-    inserts commits and process_commit_graphql links back to PRs via commit message parsing).
-
-    We still record the link so it's available if the commit was already inserted
-    by a previous run or if the order changes.
+    Called from Phase 2. At this point Commit objects don't exist yet (Phase 4),
+    so most links won't resolve here. The reverse link (commit -> PR) is handled
+    by process_commit_graphql in Phase 4 via associatedPullRequests.
+    We still attempt the forward link in case a commit was already inserted.
     """
     pr_number = link.get("__pr_number")
     oid       = link.get("oid")
@@ -247,9 +216,6 @@ def process_pr_commit_link(link: Dict[str, Any], builder: OCELBuilder, repo_id: 
     if not builder.object_exists(pr_id):
         return
 
-    # Only add the O2O if the Commit object already exists in the builder.
-    # If it doesn't yet (Phase 3 hasn't run), process_commit_graphql will
-    # handle the reverse link (commit -> PR) via commit message parsing.
     if builder.object_exists(commit_id):
         from shared.ocel.model.models import ObjectInstance as _OI
         proxy = _OI(object_id=pr_id, object_type="PullRequest")
@@ -260,7 +226,7 @@ def process_pr_commit_link(link: Dict[str, Any], builder: OCELBuilder, repo_id: 
 def process_pr_comment(comment: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     """
     Map a single PR comment to a PRCommentCreated event.
-    Called from Phase 1b with fully paginated comment nodes.
+    Called from Phase 2 with fully paginated comment nodes.
 
     The comment dict must have "__pr_number" injected by fetch_pr_comments().
     """

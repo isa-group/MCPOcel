@@ -60,7 +60,7 @@ query GetIssues(
       first: $pageSize
       after: $cursor
       states: [OPEN, CLOSED]
-      orderBy: { field: CREATED_AT, direction: ASC }
+      orderBy: { field: UPDATED_AT, direction: ASC }
       filterBy: { since: $since }
     ) {
       pageInfo { hasNextPage endCursor }
@@ -76,11 +76,15 @@ query GetIssues(
         updatedAt
         closedAt
 
+        # State flags
+        locked
+        lockedReason
+        isPinned
+
         # Metrics
         reactions(first: 1) { totalCount }
         participants(first: 0) { totalCount }
 
-        body
         bodyText
 
         author {
@@ -99,31 +103,13 @@ query GetIssues(
           nodes { id name color }
         }
 
+        # Only id needed for O2O link — full data lives on the Milestone object (Phase 0)
         milestone {
           id
-          number
-          title
-          state
-          dueOn
-          createdAt
-          closedAt
-          progressPercentage
-          creator { login }
         }
 
-        # Comments (events: IssueCommentCreated)
-        comments(first: 50) {
-          pageInfo { hasNextPage endCursor }
-          totalCount
-          nodes {
-            id
-            createdAt
-            lastEditedAt
-            body
-            author { login }
-            reactions(first: 1) { totalCount }
-          }
-        }
+        # totalCount only — full comment events handled in Phase 2 (fetch_issue_comments)
+        comments { totalCount }
       }
     }
   }
@@ -157,6 +143,8 @@ query GetPullRequests(
         # Lifecycle
         state
         isDraft
+        locked
+        lockedReason
         createdAt
         updatedAt
         closedAt
@@ -178,7 +166,6 @@ query GetPullRequests(
         changedFiles
 
         # Social
-        body
         bodyText
         author {
           login
@@ -196,73 +183,20 @@ query GetPullRequests(
           nodes { id name color }
         }
 
+        # Only id needed for O2O link — full data lives on the Milestone object (Phase 0)
         milestone {
           id
-          number
-          title
-          state
-          dueOn
-          createdAt
-          closedAt
-          progressPercentage
-          creator { login }
         }
 
-        # Lightweight commit list for PR -> Commit linking only
-        # Full commit data comes from COMMITS_QUERY
-        commits(first: 100) {
-          totalCount
-          nodes {
-            commit {
-              oid
-              committedDate
-              author { user { login } }
-            }
-          }
-        }
+        # totalCount only — O2O links built in Phase 2 (fetch_pr_commits)
+        # Full commit data comes from Phase 4 (COMMITS_QUERY)
+        commits { totalCount }
 
-        # Comments (events: PRCommentCreated)
-        comments(first: 50) {
-          pageInfo { hasNextPage endCursor }
-          totalCount
-          nodes {
-            id
-            createdAt
-            lastEditedAt
-            bodyText
-            author { login }
-          }
-        }
+        # totalCount only — full comment events handled in Phase 2 (fetch_pr_comments)
+        comments { totalCount }
 
-        # CI status on the PR head (cheap, single field)
-        statusCheckRollup {
-          state
-          contexts(first: 30) {
-            nodes {
-              __typename
-              ... on CheckRun {
-                id
-                name
-                status
-                conclusion
-                startedAt
-                completedAt
-                detailsUrl
-                checkSuite {
-                  workflowRun {
-                    databaseId
-                  }
-                }
-              }
-              ... on StatusContext {
-                context
-                state
-                createdAt
-                targetUrl
-              }
-            }
-          }
-        }
+        # CI summary state only — detailed CI modelled via WorkflowRun/Job in Phase 6
+        statusCheckRollup { state }
       }
     }
   }

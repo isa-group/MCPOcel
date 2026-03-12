@@ -1,4 +1,3 @@
-
 from typing import Dict, Any
 from shared.ocel.builder import OCELBuilder
 from shared.ocel.model.models import ObjectInstance
@@ -19,23 +18,28 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
     obj_id = make_id(repo_id, "issue", number)
     created_at = safe_timestamp(node.get("createdAt"))
 
+    body_text = node.get("bodyText") or ""
+
     # Object: Issue
     obj = ObjectInstance(object_id=obj_id, object_type="Issue")
     obj.add_snapshot(
         time=created_at,
         attributes={
-            "number": int(number),
-            "title": (node.get("title") or "")[:255],
-            "state": node.get("state", "OPEN"),
-            "state_reason": node.get("stateReason") or "",
-            "url": node.get("url", ""),
-            "updated_at": safe_timestamp(node.get("updatedAt")),
-            "closed_at": safe_timestamp(node.get("closedAt")) if node.get("closedAt") else None,
-            "body_length": len(node.get("body") or ""),
-            "body_text": (node.get("bodyText") or "")[:2000],
-            "reactions_count": (node.get("reactions") or {}).get("totalCount", 0),
+            "number":             int(number),
+            "title":              (node.get("title") or "")[:255],
+            "state":              node.get("state", "OPEN"),
+            "state_reason":       node.get("stateReason") or "",
+            "url":                node.get("url", ""),
+            "updated_at":         safe_timestamp(node.get("updatedAt")),
+            "closed_at":          safe_timestamp(node.get("closedAt")) if node.get("closedAt") else None,
+            "body_length":        len(body_text),
+            "body_text":          body_text[:2000],
+            "locked":             1 if node.get("locked") else 0,
+            "locked_reason":      node.get("lockedReason") or "",
+            "is_pinned":          1 if node.get("isPinned") else 0,
+            "reactions_count":    (node.get("reactions") or {}).get("totalCount", 0),
             "participants_count": (node.get("participants") or {}).get("totalCount", 0),
-            "comments_count": (node.get("comments") or {}).get("totalCount", 0),
+            "comments_count":     (node.get("comments") or {}).get("totalCount", 0),
         }
     )
 
@@ -83,9 +87,27 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
         ]
     )
 
-    # Events: IssueCommentCreated
-    for comment in (node.get("comments") or {}).get("nodes", []):
-        _map_comment(comment, builder, repo_id, obj_id)
+    # NOTE: IssueCommentCreated events are NOT mapped here.
+    # All comments are fetched and mapped in Phase 2 (fetch_issue_comments)
+    # to avoid duplicate events and ensure full pagination coverage.
+
+
+def process_issue_comment(comment: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
+    """
+    Map a single Issue comment node to an IssueCommentCreated event.
+    Called from Phase 2 with fully paginated comment nodes.
+
+    The comment dict must have "__issue_number" injected by the fetcher.
+    """
+    issue_number = comment.get("__issue_number")
+    if not issue_number:
+        return
+
+    issue_id = make_id(repo_id, "issue", issue_number)
+    if not builder.object_exists(issue_id):
+        return
+
+    _map_comment(comment, builder, repo_id, issue_id)
 
 
 def _map_comment(
@@ -107,10 +129,10 @@ def _map_comment(
         event_type=Activities.ISSUE_COMMENT_CREATED,
         ts=ts,
         attributes={
-            "comment_id": comment_id,
-            "body_length": len(comment.get("body") or ""),
+            "comment_id":      comment_id,
+            "body_length":     len(comment.get("bodyText") or ""),
             "reactions_count": (comment.get("reactions") or {}).get("totalCount", 0),
-            "is_edited": 1 if comment.get("lastEditedAt") else 0,
+            "is_edited":       1 if comment.get("lastEditedAt") else 0,
         },
         relationships=[
             (issue_id, "target"),
@@ -118,20 +140,3 @@ def _map_comment(
             (author_id, "actor") if author_id else None,
         ]
     )
-
-def process_issue_comment(comment: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
-    """
-    Map a single Issue comment node to an IssueCommentCreated event.
-    Called from Phase 1b with fully paginated comment nodes.
-
-    The comment dict must have "__issue_number" injected by the fetcher.
-    """
-    issue_number = comment.get("__issue_number")
-    if not issue_number:
-        return
-
-    issue_id = make_id(repo_id, "issue", issue_number)
-    if not builder.object_exists(issue_id):
-        return
-
-    _map_comment(comment, builder, repo_id, issue_id)
