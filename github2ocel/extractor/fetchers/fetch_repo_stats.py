@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from shared.logger import get_logger
 from shared.ocel.model.models import ObjectInstance
 from github2ocel.client.github_client import GitHubClient
+from github2ocel.client.exceptions import FatalError
 from github2ocel.extractor.graphql.queries import REPO_STATS_QUERY
 from github2ocel.transform.model.model import RepoStats
 
@@ -45,8 +46,10 @@ def fetch_repo_stats(client: GitHubClient, repo_id: str) -> tuple[RepoStats, Obj
 
         # --- Build RepoStats (counts + metadata) ---
         stats = RepoStats(
-            # Counts
+            # Windowed counts (since filter applied where supported)
             issues        = repo.get("issues",       {}).get("totalCount", 0),
+            # Full history counts (for conservative page sizing)
+            all_issues    = repo.get("allIssues",    {}).get("totalCount", 0),
             pull_requests = repo.get("pullRequests", {}).get("totalCount", 0),
             discussions   = repo.get("discussions",  {}).get("totalCount", 0),
             releases      = repo.get("releases",     {}).get("totalCount", 0),
@@ -95,7 +98,8 @@ def fetch_repo_stats(client: GitHubClient, repo_id: str) -> tuple[RepoStats, Obj
 
         window_str = f"since={since_iso[:10]}" if since_iso else "full history"
         logger.info(
-            f"  [{window_str}] issues={stats.issues} prs={stats.pull_requests} "
+            f"  [{window_str}] issues={stats.issues} (total={stats.all_issues}) "
+            f"prs={stats.pull_requests} "
             f"commits={commits} (total={all_commits}) "
             f"discussions={stats.discussions} remaining_points={rl.get('remaining', '?')}"
         )
@@ -109,6 +113,9 @@ def fetch_repo_stats(client: GitHubClient, repo_id: str) -> tuple[RepoStats, Obj
 
         return stats, repo_obj
 
+    except FatalError:
+        # Auth failures, repo not found — no point continuing the pipeline
+        raise
     except Exception as e:
         logger.warning(f"[Adaptive] Failed to fetch stats: {e} — using defaults")
         fallback_obj = _build_repository_object(repo_id, RepoStats())
@@ -117,11 +124,14 @@ def fetch_repo_stats(client: GitHubClient, repo_id: str) -> tuple[RepoStats, Obj
 
 def _build_repository_object(repo_id: str, stats: RepoStats) -> ObjectInstance:
     """Constructs the Repository ObjectInstance from RepoStats metadata."""
-    now_ts = datetime.now(timezone.utc)
+
+    # Use the repo's last updated timestamp as the snapshot time so OCEL
+    # reflects when the state actually changed, not when extraction ran.
+    snapshot_ts = stats.updated_at or datetime.now(timezone.utc).isoformat()
 
     repo_obj = ObjectInstance(object_id=repo_id, object_type="Repository")
     repo_obj.add_snapshot(
-        time=now_ts,
+        time=snapshot_ts,
         attributes={
             "name":             stats.name_with_owner,
             "description":      stats.description,

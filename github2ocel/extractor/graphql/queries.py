@@ -271,6 +271,51 @@ query GetPullRequests(
 }
 """
 
+
+BRANCHES_QUERY = """
+query GetBranches(
+  $owner:    String!
+  $repo:     String!
+  $pageSize: Int!
+  $cursor:   String
+) {
+  repository(owner: $owner, name: $repo) {
+    refs(
+      refPrefix: "refs/heads/"
+      first: $pageSize
+      after: $cursor
+      orderBy: { field: ALPHABETICAL, direction: ASC }
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        name
+        target {
+          __typename
+          ... on Commit {
+            oid
+            committedDate
+            author { user { login } }
+          }
+        }
+        branchProtectionRule {
+          requiresApprovingReviews
+          requiredApprovingReviewCount
+          requiresStatusChecks
+          requiredStatusCheckContexts
+          requiresLinearHistory
+          allowsForcePushes
+          allowsDeletions
+          isAdminEnforced
+          requiresConversationResolution
+          requiresCodeOwnerReviews
+        }
+      }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}
+"""
 TAGS_QUERY = """
 query GetTags(
   $owner: String!
@@ -287,6 +332,7 @@ query GetTags(
     ) {
       pageInfo { hasNextPage endCursor }
       nodes {
+        id
         name
         target {
           __typename
@@ -294,15 +340,20 @@ query GetTags(
           ... on Commit {
             oid
             committedDate
-            author { user { login id } }
+            author {
+              name
+              email
+              user { login }
+            }
           }
           # Annotated tag -> has its own object with tagger info
           ... on Tag {
-            oid
             message
             tagger {
               date
-              user { login id }
+              name
+              email
+              user { login }
             }
             target {
               ... on Commit {
@@ -346,6 +397,7 @@ query GetMilestones(
         updatedAt
         closedAt
         progressPercentage
+        url
 
         creator { login }
 

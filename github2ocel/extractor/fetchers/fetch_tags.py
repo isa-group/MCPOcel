@@ -1,4 +1,5 @@
 from typing import Generator, Dict, Any
+
 from github2ocel.client.github_client import GitHubClient
 from github2ocel.client.paginator import paginate_nodes
 from github2ocel.extractor.graphql.queries import TAGS_QUERY
@@ -23,43 +24,51 @@ def fetch_tags(
         total=total,
         label="tags",
     ):
-        target = node.get("target") or {}
+        target   = node.get("target") or {}
         typename = target.get("__typename")
 
         if typename == "Commit":
             # Lightweight tag — points directly to a commit
-            author_node = (target.get("author") or {})
-            user_node   = author_node.get("user") or {}
-            login       = user_node.get("login")
-
+            author = target.get("author") or {}
+            user   = author.get("user") or {}
             yield {
-                "__type":     "Tag",
-                "name":       node.get("name"),
-                "date":       target.get("committedDate"),
-                "tagger":     {"login": login} if login else None,
-                "commit":     {"sha": target.get("oid")},
-                "message":    "",
+                "__type":       "Tag",
+                "id":           node.get("id"),
+                "name":         node.get("name"),
+                "date":         target.get("committedDate"),
+                "tagger": {
+                    "login": user.get("login"),
+                    "name":  author.get("name"),
+                    "email": author.get("email"),
+                },
+                "commit":       {"sha": target.get("oid")},
+                "message":      "",
                 "is_annotated": 0,
             }
 
         elif typename == "Tag":
             # Annotated tag — has its own metadata object
-            tagger_node  = target.get("tagger") or {}
-            user_node    = tagger_node.get("user") or {}
-            login        = user_node.get("login")
-            commit_sha   = (target.get("target") or {}).get("oid")
-
+            tagger = target.get("tagger") or {}
+            user   = tagger.get("user") or {}
+            commit = target.get("target") or {}
             yield {
-                "__type":     "Tag",
-                "name":       node.get("name"),
-                "date":       tagger_node.get("date"),
-                "tagger":     {"login": login} if login else None,
-                "commit":     {"sha": commit_sha},
-                "message":    target.get("message", ""),
+                "__type":       "Tag",
+                "id":           node.get("id"),
+                "name":         node.get("name"),
+                "date":         tagger.get("date"),
+                "tagger": {
+                    "login": user.get("login"),
+                    "name":  tagger.get("name"),
+                    "email": tagger.get("email"),
+                },
+                "commit":       {"sha": commit.get("oid")},
+                "message":      target.get("message", ""),
                 "is_annotated": 1,
             }
 
         else:
-            # Unknown target type — skip silently
-            logger.debug(f"[fetch_tags] Skipping tag '{node.get('name')}': unknown target type '{typename}'")
+            logger.debug(
+                f"[fetch_tags] Skipping tag '{node.get('name')}': "
+                f"unknown target type '{typename}'"
+            )
             continue
