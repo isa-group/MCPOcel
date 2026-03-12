@@ -14,9 +14,6 @@ from github2ocel.validate.validate_ocel import validate_ocel
 from github2ocel.utils.summary import print_pipeline_audit
 from github2ocel.utils.verify_extractor import verify_data_integrity
 
-# Output directory
-STORAGE_DIR = Path("./storage")
-
 
 def main() -> None:
     # logging
@@ -71,14 +68,15 @@ def main() -> None:
         logger.info(f"Exporting to JSON: {json_path}")
         exporter = OCEL2JsonExporter(db_path)
         exporter.export(json_path)
-
-        if json_path.exists():
-            logger.info(f"SUCCESS: JSON OCEL 2.0 ready ({json_path.stat().st_size / 1024 / 1024:.2f} MB)")
-
-
     except Exception as e:
         logger.error(f"Failed to export JSON: {e}", exc_info=True)
         sys.exit(1)
+
+    if not json_path.exists():
+        logger.critical(f"CRITICAL: JSON file not found after export at {json_path}")
+        sys.exit(1)
+
+    logger.info(f"SUCCESS: JSON OCEL 2.0 ready ({json_path.stat().st_size / 1024 / 1024:.2f} MB)")
 
     if validate_ocel(json_path):
         logger.info(f"VALIDATION SUCCESS: OCEL 2.0 file ready at {json_path}")
