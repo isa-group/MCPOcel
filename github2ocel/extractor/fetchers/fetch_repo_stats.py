@@ -102,7 +102,7 @@ def fetch_repo_stats(client: GitHubClient, repo_id: str) -> tuple[RepoStats, Obj
         logger.info(
             f"  repo metadata: {stats.name_with_owner} | "
             f"{'private' if stats.is_private else 'public'} | "
-            f"stats={stats.stars} | forks={stats.forks} | "
+            f"stars={stats.stars} | forks={stats.forks} | "
             f"lang={stats.primary_language or 'n/a'} | "
             f"branch={stats.default_branch}"
         )

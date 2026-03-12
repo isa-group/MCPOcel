@@ -12,7 +12,7 @@ def _ensure_object(
     raw_id: str,
     timestamp: str = None,
     attributes: Dict[str, Any] = None,
-    relationships: List[Dict[str, str]] = None,
+    relationships: List[tuple] = None,
     allow_update: bool = False,
 ) -> Optional[str]:
     """
@@ -83,28 +83,78 @@ def ensure_commit(
     repo_id: str,
     sha: str,
     timestamp: str = None,
-    message: str = "",
-    source: str = "rest"
 ) -> Optional[str]:
+    """
+    Stub commit — creates a minimal Commit object so that O2O relationships
+    (branch head, tag target, deployment SHA, workflow head_sha) can be
+    registered before the full commit data is available.
 
+    If the commit was already inserted as a stub or as a full object,
+    this is a no-op (allow_update=False).  The full enrichment happens
+    in ensure_commit_full(), called exclusively from process_commit_graphql
+    during Phase 4.
+    """
     if not sha:
         return None
 
     ts = safe_timestamp(timestamp, fallback="1970-01-01T00:00:00Z")
 
-    attrs = {
-        "sha": sha,
-        "source": source,
-    }
+    return _ensure_object(
+        builder=builder,
+        repo_id=repo_id,
+        obj_type="Commit",
+        raw_id=sha,
+        timestamp=ts,
+        attributes={"sha": sha},
+        relationships=[(repo_id, "belongs_to")]
+    )
 
-    if message:
-        analysis = parse_commit_message(message)
-        attrs.update({
-            "intent_type": analysis.get("commit_type", "unknown"),
-            "norm_compliant": int(analysis.get("is_strict_compliance", False)),
-            "is_breaking": int(analysis.get("is_breaking", False)),
-            "message_full": message[:500],
-        })
+
+def ensure_commit_full(
+    builder,
+    repo_id: str,
+    sha: str,
+    committed_date: str,
+    additions: int = 0,
+    deletions: int = 0,
+    changed_files: int = 0,
+    message: str = "",
+    author_login: str = "",
+) -> Optional[str]:
+    """
+    Full commit enrichment — writes the complete analytical snapshot.
+
+    Called exclusively from process_commit_graphql (Phase 4).
+    Uses allow_update=True so the rich snapshot is always written, even
+    if a stub was already inserted by process_branch / process_deployment /
+    process_workflow_run in earlier phases.
+
+    Because committedDate is used as ocel_time (different from the stub's
+    timestamp which was the deployment/branch observation time), the
+    composite PK (ocel_id, ocel_time, ocel_changed_field) is distinct and
+    the INSERT succeeds cleanly alongside the stub snapshot.
+    """
+    if not sha:
+        return None
+
+    ts = safe_timestamp(committed_date, fallback="1970-01-01T00:00:00Z")
+
+    analysis = parse_commit_message(message) if message else {}
+
+    attrs = {
+        "sha":              sha,
+        "source":           "graphql",
+        "additions":        additions,
+        "deletions":        deletions,
+        "changed_files":    changed_files,
+        "cc_type":          analysis.get("commit_type", ""),
+        "cc_scope":         analysis.get("scope", ""),
+        "cc_subject":       analysis.get("subject", "")[:255],
+        "cc_body_len":      analysis.get("body_length", 0),
+        "is_breaking":      int(analysis.get("is_breaking", False)),
+        "is_conventional":  int(analysis.get("is_conventional", False)),
+        "author_login":     author_login or "",
+    }
 
     return _ensure_object(
         builder=builder,
@@ -113,7 +163,8 @@ def ensure_commit(
         raw_id=sha,
         timestamp=ts,
         attributes=attrs,
-        relationships=[(repo_id, "belongs_to")]
+        relationships=[(repo_id, "belongs_to")],
+        allow_update=True,   # always write the full snapshot even over a stub
     )
 
 
@@ -206,7 +257,7 @@ def ensure_deployment(builder, repo_id: str, deployment: Dict[str, Any]) -> Opti
                    or str(deployment.get("sha") or ""),
             "description": str(deployment.get("description") or "")[:255],
         },
-        relationships=[(repo_id, "deployed_to")] 
+        relationships=[(repo_id, "deployed_to")]
     )
 
 
@@ -227,15 +278,13 @@ def ensure_team(builder, repo_id: str, team: Dict[str, Any]) -> Optional[str]:
 
 def _infer_qualifier_from_type(builder, obj_id: str) -> Optional[str]:
     """
-    Infers the O2O qualifier by looking up the object type in the DB.
-    Avoids hardcoding ID formats — works for any object type.
+    Infers the O2O qualifier from the object type.
+    Uses the builder's in-memory object_registry — no SQL needed.
+    Returns None if the object is not yet known (safe: relationship is skipped).
     """
-    builder.cursor.execute(
-        "SELECT ocel_type FROM object WHERE ocel_id = ?", (obj_id,)
-    )
-    row = builder.cursor.fetchone()
-    if not row:
-        logger.warning(f"Related object with ID {obj_id} not found in DB. Cannot infer qualifier.")
+    obj_type = builder.object_registry.get(obj_id)
+    if not obj_type:
+        logger.debug(f"[infer_qualifier] Object {obj_id} not in registry yet — skipping rel")
         return None
 
     qualifier_map = {
@@ -244,4 +293,4 @@ def _infer_qualifier_from_type(builder, obj_id: str) -> Optional[str]:
         "File":        "review_comment_on_file",
         "Repository":  "belongs_to",
     }
-    return qualifier_map.get(row[0])
+    return qualifier_map.get(obj_type)

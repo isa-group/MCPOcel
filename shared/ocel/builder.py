@@ -15,6 +15,11 @@ class OCELBuilder:
         self.registered_object_types: Set[str] = set()
         self.known_tables_columns: Dict[str, Set[str]] = {}
 
+        # In-memory mirror of the object table: object_id -> object_type
+        # Eliminates repeated SELECT calls from object_exists() and
+        # _infer_qualifier_from_type() — kept in sync by insert_object().
+        self.object_registry: Dict[str, str] = {}
+
         # Statistics
         self.stats = {"events": 0, "objects": 0, "relationships": 0}
 
@@ -167,6 +172,8 @@ class OCELBuilder:
         self.cursor.execute("INSERT OR IGNORE INTO object VALUES (?, ?)", (obj.id, obj.type))
         if self.cursor.rowcount > 0:
             self.stats["objects"] += 1
+        # Keep in-memory registry in sync (idempotent — type never changes for same id)
+        self.object_registry[obj.id] = obj.type
 
         # 2. Snapshots (Change History)
         for snap in obj.snapshots:
@@ -191,8 +198,7 @@ class OCELBuilder:
              self.stats["relationships"] += len(data)
 
     def object_exists(self, object_id: str) -> bool:
-        self.cursor.execute("SELECT 1 FROM object WHERE ocel_id = ?", (object_id,))
-        return self.cursor.fetchone() is not None
+        return object_id in self.object_registry
 
     def _print_stats(self):
         print(f"--- OCEL 2.0 Generation Completed ---")
