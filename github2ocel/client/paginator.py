@@ -1,37 +1,41 @@
 import time
-from typing import Generator, Dict, Any
+from typing import Generator, Dict, Any, Callable
 from github2ocel.client.github_client import GitHubClient
 from shared.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 def _paginate_connection(
     client: GitHubClient,
     query: str,
     variables: Dict[str, Any],
-    extract_container,
+    extract_container: Callable,
     total: int = 0,
     label: str = "nodes",
 ) -> Generator[Dict[str, Any], None, None]:
 
     vars_ = {
         "owner": client.owner,
-        "repo": client.repo,
+        "repo":  client.repo,
         "cursor": None,
         **variables
     }
 
-    cursor = None
-    page = 1
+    cursor    = None
+    page      = 1
     extracted = 0
 
     while True:
 
         vars_["cursor"] = cursor
 
-        response = client.graphql(query, vars_)
-
-        container = extract_container(response)
+        try:
+            response  = client.graphql(query, vars_)
+            container = extract_container(response)
+        except Exception as e:
+            logger.error(f"[paginator] Failed on page {page} ({label}): {e}")
+            raise
 
         nodes = container.get("nodes", [])
 
@@ -40,16 +44,18 @@ def _paginate_connection(
                 extracted += 1
                 yield node
 
-        page_info = container.get("pageInfo", {})
-
-        if not page_info.get("hasNextPage"):
-            break
-
+        page_info  = container.get("pageInfo", {})
+        has_next   = page_info.get("hasNextPage", False)
         new_cursor = page_info.get("endCursor")
 
-        if new_cursor == cursor:
-            logger.warning("Cursor stuck — stopping pagination")
+        if not has_next or not new_cursor:
+            logger.info(f"[paginator] {label}: completed — {extracted} nodes extracted")
             break
+
+        if new_cursor == cursor:
+            logger.warning(f"[paginator] Cursor stuck at {cursor} ({label}). Stopping.")
+            break
+
         if page % 10 == 0:
             gql       = client.rate_limiter.resources["graphql"]
             remaining = gql.get("remaining", "?")
@@ -57,14 +63,15 @@ def _paginate_connection(
             reset_ts  = gql.get("reset")
             reset_str = time.strftime("%H:%M:%S", time.localtime(reset_ts)) if reset_ts else "?"
             total_str = f"/{total}" if total else ""
-            log_fn = logger.info if total else logger.debug
+            log_fn    = logger.info if total else logger.debug
             log_fn(
                 f"[paginator] page={page} | {label}={extracted}{total_str} | "
                 f"cost={cost} pts_left={remaining} resets={reset_str}"
             )
 
         cursor = new_cursor
-        page += 1
+        page  += 1
+
 
 def paginate_nodes(
     client: GitHubClient,
@@ -73,75 +80,63 @@ def paginate_nodes(
     variables: Dict[str, Any],
     total: int = 0,
     label: str = "nodes",
-):
-    def extract(response):
-        repo = response["repository"]
-        if not repo:
-            raise RuntimeError("Repository not found in GraphQL response")
-        return repo[node_type]
+) -> Generator[Dict[str, Any], None, None]:
 
-    yield from _paginate_connection(
-        client,
-        query,
-        variables,
-        extract,
-        total=total,
-        label=label,
-    )
+    def extract(response):
+        repo = response.get("repository")
+        if not repo:
+            raise RuntimeError(f"'repository' missing in GraphQL response for {node_type}")
+        container = repo.get(node_type)
+        if container is None:
+            raise RuntimeError(f"'{node_type}' missing in repository response")
+        return container
+
+    yield from _paginate_connection(client, query, variables, extract, total=total, label=label)
+
 
 def paginate_commit_history(
     client: GitHubClient,
     query: str,
-    variables: Dict[str, Any]
-):
+    variables: Dict[str, Any],
+) -> Generator[Dict[str, Any], None, None]:
 
     def extract(response):
+        repo = response.get("repository")
+        if not repo:
+            raise RuntimeError("'repository' missing in GraphQL response")
+        default_ref = repo.get("defaultBranchRef")
+        if not default_ref:
+            raise RuntimeError("'defaultBranchRef' is None — repo may be empty or have no default branch")
+        return default_ref["target"]["history"]
 
-        return (
-            response
-            ["repository"]
-            ["defaultBranchRef"]
-            ["target"]
-            ["history"]
-        )
+    yield from _paginate_connection(client, query, variables, extract)
 
-    yield from _paginate_connection(
-        client,
-        query,
-        variables,
-        extract
-    )
 
 def paginate_nested(
-    client,
-    query,
-    parent_type,
-    parent_number,
-    nested_field,
+    client: GitHubClient,
+    query: str,
+    parent_type: str,
+    parent_number: int,
+    nested_field: str,
     number_var: str = None,
     page_size: int = 50,
-):
+) -> Generator[Dict[str, Any], None, None]:
 
     var_name = number_var or f"{parent_type}Number"
 
     vars_ = {
-        var_name: int(parent_number),
+        var_name:   int(parent_number),
         "pageSize": page_size,
-        "cursor": None
+        "cursor":   None,
     }
 
     def extract(response):
+        repo = response.get("repository")
+        if not repo:
+            raise RuntimeError(f"'repository' missing in GraphQL response for {parent_type}.{nested_field}")
+        parent = repo.get(parent_type)
+        if not parent:
+            raise RuntimeError(f"'{parent_type}' missing in repository response")
+        return parent[nested_field]
 
-        return (
-            response
-            ["repository"]
-            [parent_type]
-            [nested_field]
-        )
-
-    yield from _paginate_connection(
-        client,
-        query,
-        vars_,
-        extract
-    )
+    yield from _paginate_connection(client, query, vars_, extract)

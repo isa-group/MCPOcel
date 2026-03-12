@@ -1,6 +1,6 @@
 import time
 import requests
-from typing import Dict, Any, Optional, Generator
+from typing import Dict, Any, Optional, Generator, NoReturn
 
 from github2ocel.config.context import RepoContext
 
@@ -8,7 +8,7 @@ from .rate_limiter import RateLimiter
 from .retry import RetryStrategy
 from .exceptions import (
     GraphQLError, AuthenticationError, NotFoundError,
-    ServerError, PermissionError, RateLimitError, NetworkError
+    ServerError, GitHubPermissionError, RateLimitError, NetworkError
 )
 from shared.logger import get_logger
 
@@ -31,13 +31,16 @@ class GitHubClient:
 
         self.rate_limiter = RateLimiter()
         self.retry        = RetryStrategy(self.config)
-
     @classmethod
     def from_context(cls, ctx: RepoContext) -> "GitHubClient":
+        """
+        Factory method — constructs a client from a RepoContext.
+        Preferred over direct instantiation: allows pre-construction
+        validation and is easier to mock in tests.
+        """
         return cls(ctx)
 
 
-    # Internal helpers
     def _check_status_code(self, response: requests.Response) -> None:
         """Centralised HTTP error handling — raises the correct exception."""
         code = response.status_code
@@ -52,7 +55,7 @@ class GitHubClient:
             msg = response.text.lower()
             if "rate limit" in msg or "secondary" in msg:
                 raise RateLimitError("Secondary rate limit (403)", resource="core")
-            raise PermissionError("Permission denied (403)")
+            raise GitHubPermissionError("Permission denied (403)")
 
         if code == 404:
             raise NotFoundError(f"Resource not found (404): {response.url}")
@@ -172,15 +175,12 @@ class GitHubClient:
     def close(self) -> None:
         self.session.close()
 
-    def _handle_request_error(self, e: Exception) -> None:
-        """Convert request errors in our hierarchy."""
+    def _handle_request_error(self, e: Exception) -> NoReturn:
+        """Convert request errors into our exception hierarchy. Always raises."""
         if isinstance(e, requests.Timeout):
             raise NetworkError(f"Timeout: {e}")
         if isinstance(e, requests.ConnectionError):
             raise NetworkError(f"Connection Error: {e}")
-        # If it is already one of our exceptions, let it pass.
         if isinstance(e, requests.exceptions.ChunkedEncodingError):
-            # This is a temporary network error/server overload.
             raise NetworkError(f"Server Connection Broken (ChunkedEncodingError): {e}")
-
         raise e

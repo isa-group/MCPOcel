@@ -1,5 +1,5 @@
 # shared
-from shared.logger import  get_logger
+from shared.logger import get_logger
 from typing import Dict, Tuple
 # github2ocel
 from github2ocel.config.context import RepoContext
@@ -25,7 +25,8 @@ def run_extractor(
         "reviews": 0, "timeline_events": 0,
         "commits": 0,
         "deployments": 0, "workflow_runs": 0, "workflow_jobs": 0,
-        "releases": 0, "discussions": 0, "overflow_prs": 0,
+        "releases": 0, "discussions": 0,
+        "overflow_prs": 0,  # PRs truncated by max_pages limit — incremented by orchestrator
     }
 
     try:
@@ -34,11 +35,12 @@ def run_extractor(
         logger.critical(f"Failed to initialise GitHubClient: {e}")
         return stats, False
 
-    orchestrator = Orchestrator(client, builder, repo_id, stats)
-    success = orchestrator.run()
-
-    client.print_rate_limit_stats()
-    client.close()
+    try:
+        orchestrator = Orchestrator(client, builder, repo_id, stats)
+        success = orchestrator.run()
+    finally:
+        client.print_rate_limit_stats()
+        client.close()
 
     logger.info(f"Extractor {'OK' if success else 'FAILED'}")
     return stats, success

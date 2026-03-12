@@ -35,8 +35,10 @@ class NotFoundError(FatalError):
     """404 - repo/resource doesn't exist."""
     pass
 
-class PermissionError(FatalError):
-    """403 - insufficient permissions."""
+class GitHubPermissionError(FatalError):
+    """403 - insufficient permissions.
+    Named GitHubPermissionError to avoid shadowing Python's builtin PermissionError.
+    """
     pass
 
 # GRAPHQL
@@ -48,5 +50,6 @@ class GraphQLError(GitHubAPIError):
 
     @property
     def is_retryable(self) -> bool:
-        # Common temporary errors in GitHub GraphQL
-        return self.error_type in ["RATE_LIMITED", "somethings_wrong", "loading"]
+        # RATE_LIMITED is handled by RateLimiter.update_from_graphql_errors() which
+        # waits until the reset window before returning — no retry needed here.
+        return self.error_type in ["somethings_wrong", "loading"]

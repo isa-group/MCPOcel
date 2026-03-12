@@ -16,10 +16,6 @@ class RetryStrategy:
         self.backoff_min = config.retry_backoff_min
         self.backoff_max = config.retry_backoff_max
 
-    def __iter__(self):
-        for attempt in range(1, self.max_retries + 1):
-            yield attempt
-
     def sleep(self, attempt: int) -> None:
         wait = min(
             self.backoff_max,
@@ -38,7 +34,7 @@ class RetryStrategy:
 
         Raises the last exception if all attempts are exhausted.
         """
-        last_exc: Exception = None
+        last_exc: Exception = RuntimeError("RetryStrategy.run called with max_retries=0")
 
         for attempt in range(1, self.max_retries + 1):
             try:
