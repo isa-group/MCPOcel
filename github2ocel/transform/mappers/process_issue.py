@@ -35,7 +35,7 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
             "body_length":        len(body_text),
             "body_text":          body_text[:2000],
             "locked":             1 if node.get("locked") else 0,
-            "locked_reason":      node.get("lockedReason") or "",
+            "locked_reason":      node.get("activeLockReason") or "",
             "is_pinned":          1 if node.get("isPinned") else 0,
             "reactions_count":    (node.get("reactions") or {}).get("totalCount", 0),
             "participants_count": (node.get("participants") or {}).get("totalCount", 0),

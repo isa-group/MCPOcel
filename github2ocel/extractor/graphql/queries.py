@@ -78,7 +78,7 @@ query GetIssues(
 
         # State flags
         locked
-        lockedReason
+        activeLockReason
         isPinned
 
         # Metrics
@@ -144,7 +144,7 @@ query GetPullRequests(
         state
         isDraft
         locked
-        lockedReason
+        activeLockReason
         createdAt
         updatedAt
         closedAt

@@ -14,7 +14,13 @@ def _paginate_connection(
     total: int = 0,
     label: str = "nodes",
 ) -> Generator[Dict[str, Any], None, None]:
+    """
+    Core pagination loop.
 
+    Logging philosophy: the paginator is infrastructure — it stays silent unless
+    something noteworthy happens (multi-page progress, stuck cursor, errors).
+    Per-entity summary logs belong in the fetcher or orchestrator, not here.
+    """
     vars_ = {
         "owner": client.owner,
         "repo":  client.repo,
@@ -49,13 +55,16 @@ def _paginate_connection(
         new_cursor = page_info.get("endCursor")
 
         if not has_next or not new_cursor:
-            logger.info(f"[paginator] {label}: completed — {extracted} nodes extracted")
+            # Only log completion if it took more than one page — single-page calls are noise
+            if page > 1:
+                logger.debug(f"[paginator] {label}: {page} pages, {extracted} nodes")
             break
 
         if new_cursor == cursor:
             logger.warning(f"[paginator] Cursor stuck at {cursor} ({label}). Stopping.")
             break
 
+        # Progress heartbeat every 10 pages for long-running extractions
         if page % 10 == 0:
             gql       = client.rate_limiter.resources["graphql"]
             remaining = gql.get("remaining", "?")
@@ -63,9 +72,8 @@ def _paginate_connection(
             reset_ts  = gql.get("reset")
             reset_str = time.strftime("%H:%M:%S", time.localtime(reset_ts)) if reset_ts else "?"
             total_str = f"/{total}" if total else ""
-            log_fn    = logger.info if total else logger.debug
-            log_fn(
-                f"[paginator] page={page} | {label}={extracted}{total_str} | "
+            logger.info(
+                f"[paginator] {label} page={page} | {extracted}{total_str} nodes | "
                 f"cost={cost} pts_left={remaining} resets={reset_str}"
             )
 
