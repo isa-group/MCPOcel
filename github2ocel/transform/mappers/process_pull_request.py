@@ -2,7 +2,7 @@ from typing import Dict, Any
 from shared.ocel.builder import OCELBuilder
 from shared.ocel.model.models import ObjectInstance
 from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
-from github2ocel.transform.utils.ensure import ensure_user, ensure_label
+from github2ocel.transform.utils.ensure import ensure_user, ensure_label, ensure_commit
 from github2ocel.transform.utils.activity import Activities
 from shared.logger import get_logger
 
@@ -201,8 +201,10 @@ def process_pr_commit_link(pr_number: int, oid: str, builder: OCELBuilder, repo_
     """
     Create PullRequest ──contains_commit──► Commit O2O link.
 
-    Called from Phase 4 (process_commit_graphql) AFTER both the PullRequest
-    and Commit objects have been inserted, so object_exists() checks are valid.
+    Called from Phase 4 (process_commit_graphql) after the Commit object exists.
+    If the Commit is a feature-branch commit that was never inserted as a stub
+    (not a branch head, deployment SHA, or workflow head_sha), we create a minimal
+    stub here so the O2O is never silently dropped.
 
     Args:
         pr_number:  PR number from the _commit_pr_map built in Phase 2.
@@ -210,10 +212,15 @@ def process_pr_commit_link(pr_number: int, oid: str, builder: OCELBuilder, repo_
         builder:    OCEL builder.
         repo_id:    Repository object ID.
     """
-    pr_id     = make_id(repo_id, "pr", pr_number)
-    commit_id = make_id(repo_id, "commit", oid)
+    pr_id = make_id(repo_id, "pr", pr_number)
+    if not builder.object_exists(pr_id):
+        return
 
-    if not builder.object_exists(pr_id) or not builder.object_exists(commit_id):
+    # Ensure commit exists — create a minimal stub if it hasn't been seen before.
+    # Full enrichment happens in process_commit_graphql for default-branch commits;
+    # feature-branch commits only get the stub (no CommitCreated event).
+    commit_id = ensure_commit(builder, repo_id, oid)
+    if not commit_id:
         return
 
     proxy = ObjectInstance(object_id=pr_id, object_type="PullRequest")
