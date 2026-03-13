@@ -32,7 +32,7 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
             "state":              node.get("state", "OPEN"),
             "is_draft":           int(node.get("isDraft", False)),
             "locked":             1 if node.get("locked") else 0,
-            "locked_reason":      node.get("lockedReason") or "",
+            "locked_reason":      node.get("activeLockReason") or "",
             "merged":             int(node.get("merged", False)),
             "url":                node.get("url", ""),
             "head_ref":           node.get("headRefName", ""),
