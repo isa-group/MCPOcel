@@ -42,6 +42,7 @@ from github2ocel.transform.mappers import (
     process_issue_comment,
     process_pull_request,
     process_pr_comment,
+    process_pr_commit_link,
     process_review,
     process_timeline_event,
     process_commit_graphql,
@@ -266,6 +267,19 @@ class Orchestrator:
             if node.get("oid"):
                 self._commit_shas.append(node["oid"])
         logger.info(f"  commits={self.stats['commits']} (SHAs queued for Phase 4b: {len(self._commit_shas)})")
+
+        # Feature-branch commits in commit_pr_map were never processed by
+        # process_commit_graphql (Phase 4 only walks the default branch).
+        # Create their PR→Commit O2O links directly — process_pr_commit_link
+        # will insert a minimal stub if the commit doesn't exist yet.
+        unprocessed = set(self._commit_pr_map.keys()) - set(self._commit_shas)
+        linked = 0
+        for oid in unprocessed:
+            for pr_number in self._commit_pr_map[oid]:
+                process_pr_commit_link(pr_number, oid, self.builder, self.repo_id)
+                linked += 1
+        if unprocessed:
+            logger.info(f"  feature-branch commit links: {linked} links for {len(unprocessed)} OIDs")
 
     # Phase 4b: file enrichment via REST (COMPLETE profile only)
     def _phase4b_commit_files(self):
