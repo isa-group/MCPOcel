@@ -361,13 +361,11 @@ query GetIssueComments(
       number
       comments(first: $pageSize, after: $cursor) {
         pageInfo { hasNextPage endCursor }
-        totalCount
         nodes {
           id
           createdAt
           lastEditedAt
           bodyText
-          body
           author { login }
           reactions(first: 1) { totalCount }
         }
@@ -392,13 +390,11 @@ query GetPRComments(
       number
       comments(first: $pageSize, after: $cursor) {
         pageInfo { hasNextPage endCursor }
-        totalCount
         nodes {
           id
           createdAt
           lastEditedAt
           bodyText
-          body
           author { login }
           reactions(first: 1) { totalCount }
         }
@@ -845,16 +841,16 @@ query GetCommits(
               changedFilesIfAvailable
 
               # Author / committer
+              authoredDate
               author {
                 name
                 email
-                date
-                user { login id }
+                user { login }
               }
               committer {
                 name
-                date
-                user { login id }
+                email
+                user { login }
               }
 
               # Signature
@@ -863,11 +859,8 @@ query GetCommits(
                 signer { login }
               }
 
-              # Merge detection
-              parents(first: 3) {
-                totalCount
-                nodes { oid }
-              }
+              # Merge detection (totalCount > 1 = merge commit)
+              parents(first: 1) { totalCount }
 
               # PR association (→ Commit–PR O2O)
               associatedPullRequests(first: 5) {
@@ -877,25 +870,14 @@ query GetCommits(
                 }
               }
 
-              # CI checks on this commit
+              # CI suite summary — detail lives in WorkflowRun/Job objects (Phase 6)
+              # workflowRun.databaseId links to the WorkflowRun object via make_id(repo_id, "workflow", databaseId)
               checkSuites(first: 3) {
                 nodes {
                   conclusion
                   status
                   workflowRun {
                     databaseId
-                    event
-                    workflow { name }
-                  }
-                  checkRuns(first: 10) {
-                    nodes {
-                      id
-                      name
-                      status
-                      conclusion
-                      startedAt
-                      completedAt
-                    }
                   }
                 }
               }

@@ -120,6 +120,10 @@ def ensure_commit_full(
     changed_files: int = 0,
     message: str = "",
     author_login: str = "",
+    authored_date: str = "",
+    committer_login: str = "",
+    is_merge_commit: bool = False,
+    analysis: dict = None,
 ) -> Optional[str]:
     """
     Full commit enrichment — writes the complete analytical snapshot.
@@ -133,13 +137,18 @@ def ensure_commit_full(
     timestamp which was the deployment/branch observation time), the
     composite PK (ocel_id, ocel_time, ocel_changed_field) is distinct and
     the INSERT succeeds cleanly alongside the stub snapshot.
+
+    Args:
+        analysis: pre-computed parse_commit_message result — avoids double parsing
+                  when the caller already has it. Computed here if not provided.
     """
     if not sha:
         return None
 
     ts = safe_timestamp(committed_date, fallback="1970-01-01T00:00:00Z")
 
-    analysis = parse_commit_message(message) if message else {}
+    if analysis is None:
+        analysis = parse_commit_message(message) if message else {}
 
     attrs = {
         "sha":              sha,
@@ -147,13 +156,16 @@ def ensure_commit_full(
         "additions":        additions,
         "deletions":        deletions,
         "changed_files":    changed_files,
+        "authored_date":    safe_timestamp(authored_date) if authored_date else ts,
+        "author_login":     author_login or "",
+        "committer_login":  committer_login or "",
+        "is_merge_commit":  int(is_merge_commit),
         "cc_type":          analysis.get("commit_type", ""),
         "cc_scope":         analysis.get("scope", ""),
         "cc_subject":       analysis.get("subject", "")[:255],
         "cc_body_len":      analysis.get("body_length", 0),
         "is_breaking":      int(analysis.get("is_breaking", False)),
         "is_conventional":  int(analysis.get("is_conventional", False)),
-        "author_login":     author_login or "",
     }
 
     return _ensure_object(

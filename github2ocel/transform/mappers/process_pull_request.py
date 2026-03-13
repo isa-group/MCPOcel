@@ -182,9 +182,10 @@ def _map_comment(
         event_type=Activities.PR_COMMENT_CREATED,
         ts=ts,
         attributes={
-            "comment_id":  comment["id"],
-            "body_length": len(comment.get("bodyText") or ""),
-            "is_edited":   1 if comment.get("lastEditedAt") else 0,
+            "comment_id":      comment["id"],
+            "body_length":     len(comment.get("bodyText") or ""),
+            "reactions_count": (comment.get("reactions") or {}).get("totalCount", 0),
+            "is_edited":       1 if comment.get("lastEditedAt") else 0,
         },
         relationships=[
             (pr_id,     "target"),
@@ -196,31 +197,28 @@ def _map_comment(
 
 # Phase 2: standalone mappers (called from fetch_pr_commits / fetch_pr_comments)
 
-def process_pr_commit_link(link: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
+def process_pr_commit_link(pr_number: int, oid: str, builder: OCELBuilder, repo_id: str) -> None:
     """
-    Create PullRequest -> Commit O2O link.
+    Create PullRequest ──contains_commit──► Commit O2O link.
 
-    Called from Phase 2. At this point Commit objects don't exist yet (Phase 4),
-    so most links won't resolve here. The reverse link (commit -> PR) is handled
-    by process_commit_graphql in Phase 4 via associatedPullRequests.
-    We still attempt the forward link in case a commit was already inserted.
+    Called from Phase 4 (process_commit_graphql) AFTER both the PullRequest
+    and Commit objects have been inserted, so object_exists() checks are valid.
+
+    Args:
+        pr_number:  PR number from the _commit_pr_map built in Phase 2.
+        oid:        Commit SHA.
+        builder:    OCEL builder.
+        repo_id:    Repository object ID.
     """
-    pr_number = link.get("__pr_number")
-    oid       = link.get("oid")
-    if not pr_number or not oid:
-        return
-
     pr_id     = make_id(repo_id, "pr", pr_number)
     commit_id = make_id(repo_id, "commit", oid)
 
-    if not builder.object_exists(pr_id):
+    if not builder.object_exists(pr_id) or not builder.object_exists(commit_id):
         return
 
-    if builder.object_exists(commit_id):
-        from shared.ocel.model.models import ObjectInstance as _OI
-        proxy = _OI(object_id=pr_id, object_type="PullRequest")
-        proxy.add_rel(commit_id, "contains_commit")
-        builder.insert_object(proxy)
+    proxy = ObjectInstance(object_id=pr_id, object_type="PullRequest")
+    proxy.add_rel(commit_id, "contains_commit")
+    builder.insert_object(proxy)
 
 
 def process_pr_comment(comment: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
