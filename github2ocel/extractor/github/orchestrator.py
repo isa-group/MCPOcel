@@ -1,5 +1,5 @@
 import time
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from github2ocel.extractor.fetchers.utils.compute_page_sizes import compute_page_sizes
 from github2ocel.transform.model.model import PageSizes, RepoStats
@@ -42,7 +42,6 @@ from github2ocel.transform.mappers import (
     process_issue_comment,
     process_pull_request,
     process_pr_comment,
-    process_pr_commit_link,
     process_review,
     process_timeline_event,
     process_commit_graphql,
@@ -77,6 +76,11 @@ class Orchestrator:
 
         # Collected commit SHAs for file enrichment (Phase 4b)
         self._commit_shas: List[str] = []
+
+        # oid → pr_number map built in Phase 2, consumed in Phase 4
+        # Allows process_commit_graphql to create PR→Commit O2O without
+        # relying on object_exists() checks that fail due to phase ordering.
+        self._commit_pr_map: Dict[str, List[int]] = {}
 
         # PRs/Issues that exceeded embedded limits → need overflow pagination
         self._overflow_pr_reviews:   List[int] = []
@@ -209,11 +213,19 @@ class Orchestrator:
             self.stats["issue_comments"] += 1
         logger.info(f"  issue_comments={self.stats['issue_comments']}")
 
-        # PR commit OIDs — for PullRequest -> Commit O2O links
+        # PR commit OIDs — build oid→pr_number map for Phase 4 (Commit→PR O2O)
+        # process_pr_commit_link is intentionally not called here: Commit objects
+        # don't exist yet (Phase 4), so object_exists() checks would all fail.
+        # The map is passed to process_commit_graphql in Phase 4 instead.
         for link in fetch_pr_commits(self.client, self._pr_numbers, page_size=self._ps.pr_commits):
-            process_pr_commit_link(link, self.builder, self.repo_id)
+            oid = link.get("oid")
+            pr_number = link.get("__pr_number")
+            if oid and pr_number:
+                self._commit_pr_map.setdefault(oid, [])
+                if pr_number not in self._commit_pr_map[oid]:
+                    self._commit_pr_map[oid].append(pr_number)
             self.stats["pr_commit_links"] += 1
-        logger.info(f"  pr_commit_links={self.stats['pr_commit_links']}")
+        logger.info(f"  pr_commit_links={self.stats['pr_commit_links']} ({len(self._commit_pr_map)} unique OIDs mapped)")
 
         # PR comments — fully paginated
         for comment in fetch_pr_comments(self.client, self._pr_numbers, page_size=self._ps.pr_comments):
@@ -249,7 +261,7 @@ class Orchestrator:
     # Phase 4: commits
     def _phase4_commits(self):
         for node in fetch_commits(self.client, page_size=self._ps.commits):
-            process_commit_graphql(node, self.builder, self.repo_id)
+            process_commit_graphql(node, self.builder, self.repo_id, self._commit_pr_map)
             self.stats["commits"] += 1
             if node.get("oid"):
                 self._commit_shas.append(node["oid"])
