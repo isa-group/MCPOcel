@@ -8,6 +8,7 @@ from .fetch_issue_comments import fetch_issue_comments
 from .fetch_pr_comments import fetch_pr_comments
 from .fetch_pr_commits import fetch_pr_commits
 from .fetch_pr_reviews import fetch_pr_reviews
+from .fetch_pr_threads import fetch_pr_threads
 from .fetch_timeline import fetch_issue_timeline, fetch_pr_timeline
 from .fetch_commits import fetch_commits
 from .fetch_deployments import fetch_deployments
@@ -27,6 +28,7 @@ __all__ = [
     "fetch_pr_comments",
     "fetch_pr_commits",
     "fetch_pr_reviews",
+    "fetch_pr_threads",
     "fetch_issue_timeline",
     "fetch_pr_timeline",
     "fetch_commits",

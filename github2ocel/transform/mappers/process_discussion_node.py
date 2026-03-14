@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any
 from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.mappers.process_discussion import process_discussion
-from github2ocel.transform.mappers.process_discussion_comment import process_discussion_comment
+from github2ocel.transform.mappers.process_comment import map_discussion_comment
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,14 @@ def process_discussion_node(node: Dict[str, Any], builder: OCELBuilder, repo_id:
             for comment in comments_data["nodes"]:
                 if not comment:
                     continue
-                process_discussion_comment(comment, builder, repo_id, discussion_id)
+                comment_id = map_discussion_comment(comment, builder, repo_id, discussion_id)
+                # Map replies (second-level comments in discussions)
+                for reply in (comment.get("replies") or {}).get("nodes", []):
+                    if reply:
+                        map_discussion_comment(
+                            reply, builder, repo_id, discussion_id,
+                            parent_comment_id=comment.get("id")
+                        )
 
     except Exception as e:
         logger.critical(f"Unexpected error processing Discussion: {e}", exc_info=True)

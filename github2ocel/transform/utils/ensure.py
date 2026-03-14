@@ -191,59 +191,49 @@ def ensure_file(builder, repo_id: str, filename: str, timestamp: str = None) -> 
     )
 
 
-def ensure_comment(builder, repo_id: str, comment: Dict[str, Any]) -> Optional[str]:
-    if not comment:
+def ensure_comment(
+    builder,
+    repo_id: str,
+    comment_id: str,
+    comment_type: str,
+    created_at: str,
+    attributes: Dict[str, Any] = None,
+    relationships: List[tuple] = None,
+) -> Optional[str]:
+    """
+    Upsert a Comment object — merges attributes from multiple sources.
+
+    Uses allow_update=True so the same comment can be enriched progressively:
+      - Phase 2: IssueComment / PRComment (basic fields)
+      - Phase 3: ReviewComment from PR_REVIEWS_QUERY (adds path, line, diffHunk)
+      - Phase 3: ReviewComment from PR_THREADS_QUERY (adds replyTo, outdated, thread context)
+      - Phase 7: DiscussionComment (adds isAnswer)
+
+    The GitHub node ID is globally unique — no risk of collision across types.
+
+    Args:
+        comment_id:   GitHub node ID (e.g. "IC_kwDO...", "PRRC_kwDO...", "DC_kwDO...")
+        comment_type: "issue" | "pr" | "review" | "discussion"
+        created_at:   ISO timestamp string
+        attributes:   snapshot attributes to merge (type-specific fields)
+        relationships: O2O relationships to register
+    """
+    if not comment_id:
         return None
 
-    raw_id = comment.get("id") or comment.get("createdAt")
-
-    created_at = safe_timestamp(comment.get("createdAt"))
-    updated_at = safe_timestamp(comment.get("lastEditedAt"), fallback=created_at)
-    effective_time = updated_at or created_at
+    base_attrs = {"comment_type": comment_type}
+    if attributes:
+        base_attrs.update(attributes)
 
     return _ensure_object(
         builder=builder,
         repo_id=repo_id,
         obj_type="Comment",
-        raw_id=raw_id,
-        timestamp=effective_time,
-        attributes={
-            "body": comment.get("body", "")[:500],
-            "created_at": created_at,
-            "status": "created" if created_at == updated_at else "edited"
-        }
-    )
-
-def ensure_review_comment(
-    builder,
-    repo_id: str,
-    comment: Dict[str, Any],
-    related_ids: List[str] = None
-) -> Optional[str]:
-    if not comment or not comment.get("id"):
-        logger.warning(f"Review comment missing id, skipping. Comment data: {comment}")
-        return None
-
-    created_at = comment.get("createdAt") or comment.get("created_at")
-
-    relationships = []
-    for obj_id in (related_ids or []):
-        qualifier = _infer_qualifier_from_type(builder, obj_id)
-        if qualifier:
-            relationships.append((obj_id, qualifier))
-
-    return _ensure_object(
-        builder=builder,
-        repo_id=repo_id,
-        obj_type="ReviewComment",
-        raw_id=comment["id"],
-        timestamp=created_at,
-        attributes={
-            "path": comment.get("path", ""),
-            "position": int(comment.get("position", 0) or 0),
-            "body": comment.get("body", "")[:500]
-        },
-        relationships=relationships if relationships else None
+        raw_id=comment_id,
+        timestamp=safe_timestamp(created_at, fallback="1970-01-01T00:00:00Z"),
+        attributes=base_attrs,
+        relationships=relationships or [],
+        allow_update=True,  # upsert — multiple sources enrich the same object
     )
 
 def ensure_deployment(builder, repo_id: str, deployment: Dict[str, Any]) -> Optional[str]:

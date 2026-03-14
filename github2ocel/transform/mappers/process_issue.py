@@ -4,6 +4,7 @@ from shared.ocel.model.models import ObjectInstance
 from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
 from github2ocel.transform.utils.ensure import ensure_user, ensure_label
 from github2ocel.transform.utils.activity import Activities
+from github2ocel.transform.mappers.process_comment import map_issue_comment
 from shared.logger import get_logger
 
 logger = get_logger(__name__)
@@ -94,9 +95,8 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
 
 def process_issue_comment(comment: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     """
-    Map a single Issue comment node to an IssueCommentCreated event.
+    Map a single Issue comment to a Comment object + CommentCreated event.
     Called from Phase 2 with fully paginated comment nodes.
-
     The comment dict must have "__issue_number" injected by the fetcher.
     """
     issue_number = comment.get("__issue_number")
@@ -107,36 +107,4 @@ def process_issue_comment(comment: Dict[str, Any], builder: OCELBuilder, repo_id
     if not builder.object_exists(issue_id):
         return
 
-    _map_comment(comment, builder, repo_id, issue_id)
-
-
-def _map_comment(
-    comment: Dict[str, Any],
-    builder: OCELBuilder,
-    repo_id: str,
-    issue_id: str,
-) -> None:
-    comment_id = comment.get("id")
-    if not comment_id:
-        return
-
-    ts = safe_timestamp(comment.get("createdAt"))
-    author_login = (comment.get("author") or {}).get("login")
-    author_id = ensure_user(builder, repo_id, author_login, timestamp=ts) if author_login else None
-
-    create_event(
-        builder=builder,
-        event_type=Activities.ISSUE_COMMENT_CREATED,
-        ts=ts,
-        attributes={
-            "comment_id":      comment_id,
-            "body_length":     len(comment.get("bodyText") or ""),
-            "reactions_count": (comment.get("reactions") or {}).get("totalCount", 0),
-            "is_edited":       1 if comment.get("lastEditedAt") else 0,
-        },
-        relationships=[
-            (issue_id, "target"),
-            (repo_id, "context"),
-            (author_id, "actor") if author_id else None,
-        ]
-    )
+    map_issue_comment(comment, builder, repo_id, issue_id)
