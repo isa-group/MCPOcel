@@ -1,4 +1,3 @@
-
 from typing import Dict, Any, Optional
 from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
@@ -243,7 +242,7 @@ def _handle_closed(item, builder, repo_id, parent_id, is_pr):
 def _handle_reopened(item, builder, repo_id, parent_id, is_pr):
     ts = safe_timestamp(item["createdAt"])
     actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
-    activity = Activities.ISSUE_REOPENED  # same for PRs conceptually
+    activity = Activities.PR_REOPENED if is_pr else Activities.ISSUE_REOPENED
 
     create_event(
         builder=builder, event_type=activity, ts=ts,

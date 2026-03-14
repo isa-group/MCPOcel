@@ -25,6 +25,7 @@ from github2ocel.extractor.fetchers import (
     fetch_pr_reviews,
     fetch_issue_timeline,
     fetch_pr_timeline,
+    fetch_pr_threads,
     fetch_commits,
     fetch_deployments,
     fetch_workflow_runs,
@@ -44,6 +45,7 @@ from github2ocel.transform.mappers import (
     process_pr_comment,
     process_pr_commit_link,
     process_review,
+    process_review_thread,
     process_timeline_event,
     process_commit_graphql,
     process_deployment,
@@ -239,8 +241,9 @@ class Orchestrator:
     def _phase3_dependent(self):
 
         if self._flags["withReviews"]:
+            with_rc = self._flags.get("withReviewComments", False)
             for review in fetch_pr_reviews(self.client, self._pr_numbers, page_size=self._ps.pr_reviews):
-                process_review(review, self.builder, self.repo_id)
+                process_review(review, self.builder, self.repo_id, with_review_comments=with_rc)
                 self.stats["reviews"] += 1
             logger.info(f"  reviews={self.stats['reviews']}")
         else:
@@ -258,6 +261,15 @@ class Orchestrator:
             logger.info(f"  timeline_events={self.stats['timeline_events']}")
         else:
             logger.info("  timeline=SKIPPED (profile)")
+
+        if self._flags.get("withThreads", False):
+            threads_resolved = 0
+            for thread in fetch_pr_threads(self.client, self._pr_numbers):
+                process_review_thread(thread, self.builder, self.repo_id)
+                threads_resolved += 1
+            logger.info(f"  review_threads={threads_resolved}")
+        else:
+            logger.info("  review_threads=SKIPPED (profile)")
 
     # Phase 4: commits
     def _phase4_commits(self):

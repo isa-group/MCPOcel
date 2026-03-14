@@ -4,6 +4,7 @@ from shared.ocel.model.models import ObjectInstance
 from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
 from github2ocel.transform.utils.ensure import ensure_user, ensure_label, ensure_commit
 from github2ocel.transform.utils.activity import Activities
+from github2ocel.transform.mappers.process_comment import map_pr_comment
 from shared.logger import get_logger
 
 logger = get_logger(__name__)
@@ -108,41 +109,9 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
         ]
     )
 
-    # Event: PRMerged
-    if node.get("merged") and merged_at:
-        merger_login = (node.get("mergedBy") or {}).get("login")
-        merger_id = ensure_user(builder, repo_id, merger_login, timestamp=merged_at) if merger_login else None
-
-        create_event(
-            builder=builder,
-            event_type=Activities.PR_MERGED,
-            ts=merged_at,
-            attributes={
-                "merge_ref": node.get("headRefName", ""),
-                "additions": node.get("additions", 0),
-                "deletions": node.get("deletions", 0),
-            },
-            relationships=[
-                (obj_id,          "subject"),
-                (repo_id,         "context"),
-                (merger_id,       "actor")       if merger_id else None,
-                (base_branch_id,  "merged_into") if builder.object_exists(base_branch_id) else None,
-            ]
-        )
-
-    # Event: PRClosed (without merge)
-    elif node.get("state") == "CLOSED" and closed_at:
-        create_event(
-            builder=builder,
-            event_type=Activities.PR_CLOSED,
-            ts=closed_at,
-            attributes={"source": "graphql"},
-            relationships=[
-                (obj_id,    "subject"),
-                (repo_id,   "context"),
-                (author_id, "actor") if author_id else None,
-            ]
-        )
+    # NOTE: PRMerged and PRClosed events are NOT generated here.
+    # Phase 3 timeline (MergedEvent, ClosedEvent) is the single source of truth
+    # for lifecycle events — it carries actor, closer_type, and exact timestamp.
 
     # Event: PRCIState — lightweight CI summary from statusCheckRollup.state
     # Detailed CI is modelled via WorkflowRun/Job objects in Phase 6.
@@ -164,75 +133,10 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
     # to avoid duplicate events and ensure full pagination coverage.
 
 
-def _map_comment(
-    comment: Dict[str, Any],
-    builder: OCELBuilder,
-    repo_id: str,
-    pr_id: str,
-) -> None:
-    if not comment.get("id"):
-        return
-
-    ts = safe_timestamp(comment.get("createdAt"))
-    author_login = (comment.get("author") or {}).get("login")
-    author_id = ensure_user(builder, repo_id, author_login, timestamp=ts) if author_login else None
-
-    create_event(
-        builder=builder,
-        event_type=Activities.PR_COMMENT_CREATED,
-        ts=ts,
-        attributes={
-            "comment_id":      comment["id"],
-            "body_length":     len(comment.get("bodyText") or ""),
-            "reactions_count": (comment.get("reactions") or {}).get("totalCount", 0),
-            "is_edited":       1 if comment.get("lastEditedAt") else 0,
-        },
-        relationships=[
-            (pr_id,     "target"),
-            (repo_id,   "context"),
-            (author_id, "actor") if author_id else None,
-        ]
-    )
-
-
-# Phase 2: standalone mappers (called from fetch_pr_commits / fetch_pr_comments)
-
-def process_pr_commit_link(pr_number: int, oid: str, builder: OCELBuilder, repo_id: str) -> None:
-    """
-    Create PullRequest ──contains_commit──► Commit O2O link.
-
-    Called from Phase 4 (process_commit_graphql) after the Commit object exists.
-    If the Commit is a feature-branch commit that was never inserted as a stub
-    (not a branch head, deployment SHA, or workflow head_sha), we create a minimal
-    stub here so the O2O is never silently dropped.
-
-    Args:
-        pr_number:  PR number from the _commit_pr_map built in Phase 2.
-        oid:        Commit SHA.
-        builder:    OCEL builder.
-        repo_id:    Repository object ID.
-    """
-    pr_id = make_id(repo_id, "pr", pr_number)
-    if not builder.object_exists(pr_id):
-        return
-
-    # Ensure commit exists — create a minimal stub if it hasn't been seen before.
-    # Full enrichment happens in process_commit_graphql for default-branch commits;
-    # feature-branch commits only get the stub (no CommitCreated event).
-    commit_id = ensure_commit(builder, repo_id, oid)
-    if not commit_id:
-        return
-
-    proxy = ObjectInstance(object_id=pr_id, object_type="PullRequest")
-    proxy.add_rel(commit_id, "contains_commit")
-    builder.insert_object(proxy)
-
-
 def process_pr_comment(comment: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     """
-    Map a single PR comment to a PRCommentCreated event.
+    Map a single PR comment to a Comment object + CommentCreated event.
     Called from Phase 2 with fully paginated comment nodes.
-
     The comment dict must have "__pr_number" injected by fetch_pr_comments().
     """
     pr_number = comment.get("__pr_number")
@@ -243,4 +147,24 @@ def process_pr_comment(comment: Dict[str, Any], builder: OCELBuilder, repo_id: s
     if not builder.object_exists(pr_id):
         return
 
-    _map_comment(comment, builder, repo_id, pr_id)
+    map_pr_comment(comment, builder, repo_id, pr_id)
+
+def process_pr_commit_link(pr_number: int, oid: str, builder: OCELBuilder, repo_id: str) -> None:
+    """
+    Create PullRequest ──contains_commit──► Commit O2O link.
+
+    Called from Phase 4 (process_commit_graphql) after the Commit object exists.
+    If the Commit is a feature-branch commit that was never inserted as a stub,
+    ensure_commit creates one so the O2O is never silently dropped.
+    """
+    pr_id = make_id(repo_id, "pr", pr_number)
+    if not builder.object_exists(pr_id):
+        return
+
+    commit_id = ensure_commit(builder, repo_id, oid)
+    if not commit_id:
+        return
+
+    proxy = ObjectInstance(object_id=pr_id, object_type="PullRequest")
+    proxy.add_rel(commit_id, "contains_commit")
+    builder.insert_object(proxy)

@@ -455,14 +455,15 @@ query GetPRReviews(
           id
           state          # APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING
           submittedAt
-          body
+          bodyText
           author {
             login
             __typename
             ... on User { id }
           }
 
-          # Inline code comments within this review (ReviewComment objects)
+          # Inline code comments — only fetched when withReviewComments=True (STANDARD/COMPLETE)
+          # diffHunk included for code review context analysis (truncated at mapper level)
           comments(first: 50) {
             pageInfo { hasNextPage endCursor }
             totalCount
@@ -470,33 +471,16 @@ query GetPRReviews(
               id
               createdAt
               updatedAt: lastEditedAt
-              body
+              bodyText
               path
               line
+              originalLine
               position
               diffHunk
+              outdated
+              replyTo { id }
               author { login }
               reactions(first: 1) { totalCount }
-            }
-          }
-        }
-      }
-      # Review threads (resolved/unresolved — separate from reviews)
-      reviewThreads(first: 50) {
-        pageInfo { hasNextPage endCursor }
-        totalCount
-        nodes {
-          id
-          isResolved
-          isOutdated
-          resolvedBy { login }
-          comments(first: 10) {
-            nodes {
-              id
-              createdAt
-              body
-              path
-              author { login }
             }
           }
         }
@@ -504,6 +488,47 @@ query GetPRReviews(
     }
   }
 
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+PR_THREADS_QUERY = """
+query GetPRThreads(
+  $owner:    String!
+  $repo:     String!
+  $prNumber: Int!
+  $cursor:   String
+  $pageSize: Int!
+) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $prNumber) {
+      number
+      reviewThreads(first: $pageSize, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        totalCount
+        nodes {
+          id
+          isResolved
+          isOutdated
+          resolvedBy { login }
+          comments(first: 100) {
+            nodes {
+              id
+              createdAt
+              bodyText
+              path
+              line
+              originalLine
+              outdated
+              replyTo { id }
+              author { login }
+              reactions(first: 1) { totalCount }
+            }
+          }
+        }
+      }
+    }
+  }
   rateLimit { cost remaining resetAt }
 }
 """
