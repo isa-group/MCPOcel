@@ -10,7 +10,7 @@ logger = get_logger(__name__)
 def fetch_pr_threads(
     client: GitHubClient,
     pr_numbers: List[int],
-    page_size: int = 50,
+    page_size: int = 100,
 ) -> Generator[Dict[str, Any], None, None]:
     """
     Yield review thread nodes for each PR, fully paginated.

@@ -3,7 +3,6 @@ from shared.ocel.builder import OCELBuilder
 
 logger = logging.getLogger(__name__)
 
-
 def print_pipeline_audit(builder: OCELBuilder) -> None:
     cursor = builder.cursor
 
@@ -60,12 +59,12 @@ def print_pipeline_audit(builder: OCELBuilder) -> None:
         logger.info(f"  Commits linked to PR : {commits_in_prs}/{total_commit_objs} ({commits_in_prs/total_commit_objs*100:.1f}%)")
         logger.info(f"  Direct push commits  : {total_commit_objs - commits_in_prs}")
 
-    # Merge commit stats
-    cursor.execute("""
-        SELECT COUNT(*) FROM object_map
-        WHERE ocel_type = 'Commit' AND ocel_key = 'is_merge_commit' AND ocel_value = '1'
-    """)
+    # Merge commit stats (from dynamic table object_Commit)
     try:
+        cursor.execute("""
+            SELECT COUNT(DISTINCT ocel_id) FROM object_Commit
+            WHERE is_merge_commit = 1
+        """)
         merge_commits = cursor.fetchone()[0]
         if merge_commits > 0:
             logger.info(f"  Merge commits        : {merge_commits}")
@@ -117,18 +116,22 @@ def print_pipeline_audit(builder: OCELBuilder) -> None:
     if total_comments > 0:
         logger.info("\n[COMMENTS]")
         logger.info(f"  Comment objects      : {total_comments}")
-        logger.info(f"  CommentCreated events: {total_comments}")  # 1:1 by design
+        cursor.execute("SELECT COUNT(*) FROM event WHERE ocel_type = 'CommentCreated'")
+        comment_events = cursor.fetchone()[0]
+        logger.info(f"  CommentCreated events: {comment_events}")
 
-        # Breakdown by comment_type attribute
-        cursor.execute("""
-            SELECT ocel_value, COUNT(DISTINCT ocel_id)
-            FROM object_map
-            WHERE ocel_type = 'Comment' AND ocel_key = 'comment_type'
-            GROUP BY ocel_value
-            ORDER BY COUNT(DISTINCT ocel_id) DESC
-        """)
-        for ctype, count in cursor.fetchall():
-            logger.info(f"    {ctype:<10}: {count:>5}")
+        # Breakdown by comment_type (stored in dynamic table object_Comment)
+        try:
+            cursor.execute("""
+                SELECT comment_type, COUNT(DISTINCT ocel_id)
+                FROM object_Comment
+                GROUP BY comment_type
+                ORDER BY COUNT(*) DESC
+            """)
+            for ctype, count in cursor.fetchall():
+                logger.info(f"    {(ctype or 'unknown'):<10}: {count:>5}")
+        except Exception:
+            pass  # table may not exist if schema hasn't been initialized
 
         # Comment → Comment (replies_to)
         cursor.execute("""
@@ -154,16 +157,18 @@ def print_pipeline_audit(builder: OCELBuilder) -> None:
         if threads_resolved > 0:
             logger.info(f"  Threads resolved     : {threads_resolved}")
 
-        # Review state breakdown
-        cursor.execute("""
-            SELECT ocel_value, COUNT(DISTINCT ocel_id)
-            FROM object_map
-            WHERE ocel_type = 'Review' AND ocel_key = 'state'
-            GROUP BY ocel_value
-            ORDER BY COUNT(DISTINCT ocel_id) DESC
-        """)
-        states = cursor.fetchall()
-        if states:
-            logger.info(f"  By state: " + ", ".join(f"{s}={c}" for s, c in states))
+        # Review state breakdown (from dynamic table object_Review)
+        try:
+            cursor.execute("""
+                SELECT state, COUNT(DISTINCT ocel_id)
+                FROM object_Review
+                GROUP BY state
+                ORDER BY COUNT(*) DESC
+            """)
+            states = cursor.fetchall()
+            if states:
+                logger.info("  By state: " + ", ".join(f"{s}={c}" for s, c in states))
+        except Exception:
+            pass
 
     logger.info("=" * 60)

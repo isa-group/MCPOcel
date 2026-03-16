@@ -1,81 +1,148 @@
-import logging
-import uuid
 from typing import Dict, Any
-
 from shared.ocel.builder import OCELBuilder
+from shared.ocel.model.models import ObjectInstance
 from github2ocel.transform.utils.activity import Activities
-from github2ocel.transform.utils.helper import make_id, safe_timestamp
-from github2ocel.transform.utils.ensure import ensure_user
-from shared.ocel.model.models  import Event, ObjectInstance
+from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
+from github2ocel.transform.utils.ensure import ensure_user, ensure_commit
+from shared.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+def _find_tag_id_by_name(builder, tag_name: str):
+    """
+    Look up a Tag object by its name attribute.
+    Tags are keyed by GraphQL Ref node id, so we query the dynamic
+    object_Tag table (created by the builder) to resolve name → ocel_id.
+    """
+    try:
+        cursor = builder.cursor
+        cursor.execute(
+            """
+            SELECT ocel_id FROM object_Tag
+            WHERE name = ?
+            LIMIT 1
+            """,
+            (tag_name,),
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+
 
 def process_release(release: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     """
-    Process a release from REST API with OCEL 2.0 compliance.
+    Map a GraphQL Release node to OCEL 2.0.
+
+    Objects:   Release
+    Events:    ReleaseCreated
+    O2O:       Release → Repository (contained_in)
+               Release → Author/User (created_by)
+               Release → Tag         (tagged_as)      — if Tag object exists from Phase 0
+               Release → Commit      (points_to_commit) — stub if needed
     """
-    if not release.get("id"):
-        logger.warning("Skipping release without ID")
+    release_id_raw = release.get("id")
+    if not release_id_raw:
+        logger.warning("Skipping release without id")
         return
 
-    # 1. Identity & Time
-    try:
-        rel_id = make_id(repo_id, "release", release["id"])
-    except ValueError as e:
-        logger.error(f"Failed to create release ID: {e}")
-        return
+    rel_id   = make_id(repo_id, "release", release_id_raw)
+    tag_name = release.get("tagName") or release.get("tag_name") or ""
 
-    # Timestamp logic: Published > Created > Now (Fallback in safe_timestamp)
+    # Timestamps: prefer publishedAt, fall back to createdAt
     ts = safe_timestamp(
-        release.get("published_at"),
-        fallback=release.get("created_at")
+        release.get("publishedAt") or release.get("published_at"),
+        fallback=release.get("createdAt") or release.get("created_at"),
     )
 
-    tag_name = release.get("tag_name", "unknown")
+    # Asset aggregates
+    assets_wrapper  = release.get("releaseAssets") or {}
+    asset_nodes     = assets_wrapper.get("nodes") or []
+    assets_count    = assets_wrapper.get("totalCount") or len(asset_nodes)
+    total_downloads = sum(a.get("downloadCount") or 0 for a in asset_nodes)
 
-    # 2. Register Object
-    rel_obj = ObjectInstance(object_id=rel_id, object_type="Release")
-    rel_obj.add_snapshot(
+    # Object: Release
+    obj = ObjectInstance(object_id=rel_id, object_type="Release")
+    obj.add_snapshot(
         time=ts,
         attributes={
-            "tag_name": tag_name,
-            "name": release.get("name", "")[:255],
-            "prerelease": int(release.get("prerelease", False))
+            "tag_name":        tag_name,
+            "name":            (release.get("name") or "")[:255],
+            "description":     (release.get("description") or "")[:500],
+            "url":             release.get("url") or "",
+            "is_prerelease":   int(release.get("isPrerelease") or release.get("prerelease") or False),
+            "is_draft":        int(release.get("isDraft") or False),
+            "assets_count":    assets_count,
+            "total_downloads": total_downloads,
+            "updated_at":      safe_timestamp(release.get("updatedAt")),
         }
     )
-    # Relación O2O: La release pertenece al repositorio
-    rel_obj.add_rel(target_id=repo_id, qualifier="contained_in")
 
-    builder.insert_object(rel_obj)
+    # O2O: Release → Repository
+    obj.add_rel(repo_id, "contained_in")
 
-    # 3. Dependencies
-    author_login = release.get("author", {}).get("login")
-    author_id = ensure_user(builder, repo_id, author_login, timestamp=ts)
-
-    # 4. Relationships
-    rels = [
-        {"objectId": rel_id, "qualifier": "released_item"},
-        {"objectId": repo_id, "qualifier": "repository_context"}
-    ]
+    # O2O: Release → Author
+    author_login = (release.get("author") or {}).get("login")
+    author_id = ensure_user(builder, repo_id, author_login, timestamp=ts) if author_login else None
     if author_id:
-        rels.append({"objectId": author_id, "qualifier": "releaser"})
+        obj.add_rel(author_id, "created_by")
 
-    # 5. Event
-    try:
-        evt = Event(
-            event_id=str(uuid.uuid4()),
-            event_type=Activities.RELEASE_CREATED,
-            time=ts,
-            attributes={
-                "tag": tag_name,
-                "source": "rest_api"
-            }
-        )
-        evt.add_rel(rel_id, "released_item")
-        evt.add_rel(repo_id, "repository_context")
-        if author_id:
-            evt.add_rel(author_id, "releaser")
+    # O2O: Release → Tag (Tag object exists from Phase 0 fetch_tags)
+    # Tags are keyed by their GraphQL Ref node id — look up via object_map name attribute
+    if tag_name:
+        tag_id = _find_tag_id_by_name(builder, tag_name)
+        if tag_id:
+            obj.add_rel(tag_id, "tagged_as")
 
-        builder.insert_event(evt)
-    except Exception as e:
-        logger.error(f"Failed to create release event: {e}")
+    builder.insert_object(obj)
+
+    # O2O: Release → Commit (resolve from tag target)
+    commit_oid = _resolve_commit_oid(release.get("tag"))
+    if commit_oid:
+        commit_id = ensure_commit(builder, repo_id, commit_oid, timestamp=ts)
+        if commit_id:
+            proxy = ObjectInstance(object_id=rel_id, object_type="Release")
+            proxy.add_rel(commit_id, "points_to_commit")
+            builder.insert_object(proxy)
+
+    # Event: ReleaseCreated
+    create_event(
+        builder=builder,
+        event_type=Activities.RELEASE_CREATED,
+        ts=ts,
+        attributes={
+            "tag":             tag_name,
+            "is_prerelease":   int(release.get("isPrerelease") or release.get("prerelease") or False),
+            "assets_count":    assets_count,
+            "total_downloads": total_downloads,
+            "source":          "graphql",
+        },
+        relationships=[
+            (rel_id,    "subject"),
+            (repo_id,   "context"),
+            (author_id, "actor") if author_id else None,
+        ]
+    )
+
+
+def _resolve_commit_oid(tag_field: Dict) -> str:
+    """
+    Extract the commit OID from the tag.target field.
+    Handles both lightweight tags (→ Commit directly)
+    and annotated tags (→ Tag → Commit).
+    """
+    if not tag_field:
+        return None
+    target = tag_field.get("target") or {}
+    typename = target.get("__typename", "")
+
+    if typename == "Commit":
+        return target.get("oid")
+
+    if typename == "Tag":
+        # Annotated tag: target.target is the Commit
+        inner = target.get("target") or {}
+        return inner.get("oid")
+
+    return None
