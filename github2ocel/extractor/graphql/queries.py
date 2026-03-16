@@ -1032,28 +1032,32 @@ query GetReleases(
       pageInfo { hasNextPage endCursor }
       nodes {
         id
+        databaseId
         name
         tagName
         description
+        url
         createdAt
         publishedAt
+        updatedAt
         isPrerelease
         isDraft
 
-        author { login }
+        author {
+          login
+          __typename
+        }
 
-        # Commit the tag points to (-> O2O Commit)
+        # Tag target — used for Release → Tag O2O and Release → Commit O2O
+        # Tag object already exists from Phase 0 (fetch_tags)
         tag {
           target {
             __typename
             ... on Commit {
               oid
-              committedDate
-              author { user { login } }
             }
             ... on Tag {
               oid
-              tagger { date user { login } }
               target {
                 ... on Commit { oid }
               }
@@ -1061,13 +1065,17 @@ query GetReleases(
           }
         }
 
-        releaseAssets(first: 10) {
+        # first: 100 — GitHub max; real-world releases rarely exceed 60 assets
+        releaseAssets(first: 100) {
           totalCount
           nodes {
             name
+            downloadUrl
             downloadCount
             size
             contentType
+            createdAt
+            updatedAt
           }
         }
       }
