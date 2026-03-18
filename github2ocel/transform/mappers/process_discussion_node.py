@@ -15,7 +15,8 @@ def process_discussion_node(node: Dict[str, Any], builder: OCELBuilder, repo_id:
         discussion_id = process_discussion(node, builder, repo_id)
 
         if not discussion_id:
-            return # abort this node
+            logger.warning(f"[process_discussion_node] Failed to process discussion #{node.get('number')}. Skipping.")
+            return
 
         # Process the comments associated with this discussion
         comments_data = node.get("comments", {})

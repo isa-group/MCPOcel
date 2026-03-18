@@ -9,7 +9,7 @@ from github2ocel.client.github_client import GitHubClient
 from github2ocel.client.exceptions import (
     RateLimitError, RetryableError, GraphQLError, FatalError
 )
-from github2ocel.config.profiles import ExtractionProfile, PROFILES
+from github2ocel.config.profiles import PROFILES
 
 # Fetchers
 from github2ocel.extractor.fetchers import (

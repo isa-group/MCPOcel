@@ -3,8 +3,8 @@ from typing import Dict, Any
 import uuid
 
 from shared.ocel.builder import OCELBuilder
-from github2ocel.transform.utils.helper import safe_timestamp
-from github2ocel.transform.utils.ensure import make_id, ensure_user
+from github2ocel.transform.utils.helper import make_id, safe_timestamp
+from github2ocel.transform.utils.ensure import ensure_user
 from github2ocel.transform.utils.activity import Activities
 from shared.ocel.model.models  import Event, ObjectInstance
 
