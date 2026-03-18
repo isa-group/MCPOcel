@@ -2,8 +2,8 @@ from typing import Dict, Any
 
 from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.utils.activity import Activities
-from github2ocel.transform.utils.helper import safe_timestamp, create_event
-from github2ocel.transform.utils.ensure import make_id, ensure_user
+from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
+from github2ocel.transform.utils.ensure import ensure_user, ensure_label
 from shared.ocel.model.models  import ObjectInstance
 
 def process_discussion(
@@ -31,12 +31,15 @@ def process_discussion(
     discussion_obj.add_snapshot(
         time=ts_created,
         attributes={
-            "number": discussion_number,
-            "title": discussion.get("title"),
-            "url": discussion.get("url"),
-            "locked": int(discussion.get("locked", False)),
-            "category": discussion.get("category", {}).get("name"),
-            "reactions_count": discussion.get("reactions", {}).get("totalCount", 0),
+            "number":          discussion_number,
+            "title":           discussion.get("title"),
+            "url":             discussion.get("url"),
+            "locked":          int(discussion.get("locked", False)),
+            "category":        (discussion.get("category") or {}).get("name", ""),
+            "body_length":     len(discussion.get("bodyText") or ""),
+            "upvote_count":    discussion.get("upvoteCount") or 0,
+            "reactions_count":  (discussion.get("reactions") or {}).get("totalCount", 0),
+            "comments_total":   (discussion.get("comments") or {}).get("totalCount", 0),
         }
     )
 
@@ -47,6 +50,13 @@ def process_discussion(
     if author_login:
         user_id = ensure_user(builder, repo_id, author_login, timestamp=ts_created)
         discussion_obj.add_rel(target_id=user_id, qualifier="created_by")
+
+    # O2O → Labels
+    for lbl in (discussion.get("labels") or {}).get("nodes") or []:
+        if lbl and lbl.get("id"):
+            lbl_id = ensure_label(builder, repo_id, lbl, timestamp=ts_created)
+            if lbl_id:
+                discussion_obj.add_rel(lbl_id, "has_label")
 
     builder.insert_object(discussion_obj)
 
