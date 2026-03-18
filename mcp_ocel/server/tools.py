@@ -709,7 +709,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
         Args:
             object_type: Optional exact object type name to restrict analysis to one perspective.
-            threshold_percentile: Percentile (0–100) above which a transition is flagged (default: 75).
+            threshold_percentile: Percentile (0-100) above which a transition is flagged (default: 75).
 
         Returns:
             Dict with cursor_id for the bottleneck items.
@@ -742,7 +742,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
 
         Internally rediscovers the Petri net and replays sampled traces (up to 100 per object
         type, max 3 types). Returns at most 20 deviations.
-        Response fields: {fitness_score (0–1), fitness_percentage, sample_size, conformant_traces,
+        Response fields: {fitness_score (0-1), fitness_percentage, sample_size, conformant_traces,
         total_deviations, deviations: [{object_id, deviation, position}], model info}.
         Call discover_petri_net first to inspect the reference model before checking conformance.
 
