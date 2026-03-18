@@ -8,29 +8,6 @@ from shared.logger import get_logger
 
 logger = get_logger(__name__)
 
-
-def _find_tag_id_by_name(builder, tag_name: str):
-    """
-    Look up a Tag object by its name attribute.
-    Tags are keyed by GraphQL Ref node id, so we query the dynamic
-    object_Tag table (created by the builder) to resolve name → ocel_id.
-    """
-    try:
-        cursor = builder.cursor
-        cursor.execute(
-            """
-            SELECT ocel_id FROM object_Tag
-            WHERE name = ?
-            LIMIT 1
-            """,
-            (tag_name,),
-        )
-        row = cursor.fetchone()
-        return row[0] if row else None
-    except Exception:
-        return None
-
-
 def process_release(release: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
     """
     Map a GraphQL Release node to OCEL 2.0.
@@ -89,10 +66,10 @@ def process_release(release: Dict[str, Any], builder: OCELBuilder, repo_id: str)
         obj.add_rel(author_id, "created_by")
 
     # O2O: Release → Tag (Tag object exists from Phase 0 fetch_tags)
-    # Tags are keyed by their GraphQL Ref node id — look up via object_map name attribute
+    # Tags are keyed by tag_name — direct resolution via make_id + object_registry (O(1), no SQL)
     if tag_name:
-        tag_id = _find_tag_id_by_name(builder, tag_name)
-        if tag_id:
+        tag_id = make_id(repo_id, "tag", tag_name)
+        if builder.object_exists(tag_id):
             obj.add_rel(tag_id, "tagged_as")
 
     builder.insert_object(obj)

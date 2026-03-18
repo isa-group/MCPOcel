@@ -22,7 +22,7 @@ def fetch_commits(
     """
     logger.info("--- [Fetcher] Commits ---")
 
-    since_iso, _ = client.time_window_iso
+    since_iso, until_iso = client.ctx.time_window_iso
     effective_since = since or since_iso  # allow override
 
     variables = {

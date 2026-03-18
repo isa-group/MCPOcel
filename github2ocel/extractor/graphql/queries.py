@@ -82,8 +82,13 @@ query GetIssues(
         isPinned
 
         # Metrics
+        authorAssociation
         reactions(first: 1) { totalCount }
         participants(first: 0) { totalCount }
+        reactionGroups {
+          content
+          reactors(first: 0) { totalCount }
+        }
 
         bodyText
 
@@ -110,6 +115,14 @@ query GetIssues(
 
         # totalCount only — full comment events handled in Phase 2 (fetch_issue_comments)
         comments { totalCount }
+
+        timelineItems(itemTypes: [
+          ASSIGNED_EVENT, UNASSIGNED_EVENT,
+          LABELED_EVENT, UNLABELED_EVENT,
+          MILESTONED_EVENT, DEMILESTONED_EVENT,
+          CLOSED_EVENT, REOPENED_EVENT,
+          CROSS_REFERENCED_EVENT, CONNECTED_EVENT, DISCONNECTED_EVENT
+        ]) { totalCount }
       }
     }
   }
@@ -194,6 +207,19 @@ query GetPullRequests(
 
         # totalCount only — full comment events handled in Phase 2 (fetch_pr_comments)
         comments { totalCount }
+        reviews { totalCount }
+
+
+        timelineItems(itemTypes: [
+          ASSIGNED_EVENT, UNASSIGNED_EVENT,
+          REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT,
+          READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT,
+          LABELED_EVENT, UNLABELED_EVENT,
+          MILESTONED_EVENT, DEMILESTONED_EVENT,
+          CLOSED_EVENT, REOPENED_EVENT, MERGED_EVENT,
+          HEAD_REF_FORCE_PUSHED_EVENT, DEPLOYED_EVENT,
+          CROSS_REFERENCED_EVENT, CONNECTED_EVENT, DISCONNECTED_EVENT
+        ]) { totalCount }
 
         # CI summary state only — detailed CI modelled via WorkflowRun/Job in Phase 6
         statusCheckRollup { state }
@@ -464,7 +490,7 @@ query GetPRReviews(
 
           # Inline code comments — only fetched when withReviewComments=True (STANDARD/COMPLETE)
           # diffHunk included for code review context analysis (truncated at mapper level)
-          comments(first: 50) {
+          comments(first: 25) {
             pageInfo { hasNextPage endCursor }
             totalCount
             nodes {
@@ -511,18 +537,16 @@ query GetPRThreads(
           isResolved
           isOutdated
           resolvedBy { login }
-          comments(first: 100) {
+          # Only IDs — full comment data already in builder from PR_REVIEWS_QUERY.
+          # IDs used to stamp thread_id onto existing Comment objects.
+          # There is no exact date for “Resolved”,
+          # as it must be set to the same second as the last comment in that thread, or the second after it.
+          comments(first: 50) {
             nodes {
               id
               createdAt
-              bodyText
               path
-              line
-              originalLine
-              outdated
               replyTo { id }
-              author { login }
-              reactions(first: 1) { totalCount }
             }
           }
         }

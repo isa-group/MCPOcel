@@ -3,56 +3,11 @@ from typing import Dict, Any, Optional
 
 from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.utils.helper import make_id, safe_timestamp, parse_semver, create_event
-from github2ocel.transform.utils.ensure import ensure_commit, ensure_user, _ensure_object
+from github2ocel.transform.utils.ensure import ensure_commit, ensure_tagger
 from github2ocel.transform.utils.activity import Activities
 from shared.ocel.model.models import ObjectInstance
 
 logger = logging.getLogger(__name__)
-
-
-def _ensure_tagger(
-    builder: OCELBuilder,
-    repo_id: str,
-    tagger_info: Dict[str, Any],
-    timestamp: str,
-) -> Optional[str]:
-    """
-    Registers the tagger as a User object.
-
-    Priority:
-      1. GitHub login (linked account)
-      2. Git name + email (local git identity, no GitHub account)
-
-    Returns the tagger object_id or None if no identity is available.
-    """
-    if not tagger_info:
-        return None
-
-    login = tagger_info.get("login")
-    name  = tagger_info.get("name")
-    email = tagger_info.get("email")
-
-    if login:
-        return ensure_user(builder, repo_id, login, timestamp=timestamp)
-
-    # Fallback: git identity without GitHub account
-    # Use email as the stable key (more unique than name)
-    if email:
-        raw_id = email.replace("@", "_at_").replace(".", "_")
-        return _ensure_object(
-            builder=builder,
-            repo_id=repo_id,
-            obj_type="User",
-            raw_id=raw_id,
-            timestamp=timestamp,
-            attributes={
-                "login": "",
-                "git_name":  name  or "",
-                "git_email": email,
-            },
-        )
-
-    return None
 
 
 def process_tag(tag_node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
@@ -101,7 +56,7 @@ def process_tag(tag_node: Dict[str, Any], builder: OCELBuilder, repo_id: str) ->
 
     # O2O: Tag -> Tagger (login or git identity fallback)
     tagger_info = tag_node.get("tagger")
-    tagger_id   = _ensure_tagger(builder, repo_id, tagger_info, timestamp=ts)
+    tagger_id   = ensure_tagger(builder, repo_id, tagger_info, timestamp=ts)
     if tagger_id:
         tag_obj.add_rel(target_id=tagger_id, qualifier="created_by")
 

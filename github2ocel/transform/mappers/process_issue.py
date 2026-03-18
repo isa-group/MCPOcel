@@ -21,6 +21,18 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
 
     body_text = node.get("bodyText") or ""
 
+    positive_votes = 0
+    negative_votes = 0
+
+    for group in node.get("reactionGroups", []):
+        content = group.get("content", "")
+        count = (group.get("reactors") or {}).get("totalCount", 0)
+
+        if content in ("THUMBS_UP", "HEART", "HOORAY", "ROCKET"):
+            positive_votes += count
+        elif content in ("THUMBS_DOWN", "CONFUSED"):
+            negative_votes += count
+
     # Object: Issue
     obj = ObjectInstance(object_id=obj_id, object_type="Issue")
     obj.add_snapshot(
@@ -38,7 +50,10 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
             "locked":             1 if node.get("locked") else 0,
             "locked_reason":      node.get("activeLockReason") or "",
             "is_pinned":          1 if node.get("isPinned") else 0,
+            "author_association": node.get("authorAssociation", ""),
             "reactions_count":    (node.get("reactions") or {}).get("totalCount", 0),
+            "reactions_positive": positive_votes,
+            "reactions_negative": negative_votes,
             "participants_count": (node.get("participants") or {}).get("totalCount", 0),
             "comments_count":     (node.get("comments") or {}).get("totalCount", 0),
         }
