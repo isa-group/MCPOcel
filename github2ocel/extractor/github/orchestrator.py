@@ -50,6 +50,7 @@ from github2ocel.transform.mappers import (
     process_commit_graphql,
     process_deployment,
     process_workflow_run,
+    apply_retry_links,
     process_release,
     process_discussion_node,
     process_commit_files
@@ -404,14 +405,30 @@ class Orchestrator:
             self.stats["deployments"] += 1
         logger.info(f"  deployments={self.stats['deployments']}")
 
+        # Accumulate (run_number, run_attempt) → run_id while iterating.
+        # Needed to resolve retry_of O2O after all runs are inserted — a re-run's
+        # predecessor may not exist yet when the re-run node is first processed.
+        run_attempt_map: Dict[Tuple[int, int], str] = {}
+
         for node in fetch_workflow_runs(self.client, page_size=self._ps.workflow_runs):
-            process_workflow_run(node, self.builder, self.repo_id)
+            run_id = process_workflow_run(node, self.builder, self.repo_id)
             self.stats["workflow_runs"] += 1
             self.stats["workflow_jobs"] += len(node.get("extracted_jobs", []))
+
+            run_number  = int(node.get("run_number") or 0)
+            run_attempt = int(node.get("run_attempt") or 1)
+            if run_id and run_number:
+                run_attempt_map[(run_number, run_attempt)] = run_id
+
         logger.info(
             f"  workflow_runs={self.stats['workflow_runs']} "
             f"workflow_jobs={self.stats['workflow_jobs']}"
         )
+
+        # Link re-run attempts: attempt N → attempt N-1 via O2O (retry_of)
+        retries = apply_retry_links(run_attempt_map, self.builder)
+        if retries:
+            logger.info(f"  workflow_retry_links={retries}")
 
     # Phase 7: knowledge base
     def _phase7_knowledge(self):

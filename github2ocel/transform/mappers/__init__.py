@@ -13,7 +13,7 @@ from .process_comment import (
 )
 from .process_timeline import process_timeline_event
 from .process_commit import process_commit_graphql
-from .process_workflow_run import process_workflow_run
+from .process_workflow_run import process_workflow_run, apply_retry_links
 from .process_deployment import process_deployment
 from .process_release import process_release
 from .process_discussion_node import process_discussion_node
@@ -38,6 +38,7 @@ __all__ = [
     "process_timeline_event",
     "process_commit_graphql",
     "process_workflow_run",
+    "apply_retry_links",
     "process_deployment",
     "process_release",
     "process_discussion_node",
