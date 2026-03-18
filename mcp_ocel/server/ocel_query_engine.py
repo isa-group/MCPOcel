@@ -3,6 +3,7 @@ Generic OCEL query engine.
 Seven MVP tools: lifecycle, timerange, statistics, anomalies, orphaned objects, filter by event type and filter by object type
 """
 import pm4py
+import re
 from datetime import datetime
 from typing import Dict, List
 
@@ -48,22 +49,23 @@ class OCELQueryEngine:
         return self._trace_lifecycle(object_id)
     
     def _trace_lifecycle(self, object_id: str) -> List[EventReference]:
-        """Lifecycle tracing using DataFrames."""
-        # Check if object exists using the ocel:oid column
-        if object_id not in self.ocel_data.objects["ocel:oid"].values:
+        """Lifecycle tracing using OCEL internal tables (events/relations)."""
+        # Check if object exists using resolved object id column
+        if object_id not in self.ocel_data.objects[self._object_id_col].values:
             raise ValueError(f"Object not found: {object_id}")
         
-        # Get events for this object from relations DataFrame
+        # Get events for this object from relations table
+        # Relations may use different column names; use resolved cols
         obj_relations = self.ocel_data.relations[
-            self.ocel_data.relations["ocel:oid"] == object_id
+            self.ocel_data.relations[self._object_id_col] == object_id
         ]
-        event_ids = obj_relations["ocel:eid"].unique()
+        event_ids = obj_relations[self._event_id_col].unique()
         
         references = []
         for event_id in sorted(event_ids):
-            # Get event data from events DataFrame
+            # Get event data from events table
             event_row = self.ocel_data.events[
-                self.ocel_data.events["ocel:eid"] == event_id
+                self.ocel_data.events[self._event_id_col] == event_id
             ]
             if event_row.empty:
                 continue
@@ -72,13 +74,13 @@ class OCELQueryEngine:
             
             # Get all objects related to this event
             event_relations = self.ocel_data.relations[
-                self.ocel_data.relations["ocel:eid"] == event_id
+                self.ocel_data.relations[self._event_id_col] == event_id
             ]
             involved_objs = [
                 ObjectReference(
-                    object_id=str(row["ocel:oid"]),
-                    object_type=str(row["ocel:type"]),
-                    role=str(row.get("ocel:qualifier", "")) if row.get("ocel:qualifier") else None,
+                    object_id=str(row.get(self._object_id_col) or row.get("id") or ""),
+                    object_type=str(row.get(self._object_type_col) or row.get("type") or ""),
+                    role=str(row.get("ocel:qualifier", "")) if row.get("ocel:qualifier") else (str(row.get("qualifier", "")) if row.get("qualifier") else None),
                 )
                 for _, row in event_relations.iterrows()
             ]
@@ -385,3 +387,227 @@ class OCELQueryEngine:
 
         logger.info(f"Converted {len(references)} events to references")
         return references
+
+    # ------------------------------------------------------------------
+    # Attribute-based filters (events & objects)
+    # ------------------------------------------------------------------
+
+    def get_events_by_attribute(
+        self,
+        attribute_name: str,
+        attribute_value: str,
+        match_type: str = "exact",
+        case_sensitive: bool = True,
+        max_results: int = 1000,
+    ) -> List[EventReference]:
+        """
+        Return events whose top-level attribute *attribute_name* matches
+        *attribute_value* according to *match_type*.
+
+        Supported match types: "exact", "contains".
+        """
+        # Validate attribute presence
+        if attribute_name not in self.ocel_data.events.columns:
+            known = list(self.ocel_data.events.columns)
+            raise ValueError(
+                f"Event attribute '{attribute_name}' not found. Available event attributes: {known}"
+            )
+
+        df = self.ocel_data.events
+
+        # Iterate rows and apply match predicate without depending on pandas string ops
+        filtered_rows = []
+        pattern = None
+        if match_type == "regex":
+            try:
+                flags = 0
+                if not case_sensitive:
+                    flags = re.IGNORECASE
+                pattern = re.compile(attribute_value, flags=flags)
+            except re.error as e:
+                raise ValueError(f"Invalid regex pattern: {e}")
+
+        if match_type == "numeric_range":
+            parts = str(attribute_value).split(":")
+            if len(parts) != 2:
+                raise ValueError("numeric_range requires 'min:max' format")
+            min_str, max_str = parts[0].strip(), parts[1].strip()
+            try:
+                min_val = float(min_str) if min_str != "" else None
+            except ValueError:
+                raise ValueError("Invalid minimum value for numeric_range")
+            try:
+                max_val = float(max_str) if max_str != "" else None
+            except ValueError:
+                raise ValueError("Invalid maximum value for numeric_range")
+            if min_val is None and max_val is None:
+                raise ValueError("numeric_range requires at least one bound")
+
+        for _, event in df.iterrows():
+            val = event.get(attribute_name)
+            if val is None:
+                continue
+            sval = str(val)
+
+            match = False
+            if match_type == "exact":
+                if case_sensitive:
+                    match = sval == str(attribute_value)
+                else:
+                    match = sval.lower() == str(attribute_value).lower()
+            elif match_type == "contains":
+                if case_sensitive:
+                    match = str(attribute_value) in sval
+                else:
+                    match = str(attribute_value).lower() in sval.lower()
+            elif match_type == "regex":
+                if pattern.search(sval):
+                    match = True
+            elif match_type == "numeric_range":
+                try:
+                    vnum = float(val)
+                except Exception:
+                    continue
+                if min_val is not None and max_val is not None:
+                    match = (vnum >= min_val) and (vnum <= max_val)
+                elif min_val is not None:
+                    match = vnum >= min_val
+                elif max_val is not None:
+                    match = vnum <= max_val
+            else:
+                raise ValueError(f"Unsupported match_type: {match_type}")
+
+            if match:
+                filtered_rows.append(event)
+
+        if len(filtered_rows) > max_results:
+            filtered_rows = filtered_rows[:max_results]
+
+        # Build references
+        references: List[EventReference] = []
+        for event in filtered_rows:
+            event_id = str(event.get("id", ""))
+
+            event_relations = self.ocel_data.relations[
+                self.ocel_data.relations["eventId"] == event_id
+            ]
+            involved_objs = [
+                ObjectReference(
+                    object_id=str(row.get("objectId") or row.get("id") or ""),
+                    object_type=str(row.get("type") or row.get("objectType") or ""),
+                    role=(str(row.get("qualifier", "")) if row.get("qualifier") else None),
+                )
+                for _, row in event_relations.iterrows()
+            ]
+
+            references.append(
+                EventReference(
+                    event_id=event_id,
+                    activity=str(event.get("type", "unknown")),
+                    timestamp=str(event.get("time", "")),
+                    involved_objects=involved_objs,
+                )
+            )
+
+        logger.info(f"Events matching attribute {attribute_name}: {len(references)}")
+        return references
+
+    def get_objects_by_attribute(
+        self,
+        attribute_name: str,
+        attribute_value: str,
+        match_type: str = "exact",
+        case_sensitive: bool = True,
+        max_results: int = 1000,
+    ) -> List[ObjectReference]:
+        """
+        Return objects whose top-level attribute *attribute_name* matches
+        *attribute_value* according to *match_type*.
+        """
+        if attribute_name not in self.ocel_data.objects.columns:
+            known = list(self.ocel_data.objects.columns)
+            raise ValueError(
+                f"Object attribute '{attribute_name}' not found. Available object attributes: {known}"
+            )
+
+        df = self.ocel_data.objects
+
+        filtered_rows = []
+        pattern = None
+        if match_type == "regex":
+            try:
+                flags = 0
+                if not case_sensitive:
+                    flags = re.IGNORECASE
+                pattern = re.compile(attribute_value, flags=flags)
+            except re.error as e:
+                raise ValueError(f"Invalid regex pattern: {e}")
+
+        if match_type == "numeric_range":
+            parts = str(attribute_value).split(":")
+            if len(parts) != 2:
+                raise ValueError("numeric_range requires 'min:max' format")
+            min_str, max_str = parts[0].strip(), parts[1].strip()
+            try:
+                min_val = float(min_str) if min_str != "" else None
+            except ValueError:
+                raise ValueError("Invalid minimum value for numeric_range")
+            try:
+                max_val = float(max_str) if max_str != "" else None
+            except ValueError:
+                raise ValueError("Invalid maximum value for numeric_range")
+            if min_val is None and max_val is None:
+                raise ValueError("numeric_range requires at least one bound")
+
+        for _, obj in df.iterrows():
+            val = obj.get(attribute_name)
+            if val is None:
+                continue
+            sval = str(val)
+
+            match = False
+            if match_type == "exact":
+                if case_sensitive:
+                    match = sval == str(attribute_value)
+                else:
+                    match = sval.lower() == str(attribute_value).lower()
+            elif match_type == "contains":
+                if case_sensitive:
+                    match = str(attribute_value) in sval
+                else:
+                    match = str(attribute_value).lower() in sval.lower()
+            elif match_type == "regex":
+                if pattern.search(sval):
+                    match = True
+            elif match_type == "numeric_range":
+                try:
+                    vnum = float(val)
+                except Exception:
+                    continue
+                if min_val is not None and max_val is not None:
+                    match = (vnum >= min_val) and (vnum <= max_val)
+                elif min_val is not None:
+                    match = vnum >= min_val
+                elif max_val is not None:
+                    match = vnum <= max_val
+            else:
+                raise ValueError(f"Unsupported match_type: {match_type}")
+
+            if match:
+                filtered_rows.append(obj)
+
+        if len(filtered_rows) > max_results:
+            filtered_rows = filtered_rows[:max_results]
+
+        refs: List[ObjectReference] = []
+        for obj in filtered_rows:
+            refs.append(
+                ObjectReference(
+                    object_id=str(obj.get("id", "")),
+                    object_type=str(obj.get("type", "unknown")),
+                    role=None,
+                )
+            )
+
+        logger.info(f"Objects matching attribute {attribute_name}: {len(refs)}")
+        return refs

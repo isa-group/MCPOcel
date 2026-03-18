@@ -838,7 +838,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         Call get_available_resource_attributes first to obtain valid attribute names.
 
         Args:
-            resource_attribute: Exact event attribute name identifying the resource (e.g. "ocel:actor").
+            resource_attribute: Exact event attribute name identifying the resource (e.g. "actor").
 
         Returns:
             Dict with nodes list, top-20 edges, and network metrics.
@@ -946,6 +946,268 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
             return {"error": str(e)}
         except Exception as e:
             logger.error(f"Error in filter_by_object_type: {e}")
+            return {"error": f"Internal error: {str(e)}"}
+
+    @mcp.tool()
+    @debug_log_tool
+    def filter_by_attribute(
+        attribute_name: str,
+        attribute_value: str,
+        match_type: str = "exact",
+        target: str = "event",
+        input_cursor_id: Optional[str] = None,
+        case_sensitive: bool = True,
+        max_results: int = 1000,
+    ) -> Dict[str, Any]:
+        """
+        Filter events or objects by a top-level attribute value.
+
+                Supports both `target` values: "event" or "object". Match modes:
+                    - "exact": exact string/number equality
+                    - "contains": substring match (string only)
+                    - "regex": regular-expression match (Python regex)
+                    - "numeric_range": numeric range with syntax `min:max` (either bound optional)
+
+        Cursor-chaining: when `input_cursor_id` is provided, the filter is
+        applied only to items in that cursor. For event cursors this will
+        inspect the backing OCEL event rows; for object filtering it will
+        inspect involved objects in the resolved events or the objects
+        table when operating on the full log.
+
+        Returns a `cursor_id` containing the matching references.
+        """
+        try:
+            if target not in ("event", "object"):
+                return {"error": "Invalid target; must be 'event' or 'object'"}
+
+            cursor_store = ocel_state.get("cursor_store")
+            if not cursor_store:
+                return {"error": "Cursor store not available"}
+
+            input_data = _resolve_input_data(ocel_state, input_cursor_id)
+
+            refs = []
+
+            # If input cursor provided, filter in-memory using the OCEL data
+            if input_data is not None:
+                ocel_data = ocel_state.get("ocel_data")
+                if not ocel_data:
+                    return {"error": "OCEL not initialized"}
+
+                for ref in input_data:
+                    # Event target: inspect event row for attribute
+                    if target == "event":
+                        eid = ref.get("event_id")
+                        if not eid:
+                            continue
+                        # OCEL 2.0 event id column is `id`
+                        rows = ocel_data.events[ocel_data.events["id"] == eid]
+                        if rows.empty:
+                            continue
+                        val = rows.iloc[0].get(attribute_name)
+                        if val is None:
+                            continue
+                        sval = str(val)
+                        if match_type == "exact":
+                            if case_sensitive:
+                                match = sval == str(attribute_value)
+                            else:
+                                match = sval.lower() == str(attribute_value).lower()
+                        elif match_type == "contains":
+                            match = str(attribute_value) in sval if case_sensitive else str(attribute_value).lower() in sval.lower()
+                        elif match_type == "regex":
+                            import re as _re
+
+                            try:
+                                flags = 0 if case_sensitive else _re.IGNORECASE
+                                match = bool(_re.search(attribute_value, sval, flags=flags))
+                            except _re.error as err:
+                                return {"error": f"Invalid regex pattern: {err}"}
+                        elif match_type == "numeric_range":
+                            # attribute_value expected as "min:max" where min or max can be empty
+                            parts = str(attribute_value).split(":")
+                            if len(parts) != 2:
+                                return {"error": "numeric_range requires 'min:max' format"}
+                            min_str, max_str = parts[0].strip(), parts[1].strip()
+                            try:
+                                val_num = float(sval)
+                            except Exception:
+                                continue
+                            try:
+                                min_val = float(min_str) if min_str != "" else None
+                            except ValueError:
+                                return {"error": "Invalid minimum value for numeric_range"}
+                            try:
+                                max_val = float(max_str) if max_str != "" else None
+                            except ValueError:
+                                return {"error": "Invalid maximum value for numeric_range"}
+
+                            match = True
+                            if min_val is not None and val_num < min_val:
+                                match = False
+                            if max_val is not None and val_num > max_val:
+                                match = False
+                            if not match:
+                                continue
+                        else:
+                            return {"error": f"Unsupported match_type: {match_type}"}
+
+                        if match:
+                            refs.append(ref)
+
+                    else:  # target == "object"
+                        # Check involved objects first (if ref is an event-ref)
+                        involved = ref.get("involved_objects") or []
+                        matched = False
+                        for obj in involved:
+                            oid = obj.get("object_id")
+                            if not oid:
+                                continue
+                            # OCEL 2.0 object id column is `id`
+                            rows = ocel_data.objects[ocel_data.objects["id"] == oid]
+                            if rows.empty:
+                                continue
+                            val = rows.iloc[0].get(attribute_name)
+                            if val is None:
+                                continue
+                            sval = str(val)
+                            if match_type == "exact":
+                                if case_sensitive:
+                                    match = sval == str(attribute_value)
+                                else:
+                                    match = sval.lower() == str(attribute_value).lower()
+                            elif match_type == "contains":
+                                match = str(attribute_value) in sval if case_sensitive else str(attribute_value).lower() in sval.lower()
+                            elif match_type == "regex":
+                                import re as _re
+
+                                try:
+                                    flags = 0 if case_sensitive else _re.IGNORECASE
+                                    match = bool(_re.search(attribute_value, sval, flags=flags))
+                                except _re.error as err:
+                                    return {"error": f"Invalid regex pattern: {err}"}
+                            elif match_type == "numeric_range":
+                                parts = str(attribute_value).split(":")
+                                if len(parts) != 2:
+                                    return {"error": "numeric_range requires 'min:max' format"}
+                                min_str, max_str = parts[0].strip(), parts[1].strip()
+                                try:
+                                    val_num = float(sval)
+                                except Exception:
+                                    continue
+                                try:
+                                    min_val = float(min_str) if min_str != "" else None
+                                except ValueError:
+                                    return {"error": "Invalid minimum value for numeric_range"}
+                                try:
+                                    max_val = float(max_str) if max_str != "" else None
+                                except ValueError:
+                                    return {"error": "Invalid maximum value for numeric_range"}
+
+                                match = True
+                                if min_val is not None and val_num < min_val:
+                                    match = False
+                                if max_val is not None and val_num > max_val:
+                                    match = False
+                                if not match:
+                                    continue
+                            else:
+                                return {"error": f"Unsupported match_type: {match_type}"}
+
+                            if match:
+                                matched = True
+                                break
+
+                        if matched:
+                            refs.append(ref)
+
+                # Enforce max_results
+                if len(refs) > max_results:
+                    refs = refs[:max_results]
+
+            else:
+                # No input cursor: delegate to query_engine for efficient filtering
+                query_engine = ocel_state.get("query_engine")
+                if not query_engine:
+                    return {"error": "OCEL query engine not initialized"}
+
+                # Protect expensive operations with the OCEL lock if present
+                # Pre-validate regex patterns to provide a clear error before
+                # delegating to the potentially external/compiled query engine.
+                if match_type == "regex":
+                    try:
+                        import re as _re
+
+                        flags = 0 if case_sensitive else _re.IGNORECASE
+                        _re.compile(attribute_value, flags=flags)
+                    except _re.error as err:
+                        return {"error": f"Invalid regex pattern: {err}"}
+
+                # Pre-validate numeric_range format and bounds to provide a
+                # consistent error message before delegating to query_engine.
+                if match_type == "numeric_range":
+                    parts = str(attribute_value).split(":")
+                    if len(parts) != 2:
+                        return {"error": "numeric_range requires 'min:max' format"}
+                    min_str, max_str = parts[0].strip(), parts[1].strip()
+                    try:
+                        if min_str != "":
+                            float(min_str)
+                    except ValueError:
+                        return {"error": "Invalid minimum value for numeric_range"}
+                    try:
+                        if max_str != "":
+                            float(max_str)
+                    except ValueError:
+                        return {"error": "Invalid maximum value for numeric_range"}
+
+                if ocel_lock:
+                    with ocel_lock:
+                        if target == "event":
+                            references = query_engine.get_events_by_attribute(
+                                attribute_name,
+                                attribute_value,
+                                match_type=match_type,
+                                case_sensitive=case_sensitive,
+                                max_results=max_results,
+                            )
+                            refs = [r.to_dict() for r in references]
+                        else:
+                            references = query_engine.get_objects_by_attribute(
+                                attribute_name,
+                                attribute_value,
+                                match_type=match_type,
+                                case_sensitive=case_sensitive,
+                                max_results=max_results,
+                            )
+                            refs = [r.to_dict() for r in references]
+                else:
+                    if target == "event":
+                        references = query_engine.get_events_by_attribute(
+                            attribute_name,
+                            attribute_value,
+                            match_type=match_type,
+                            case_sensitive=case_sensitive,
+                            max_results=max_results,
+                        )
+                        refs = [r.to_dict() for r in references]
+                    else:
+                        references = query_engine.get_objects_by_attribute(
+                            attribute_name,
+                            attribute_value,
+                            match_type=match_type,
+                            case_sensitive=case_sensitive,
+                            max_results=max_results,
+                        )
+                        refs = [r.to_dict() for r in references]
+
+            cursor_id = cursor_store.create_cursor("filter_by_attribute", refs)
+            return {"cursor_id": cursor_id}
+
+        except ValueError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error(f"Error in filter_by_attribute: {e}")
             return {"error": f"Internal error: {str(e)}"}
 
     # =========================================================================
