@@ -1,4 +1,4 @@
-from typing import Generator, Dict, Any, Optional
+from typing import Generator, Dict, Any
 from github2ocel.client.github_client import GitHubClient
 from github2ocel.client.paginator import paginate_nodes
 from github2ocel.extractor.graphql.queries import PULL_REQUESTS_QUERY
@@ -11,7 +11,6 @@ def fetch_pull_requests(
     client: GitHubClient,
     page_size: int = 50,
     total: int = 0,
-    since: Optional[str] = None,
 ) -> Generator[Dict[str, Any], None, None]:
     """
     Yield PR nodes with activity in the time window, ordered by updatedAt ASC.
@@ -24,7 +23,7 @@ def fetch_pull_requests(
     """
     logger.info(f"--- [Fetcher] Pull Requests (pageSize={page_size}) ---")
 
-    _, until_iso = client.ctx.time_window_iso
+    since, until_iso = client.ctx.time_window_iso
 
     count = 0
     skipped = 0
@@ -48,7 +47,7 @@ def fetch_pull_requests(
         # until: drop PRs that only exist after the window
         if created_at > until_iso and updated_at > until_iso:
             skipped += 1
-            continue
+            break
 
         node["__type"] = "PullRequest"
         yield node

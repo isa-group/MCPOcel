@@ -86,17 +86,15 @@ class Orchestrator:
         self._commit_pr_map: Dict[str, List[int]] = {}
 
         # PRs/Issues that exceeded embedded limits → need overflow pagination
-        self._overflow_pr_reviews:   List[int] = []
-        self._overflow_pr_comments:  List[int] = []
-        self._overflow_pr_commits:   List[int] = []
-        self._overflow_pr_timeline:  List[int] = []
+        self._overflow_pr_reviews:     List[int] = []
+        self._overflow_pr_comments:    List[int] = []
+        self._overflow_pr_commits:     List[int] = []
+        self._overflow_pr_timeline:    List[int] = []
         self._overflow_issue_comments: List[int] = []
+        self._overflow_issue_timeline: List[int] = []
 
         # Adaptive page sizes
         self._ps: PageSizes = PageSizes()
-
-        # Date extraction
-        self.since, self.until = self.client.ctx.time_window_iso
 
         # Active profile flags
         self._profile = client.ctx.profile
@@ -179,29 +177,81 @@ class Orchestrator:
 
     # Phase 1: core objects
     def _phase1_core(self):
-        for node in fetch_issues(self.client, page_size=self._ps.issues, total=self.repo_metrics.issues, since=self.since):
+        for node in fetch_issues(self.client, page_size=self._ps.issues, total=self.repo_metrics.issues):
             process_issue(node, self.builder, self.repo_id)
-            self._issue_numbers.append(int(node["number"]))
+            issue_number = int(node["number"])
+            self._issue_numbers.append(issue_number)
             self.stats["issues"] += 1
-        logger.info(f"  issues={self.stats['issues']}")
 
-        for node in fetch_pull_requests(self.client, page_size=self._ps.pull_requests, total=self.repo_metrics.pull_requests, since=self.since):
+            # Populate overflow list: any issue with comments needs phase 2
+            if (node.get("comments") or {}).get("totalCount", 0) > 0:
+                self._overflow_issue_comments.append(issue_number)
+
+            # Populate overflow list: any issue with relevant timeline events needs phase 3
+            if (node.get("timelineItems") or {}).get("totalCount", 0) > 0:
+                self._overflow_issue_timeline.append(issue_number)
+
+        logger.info(
+            f"  issues={self.stats['issues']} "
+            f"(overflow_comments={len(self._overflow_issue_comments)} "
+            f"overflow_timeline={len(self._overflow_issue_timeline)})"
+        )
+
+        real_reviews = 0
+        for node in fetch_pull_requests(self.client, page_size=self._ps.pull_requests, total=self.repo_metrics.pull_requests):
             process_pull_request(node, self.builder, self.repo_id)
-            self._pr_numbers.append(int(node["number"]))
+            pr_number = int(node["number"])
+            self._pr_numbers.append(pr_number)
             self.stats["prs"] += 1
-        logger.info(f"  prs={self.stats['prs']}")
+            real_reviews += (node.get("reviews") or {}).get("totalCount", 0)
+
+            # Populate overflow lists: only PRs that actually have nested data
+            # need phase 2/3 fetcher calls. Threshold is > 0 because phase 1
+            # does not embed any nodes yet (totalCount only) — when pageInfo
+            # is added to the queries, this switches to hasNextPage.
+            if (node.get("comments") or {}).get("totalCount", 0) > 0:
+                self._overflow_pr_comments.append(pr_number)
+            if (node.get("commits") or {}).get("totalCount", 0) > 0:
+                self._overflow_pr_commits.append(pr_number)
+            if (node.get("reviews") or {}).get("totalCount", 0) > 0:
+                self._overflow_pr_reviews.append(pr_number)
+            if (node.get("timelineItems") or {}).get("totalCount", 0) > 0:
+                self._overflow_pr_timeline.append(pr_number)
+
+        logger.info(
+            f"  prs={self.stats['prs']} "
+            f"(overflow_comments={len(self._overflow_pr_comments)} "
+            f"overflow_commits={len(self._overflow_pr_commits)} "
+            f"overflow_reviews={len(self._overflow_pr_reviews)} "
+            f"overflow_timeline={len(self._overflow_pr_timeline)})"
+        )
+
+        # Always update reviews_est with the real accumulated count —
+        # must happen before compute_page_sizes regardless of the branch below.
+        self.repo_metrics.reviews_est = real_reviews
 
         # Recalculate page sizes using actual extracted counts.
         # repo_metrics.pull_requests is the total repo count (no since filter),
         # but the per-PR nested phases (reviews, timeline, comments) only run
         # against the actual extracted PRs — recalibrate accordingly.
         actual_prs = self.stats["prs"]
+        remaining = self.client.rate_limiter.resources["graphql"].get("remaining")
         if actual_prs < self.repo_metrics.pull_requests:
             self.repo_metrics.pull_requests = actual_prs
             self.repo_metrics.issues = self.stats["issues"]
-            remaining = self.client.rate_limiter.resources["graphql"].get("remaining")
             self._ps = compute_page_sizes(self.repo_metrics, remaining_points=remaining)
-            logger.info(f"  [page sizes recalibrated for windowed extraction]")
+            logger.info(
+                f"  [page sizes recalibrated — windowed extraction, "
+                f"real reviews_est={real_reviews}]"
+            )
+        else:
+            # Full history: PR count matches, but reviews_est is now exact.
+            # Recalibrate to apply the real value to pr_reviews page size.
+            self._ps = compute_page_sizes(self.repo_metrics, remaining_points=remaining)
+            logger.info(
+                f"  [page sizes recalibrated — full history, "
+                f"real reviews_est={real_reviews}]"
+            )
 
     # Phase 2: per-node detail (requires Phase 1 objects)
     def _phase2_detail(self):
@@ -209,32 +259,48 @@ class Orchestrator:
         Fully paginated comments and commit O2O links.
         Kept separate from Phase 1 so the base pass runs at full pageSize
         without being slowed down by nested pagination.
-        """
-        # Issue comments — fully paginated
-        for comment in fetch_issue_comments(self.client, self._issue_numbers, page_size=self._ps.issue_comments):
-            process_issue_comment(comment, self.builder, self.repo_id)
-            self.stats["issue_comments"] += 1
-        logger.info(f"  issue_comments={self.stats['issue_comments']}")
 
-        # PR commit OIDs — build oid→pr_number map for Phase 4 (Commit→PR O2O)
+        Uses overflow lists populated in Phase 1 from totalCount fields:
+        only issues/PRs that actually have nested data generate API calls.
+        """
+        # Issue comments — only issues with comments (overflow_issue_comments)
+        if self._overflow_issue_comments:
+            for comment in fetch_issue_comments(self.client, self._overflow_issue_comments, page_size=self._ps.issue_comments):
+                process_issue_comment(comment, self.builder, self.repo_id)
+                self.stats["issue_comments"] += 1
+        logger.info(
+            f"  issue_comments={self.stats['issue_comments']} "
+            f"(from {len(self._overflow_issue_comments)}/{self.stats['issues']} issues)"
+        )
+
+        # PR commit OIDs — only PRs with commits (overflow_pr_commits)
         # process_pr_commit_link is intentionally not called here: Commit objects
         # don't exist yet (Phase 4), so object_exists() checks would all fail.
         # The map is passed to process_commit_graphql in Phase 4 instead.
-        for link in fetch_pr_commits(self.client, self._pr_numbers, page_size=self._ps.pr_commits):
-            oid = link.get("oid")
-            pr_number = link.get("__pr_number")
-            if oid and pr_number:
-                self._commit_pr_map.setdefault(oid, [])
-                if pr_number not in self._commit_pr_map[oid]:
-                    self._commit_pr_map[oid].append(pr_number)
-            self.stats["pr_commit_links"] += 1
-        logger.info(f"  pr_commit_links={self.stats['pr_commit_links']} ({len(self._commit_pr_map)} unique OIDs mapped)")
+        if self._overflow_pr_commits:
+            for link in fetch_pr_commits(self.client, self._overflow_pr_commits, page_size=self._ps.pr_commits):
+                oid = link.get("oid")
+                pr_number = link.get("__pr_number")
+                if oid and pr_number:
+                    self._commit_pr_map.setdefault(oid, [])
+                    if pr_number not in self._commit_pr_map[oid]:
+                        self._commit_pr_map[oid].append(pr_number)
+                self.stats["pr_commit_links"] += 1
+        logger.info(
+            f"  pr_commit_links={self.stats['pr_commit_links']} "
+            f"({len(self._commit_pr_map)} unique OIDs mapped, "
+            f"from {len(self._overflow_pr_commits)}/{self.stats['prs']} PRs)"
+        )
 
-        # PR comments — fully paginated
-        for comment in fetch_pr_comments(self.client, self._pr_numbers, page_size=self._ps.pr_comments):
-            process_pr_comment(comment, self.builder, self.repo_id)
-            self.stats["pr_comments"] += 1
-        logger.info(f"  pr_comments={self.stats['pr_comments']}")
+        # PR comments — only PRs with comments (overflow_pr_comments)
+        if self._overflow_pr_comments:
+            for comment in fetch_pr_comments(self.client, self._overflow_pr_comments, page_size=self._ps.pr_comments):
+                process_pr_comment(comment, self.builder, self.repo_id)
+                self.stats["pr_comments"] += 1
+        logger.info(
+            f"  pr_comments={self.stats['pr_comments']} "
+            f"(from {len(self._overflow_pr_comments)}/{self.stats['prs']} PRs)"
+        )
 
 
     # Phase 3: dependent objects
@@ -242,32 +308,48 @@ class Orchestrator:
 
         if self._flags["withReviews"]:
             with_rc = self._flags.get("withReviewComments", False)
-            for review in fetch_pr_reviews(self.client, self._pr_numbers, page_size=self._ps.pr_reviews):
-                process_review(review, self.builder, self.repo_id, with_review_comments=with_rc)
-                self.stats["reviews"] += 1
-            logger.info(f"  reviews={self.stats['reviews']}")
+            if self._overflow_pr_reviews:
+                for review in fetch_pr_reviews(self.client, self._overflow_pr_reviews, page_size=self._ps.pr_reviews):
+                    process_review(review, self.builder, self.repo_id, with_review_comments=with_rc)
+                    self.stats["reviews"] += 1
+            logger.info(
+                f"  reviews={self.stats['reviews']} "
+                f"(from {len(self._overflow_pr_reviews)}/{self.stats['prs']} PRs)"
+            )
         else:
             logger.info("  reviews=SKIPPED (profile)")
 
         if self._flags["withTimeline"]:
-            for event in fetch_pr_timeline(self.client, self._pr_numbers, page_size=self._ps.pr_timeline):
-                process_timeline_event(event, self.builder, self.repo_id)
-                self.stats["timeline_events"] += 1
+            if self._overflow_pr_timeline:
+                for event in fetch_pr_timeline(self.client, self._overflow_pr_timeline, page_size=self._ps.pr_timeline):
+                    process_timeline_event(event, self.builder, self.repo_id)
+                    self.stats["timeline_events"] += 1
+            logger.info(
+                f"  pr_timeline_events={self.stats['timeline_events']} "
+                f"(from {len(self._overflow_pr_timeline)}/{self.stats['prs']} PRs)"
+            )
 
-            for event in fetch_issue_timeline(self.client, self._issue_numbers, page_size=self._ps.issue_timeline):
-                process_timeline_event(event, self.builder, self.repo_id)
-                self.stats["timeline_events"] += 1
-
-            logger.info(f"  timeline_events={self.stats['timeline_events']}")
+            issue_tl_before = self.stats["timeline_events"]
+            if self._overflow_issue_timeline:
+                for event in fetch_issue_timeline(self.client, self._overflow_issue_timeline, page_size=self._ps.issue_timeline):
+                    process_timeline_event(event, self.builder, self.repo_id)
+                    self.stats["timeline_events"] += 1
+            logger.info(
+                f"  issue_timeline_events={self.stats['timeline_events'] - issue_tl_before} "
+                f"(from {len(self._overflow_issue_timeline)}/{self.stats['issues']} issues)"
+            )
         else:
             logger.info("  timeline=SKIPPED (profile)")
 
         if self._flags.get("withThreads", False):
             threads_resolved = 0
-            for thread in fetch_pr_threads(self.client, self._pr_numbers):
+            for thread in fetch_pr_threads(self.client, self._overflow_pr_reviews):
                 process_review_thread(thread, self.builder, self.repo_id)
                 threads_resolved += 1
-            logger.info(f"  review_threads={threads_resolved}")
+            logger.info(
+                f"  review_threads={threads_resolved} "
+                f"(from {len(self._overflow_pr_reviews)}/{self.stats['prs']} PRs)"
+            )
         else:
             logger.info("  review_threads=SKIPPED (profile)")
 

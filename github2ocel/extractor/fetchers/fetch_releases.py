@@ -20,7 +20,7 @@ def fetch_releases(
     """
     logger.info("--- [Fetcher] Releases ---")
 
-    since_iso, until_iso = client.time_window_iso
+    since_iso, until_iso = client.ctx.time_window_iso
 
     count = 0
     for node in paginate_nodes(

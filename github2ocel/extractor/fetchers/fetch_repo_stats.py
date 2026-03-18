@@ -9,6 +9,15 @@ from github2ocel.transform.model.model import RepoStats
 
 logger = get_logger(__name__)
 
+def _format_window_str(since_iso: str | None, until_iso: str | None) -> str:
+    if since_iso and until_iso:
+        return f"since={since_iso[:10]} until={until_iso[:10]}"
+    if since_iso:
+        return f"since={since_iso[:10]}"
+    if until_iso:
+        return f"until={until_iso[:10]}"
+    return "full history"
+
 
 def fetch_repo_stats(client: GitHubClient, repo_id: str) -> tuple[RepoStats, ObjectInstance]:
     """
@@ -22,7 +31,7 @@ def fetch_repo_stats(client: GitHubClient, repo_id: str) -> tuple[RepoStats, Obj
     """
     logger.info("--- [Adaptive] Fetching repository stats ---")
 
-    since_iso, _ = client.time_window_iso   # None if no EXTRACT_SINCE_DAYS
+    since_iso, until_iso = client.ctx.time_window_iso  # None if no EXTRACT_SINCE_DAYS
 
     try:
         payload = client.graphql(
@@ -96,7 +105,8 @@ def fetch_repo_stats(client: GitHubClient, repo_id: str) -> tuple[RepoStats, Obj
         # --- Build Repository ObjectInstance ---
         repo_obj = _build_repository_object(repo_id, stats)
 
-        window_str = f"since={since_iso[:10]}" if since_iso else "full history"
+        window_str = _format_window_str(since_iso, until_iso)
+
         logger.info(
             f"  [{window_str}] issues={stats.issues} (total={stats.all_issues}) "
             f"prs={stats.pull_requests} "

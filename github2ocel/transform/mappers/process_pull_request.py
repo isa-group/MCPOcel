@@ -43,6 +43,7 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
             "changed_files":      node.get("changedFiles", 0),
             "total_changes":      node.get("additions", 0) + node.get("deletions", 0),
             "review_decision":    node.get("reviewDecision") or "",
+            "author_association": node.get("authorAssociation", ""),
             "commits_count":      (node.get("commits")      or {}).get("totalCount", 0),
             "comments_count":     (node.get("comments")     or {}).get("totalCount", 0),
             "participants_count": (node.get("participants")  or {}).get("totalCount", 0),

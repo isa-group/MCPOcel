@@ -46,7 +46,7 @@ class PageSizes:
    branches:      int = 100
    tags:          int = 100
    issues:        int = 50
-   pull_requests: int = 20
+   pull_requests: int = 30
    commits:       int = 50
    releases:      int = 50
    discussions:   int = 50

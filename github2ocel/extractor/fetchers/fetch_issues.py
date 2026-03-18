@@ -11,7 +11,6 @@ def fetch_issues(
     client: GitHubClient,
     page_size: int = 50,
     total: int = 0,
-    since: Optional[str] = None,
 ) -> Generator[Dict[str, Any], None, None]:
     """
     Yield issue nodes with activity in the time window.
@@ -25,7 +24,7 @@ def fetch_issues(
     """
     logger.info(f"--- [Fetcher] Issues (pageSize={page_size}) ---")
 
-    _, until_iso = client.ctx.time_window_iso
+    since, until_iso = client.ctx.time_window_iso
 
     variables = {"pageSize": page_size}
     if since:
@@ -44,7 +43,7 @@ def fetch_issues(
         updated_at = node.get("updatedAt", "")
         if updated_at > until_iso:
             skipped += 1
-            continue
+            break
 
         node["__type"] = "Issue"
         yield node

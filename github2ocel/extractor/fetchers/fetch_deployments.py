@@ -19,7 +19,7 @@ def fetch_deployments(
     """
     logger.info("--- [Fetcher] Deployments ---")
 
-    since_iso, until_iso = client.time_window_iso
+    since_iso, until_iso = client.ctx.time_window_iso
 
     count = 0
     skipped_future = 0

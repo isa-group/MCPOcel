@@ -31,21 +31,3 @@ def fetch_branches(
     ):
         node["__type"] = "Branch"
         yield node
-
-"""
-def fetch_branches(
-    client: GitHubClient,
-) -> Generator[Dict[str, Any], None, None]:
-    logger.info("--- [Fetcher] Branches ---")
-
-    endpoint = f"/repos/{client.owner}/{client.repo}/branches"
-    count = 0
-
-    for page in client.rest_paginated(endpoint=endpoint):
-        for branch in page:
-            branch["__type"] = "Branch"
-            yield branch
-            count += 1
-
-    logger.info(f"--- [Fetcher] Branches done — {count} ---")
-"""

@@ -1,12 +1,13 @@
 from typing import Any, Dict, Optional, List
 from .helper import make_id, parse_commit_message, safe_timestamp
+from shared.ocel.builder import OCELBuilder
 from shared.ocel.model.models  import ObjectInstance
 from shared.logger import get_logger
 
 logger = get_logger(__name__)
 
 def _ensure_object(
-    builder,
+    builder: OCELBuilder,
     repo_id: str,
     obj_type: str,
     raw_id: str,
@@ -47,7 +48,7 @@ def _ensure_object(
     return object_id
 
 
-def ensure_user(builder, repo_id: str, login: str, timestamp: str = None) -> Optional[str]:
+def ensure_user(builder: OCELBuilder, repo_id: str, login: str, timestamp: str = None) -> Optional[str]:
     return _ensure_object(
         builder=builder,
         repo_id=repo_id,
@@ -57,7 +58,7 @@ def ensure_user(builder, repo_id: str, login: str, timestamp: str = None) -> Opt
         attributes={"login": login}
     )
 
-def ensure_label(builder, repo_id: str, lbl: dict, timestamp: str = None) -> Optional[str]:
+def ensure_label(builder: OCELBuilder, repo_id: str, lbl: dict, timestamp: str = None) -> Optional[str]:
     node_id = lbl.get("id")
     name = lbl.get("name")
     if not node_id and not name:
@@ -79,7 +80,7 @@ def ensure_label(builder, repo_id: str, lbl: dict, timestamp: str = None) -> Opt
     )
 
 def ensure_commit(
-    builder,
+    builder: OCELBuilder,
     repo_id: str,
     sha: str,
     timestamp: str = None,
@@ -111,7 +112,7 @@ def ensure_commit(
 
 
 def ensure_commit_full(
-    builder,
+    builder: OCELBuilder,
     repo_id: str,
     sha: str,
     committed_date: str,
@@ -192,7 +193,7 @@ def ensure_file(builder, repo_id: str, filename: str, timestamp: str = None) -> 
 
 
 def ensure_comment(
-    builder,
+    builder: OCELBuilder,
     repo_id: str,
     comment_id: str,
     comment_type: str,
@@ -236,7 +237,7 @@ def ensure_comment(
         allow_update=True,  # upsert — multiple sources enrich the same object
     )
 
-def ensure_deployment(builder, repo_id: str, deployment: Dict[str, Any]) -> Optional[str]:
+def ensure_deployment(builder: OCELBuilder, repo_id: str, deployment: Dict[str, Any]) -> Optional[str]:
     if not deployment or not deployment.get("id"):
         logger.warning(f"Deployment missing id, skipping. Deployment data: {deployment}")
         return None
@@ -263,7 +264,7 @@ def ensure_deployment(builder, repo_id: str, deployment: Dict[str, Any]) -> Opti
     )
 
 
-def ensure_team(builder, repo_id: str, team: Dict[str, Any]) -> Optional[str]:
+def ensure_team(builder: OCELBuilder, repo_id: str, team: Dict[str, Any]) -> Optional[str]:
     if not team or not team.get("name"):
         return None
 
@@ -278,7 +279,7 @@ def ensure_team(builder, repo_id: str, team: Dict[str, Any]) -> Optional[str]:
         attributes={"name": team["name"]}
     )
 
-def _infer_qualifier_from_type(builder, obj_id: str) -> Optional[str]:
+def _infer_qualifier_from_type(builder: OCELBuilder, obj_id: str) -> Optional[str]:
     """
     Infers the O2O qualifier from the object type.
     Uses the builder's in-memory object_registry — no SQL needed.
@@ -296,3 +297,47 @@ def _infer_qualifier_from_type(builder, obj_id: str) -> Optional[str]:
         "Repository":  "belongs_to",
     }
     return qualifier_map.get(obj_type)
+
+def ensure_tagger(
+    builder: OCELBuilder,
+    repo_id: str,
+    tagger_info: Dict[str, Any],
+    timestamp: str,
+) -> Optional[str]:
+    """
+    Registers the tagger as a User object.
+
+    Priority:
+      1. GitHub login (linked account)
+      2. Git name + email (local git identity, no GitHub account)
+
+    Returns the tagger object_id or None if no identity is available.
+    """
+    if not tagger_info:
+        return None
+
+    login = tagger_info.get("login")
+    name  = tagger_info.get("name")
+    email = tagger_info.get("email")
+
+    if login:
+        return ensure_user(builder, repo_id, login, timestamp=timestamp)
+
+    # Fallback: git identity without GitHub account
+    # Use email as the stable key (more unique than name)
+    if email:
+        raw_id = email.replace("@", "_at_").replace(".", "_")
+        return _ensure_object(
+            builder=builder,
+            repo_id=repo_id,
+            obj_type="User",
+            raw_id=raw_id,
+            timestamp=timestamp,
+            attributes={
+                "login": "",
+                "git_name":  name  or "",
+                "git_email": email,
+            },
+        )
+
+    return None

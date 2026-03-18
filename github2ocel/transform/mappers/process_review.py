@@ -98,9 +98,6 @@ def process_review(
             map_review_comment(comment, builder, repo_id, review_id, pr_id)
 
 
-
-
-
 def process_review_thread(
     thread: Dict[str, Any],
     builder: OCELBuilder,
@@ -130,18 +127,24 @@ def process_review_thread(
     resolver_login = (thread.get("resolvedBy") or {}).get("login")
 
     # Use first comment's timestamp as proxy — threads have no own timestamp
-    first_comment = ((thread.get("comments") or {}).get("nodes") or [None])[0]
-    ts_raw = (first_comment or {}).get("createdAt") if first_comment else None
-    ts = safe_timestamp(ts_raw) if ts_raw else safe_timestamp("1970-01-01T00:00:00Z")
-
-    resolver_id = ensure_user(builder, repo_id, resolver_login, timestamp=ts) if resolver_login else None
-
     thread_comments = (thread.get("comments") or {}).get("nodes") or []
-    first_path = (first_comment or {}).get("path", "") if first_comment else ""
+    first_comment = thread_comments[0] if thread_comments else {}
+    ts_start_raw = first_comment.get("createdAt")
+
+    last_comment_ts = None
+    for tc in thread_comments:
+        if tc and tc.get("createdAt"):
+            last_comment_ts = tc.get("createdAt")
+
+    ts_resolution = safe_timestamp(last_comment_ts or ts_start_raw)
+
+    resolver_login = (thread.get("resolvedBy") or {}).get("login")
+    resolver_id = ensure_user(builder, repo_id, resolver_login, timestamp=ts_resolution) if resolver_login else None
 
     # Enrich each thread comment with replyTo O2O and thread-specific fields
     # No CommentCreated event — already generated from PR_REVIEWS_QUERY
-    prev_id = None
+    first_path = first_comment.get("path", "")
+
     for tc in thread_comments:
         if not tc:
             continue
@@ -154,12 +157,11 @@ def process_review_thread(
             thread_id=thread["id"],
             reply_to_id=reply_to,
         )
-        prev_id = tc.get("id")
 
     create_event(
         builder=builder,
         event_type=Activities.THREAD_RESOLVED,
-        ts=ts,
+        ts=ts_resolution,
         attributes={
             "thread_id":      thread["id"],
             "is_outdated":    int(thread.get("isOutdated", False)),

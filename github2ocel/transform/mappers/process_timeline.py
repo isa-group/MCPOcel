@@ -225,6 +225,12 @@ def _handle_closed(item, builder, repo_id, parent_id, is_pr):
     closer_type = closer.get("__typename", "")
     closer_ref = closer.get("number") or closer.get("oid", "")
 
+    # O2O: Issue → PR that closed it (only when an Issue is closed by a PR)
+    if not is_pr and closer_type == "PullRequest" and closer.get("number"):
+        closing_pr_id = make_id(repo_id, "pr", closer["number"])
+        if builder.object_exists(closing_pr_id):
+            _add_o2o(builder, parent_id, "Issue", closing_pr_id, "closed_by")
+
     create_event(
         builder=builder, event_type=activity, ts=ts,
         attributes={
@@ -327,6 +333,14 @@ def _handle_cross_referenced(item, builder, repo_id, parent_id, is_pr):
             source_id = None
     else:
         source_id = None
+
+    # O2O: target ← source via "references" (mention in body/comment)
+    # Distinct from "linked_issue" (ConnectedEvent = explicit link action)
+    if source_id and builder.object_exists(source_id):
+        _add_o2o(
+            builder, parent_id, "PullRequest" if is_pr else "Issue",
+            source_id, "references"
+        )
 
     create_event(
         builder=builder, event_type=Activities.CROSS_REFERENCED, ts=ts,

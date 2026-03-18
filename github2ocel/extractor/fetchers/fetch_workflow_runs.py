@@ -20,7 +20,7 @@ def fetch_workflow_runs(
     """
     logger.info("--- [Fetcher] Workflow Runs + Jobs ---")
 
-    since_iso, until_iso = client.time_window_iso
+    since_iso, until_iso = client.ctx.time_window_iso
 
     params: Dict[str, Any] = {"per_page": page_size, "page": 1}
 
