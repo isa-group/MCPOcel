@@ -20,6 +20,7 @@ def fetch_branches(
     calls needed.
     """
     logger.info(f"--- [Fetcher] Branches (pageSize={page_size}) ---")
+    count = 0
 
     for node in paginate_nodes(
         client=client,
@@ -31,3 +32,6 @@ def fetch_branches(
     ):
         node["__type"] = "Branch"
         yield node
+        count =+1
+
+    logger.info(f"--- [Fetcher] Deployments done — {count} ---")

@@ -19,6 +19,7 @@ def main() -> None:
     # logging
     setup_logging()
     logger = get_logger(__name__)
+    line = "=" * 60
 
     try:
         ctx = RepoContext.from_env()
@@ -27,7 +28,7 @@ def main() -> None:
         sys.exit(1)
 
     fullname = f"{ctx.owner}/{ctx.repo}"
-    logger.info(f"--- Pipeline Start: {fullname} ---")
+    logger.info(f"\n{line} Pipeline Start: {fullname} {line}\n")
 
     # Ensure storage exists
     storage_dir = Env.path("STORAGE_DIR", default="./storage")

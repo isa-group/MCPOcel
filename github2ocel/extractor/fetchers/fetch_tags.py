@@ -16,6 +16,8 @@ def fetch_tags(
 
     logger.info(f"--- [Fetcher] Tags (pageSize={page_size}) ---")
 
+    counts = {"lightweight": 0, "annotated": 0}
+
     for node in paginate_nodes(
         client=client,
         query=TAGS_QUERY,
@@ -31,6 +33,7 @@ def fetch_tags(
             # Lightweight tag — points directly to a commit
             author = target.get("author") or {}
             user   = author.get("user") or {}
+            counts["lightweight"] += 1
             yield {
                 "__type":       "Tag",
                 "id":           node.get("id"),
@@ -51,6 +54,7 @@ def fetch_tags(
             tagger = target.get("tagger") or {}
             user   = tagger.get("user") or {}
             commit = target.get("target") or {}
+            counts["annotated"] += 1
             yield {
                 "__type":       "Tag",
                 "id":           node.get("id"),
@@ -72,3 +76,7 @@ def fetch_tags(
                 f"unknown target type '{typename}'"
             )
             continue
+
+    # Resumen detallado en el footer
+    summary = f"{sum(counts.values())} tags ({counts['lightweight']} light, {counts['annotated']} annotated)"
+    logger.info(f"--- [Fetcher] Tags done — {summary} ---")

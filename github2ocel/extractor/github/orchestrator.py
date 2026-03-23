@@ -59,6 +59,24 @@ from github2ocel.transform.mappers import (
 logger = get_logger(__name__)
 
 # Orchestrator
+
+def log_phase_start(logger, name: str, width: int = 60):
+    line = "=" * width
+    logger.info(f"{line}")
+    logger.info(f"▶ {name}")
+    logger.info(f"{line}")
+
+def log_phase_end(logger, name: str, ok: bool, elapsed: float, width: int = 60):
+    line = "=" * width
+    symbol = "✔" if ok else "✖"
+    status = "OK" if ok else "FAILED"
+
+    if ok:
+        logger.info(f"{symbol} {name} [{status}] ({elapsed:.1f}s)")
+    else:
+        logger.error(f"{symbol} {name} [{status}] ({elapsed:.1f}s)")
+
+    logger.info(f"{line}\n")
 class Orchestrator:
 
     def __init__(
@@ -86,8 +104,13 @@ class Orchestrator:
         # relying on object_exists() checks that fail due to phase ordering.
         self._commit_pr_map: Dict[str, List[int]] = {}
 
+        # pr_number → headRefName map built in Phase 1, consumed in Phase 3
+        # Allows _handle_merged to resolve the Branch O2O without extra API calls.
+        self._pr_head_ref_map: Dict[int, str] = {}
+
         # PRs/Issues that exceeded embedded limits → need overflow pagination
         self._overflow_pr_reviews:     List[int] = []
+        self._overflow_pr_threads:     List[int] = []
         self._overflow_pr_comments:    List[int] = []
         self._overflow_pr_commits:     List[int] = []
         self._overflow_pr_timeline:    List[int] = []
@@ -100,7 +123,12 @@ class Orchestrator:
         # Active profile flags
         self._profile = client.ctx.profile
         self._flags = PROFILES[self._profile]
-        logger.info(f"Extraction profile: {self._profile.value} — {self._flags}")
+        """
+        separate = "=" * 60
+        line = "—" *30
+        logger.info(f"\n{separate} Extraction profile: {self._profile.value} {separate}\n")
+        logger.info(f"{line}  Flags {line}  \n {self._flags}\n {separate}{separate}\n")
+        """
 
     # Runner
     def run(self) -> bool:
@@ -127,11 +155,13 @@ class Orchestrator:
                 logger.info(f" - {name} [SKIPPED — no commits extracted in Phase 4]")
                 continue
 
-            logger.info(f" - {name}")
+            #logger.info(f" - {name}")
+            log_phase_start(logger, name)
             t0 = time.time()
             ok = self._run_phase(name, fn)
             elapsed = time.time() - t0
-            logger.info(f" * {name} [{'OK' if ok else 'FAILED'}] ({elapsed:.1f}s)")
+            log_phase_end(logger, name, ok, elapsed)
+            # logger.info(f" * {name} [{'OK' if ok else 'FAILED'}] ({elapsed:.1f}s)")
 
             if not ok:
                 logger.error(f"Pipeline aborted at '{name}'")
@@ -206,6 +236,11 @@ class Orchestrator:
             self.stats["prs"] += 1
             real_reviews += (node.get("reviews") or {}).get("totalCount", 0)
 
+            # Track head branch name for BranchMerged O2O in Phase 3 (MergedEvent handler)
+            head_ref = node.get("headRefName", "")
+            if head_ref:
+                self._pr_head_ref_map[pr_number] = head_ref
+
             # Populate overflow lists: only PRs that actually have nested data
             # need phase 2/3 fetcher calls. Threshold is > 0 because phase 1
             # does not embed any nodes yet (totalCount only) — when pageInfo
@@ -216,6 +251,8 @@ class Orchestrator:
                 self._overflow_pr_commits.append(pr_number)
             if (node.get("reviews") or {}).get("totalCount", 0) > 0:
                 self._overflow_pr_reviews.append(pr_number)
+            if (node.get("reviewThreads") or {}).get("totalCount", 0) > 0:
+                self._overflow_pr_threads.append(pr_number)
             if (node.get("timelineItems") or {}).get("totalCount", 0) > 0:
                 self._overflow_pr_timeline.append(pr_number)
 
@@ -224,6 +261,7 @@ class Orchestrator:
             f"(overflow_comments={len(self._overflow_pr_comments)} "
             f"overflow_commits={len(self._overflow_pr_commits)} "
             f"overflow_reviews={len(self._overflow_pr_reviews)} "
+            f"overflow_threads={len(self._overflow_pr_threads)} "
             f"overflow_timeline={len(self._overflow_pr_timeline)})"
         )
 
@@ -322,7 +360,7 @@ class Orchestrator:
 
         if self._flags["withTimeline"]:
             if self._overflow_pr_timeline:
-                for event in fetch_pr_timeline(self.client, self._overflow_pr_timeline, page_size=self._ps.pr_timeline):
+                for event in fetch_pr_timeline(self.client, self._overflow_pr_timeline, page_size=self._ps.pr_timeline, pr_head_ref_map=self._pr_head_ref_map):
                     process_timeline_event(event, self.builder, self.repo_id)
                     self.stats["timeline_events"] += 1
             logger.info(
@@ -344,12 +382,13 @@ class Orchestrator:
 
         if self._flags.get("withThreads", False):
             threads_resolved = 0
-            for thread in fetch_pr_threads(self.client, self._overflow_pr_reviews):
-                process_review_thread(thread, self.builder, self.repo_id)
-                threads_resolved += 1
+            if self._overflow_pr_threads:
+                for thread in fetch_pr_threads(self.client, self._overflow_pr_threads):
+                    process_review_thread(thread, self.builder, self.repo_id)
+                    threads_resolved += 1
             logger.info(
                 f"  review_threads={threads_resolved} "
-                f"(from {len(self._overflow_pr_reviews)}/{self.stats['prs']} PRs)"
+                f"(from {len(self._overflow_pr_threads)}/{self.stats['prs']} PRs)"
             )
         else:
             logger.info("  review_threads=SKIPPED (profile)")

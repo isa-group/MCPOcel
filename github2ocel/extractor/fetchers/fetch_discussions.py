@@ -10,6 +10,7 @@ def fetch_discussions(
     client: GitHubClient,
     page_size: int = 50,
 ) -> Generator[Dict[str, Any], None, None]:
+
     logger.info("--- [Fetcher] Discussions ---")
 
     since_iso, until_iso = client.time_window_iso
@@ -25,7 +26,7 @@ def fetch_discussions(
         if since_iso and created_at < since_iso:
             continue
         if created_at > until_iso:
-            continue
+            break
         node["__type"] = "Discussion"
         yield node
         count += 1

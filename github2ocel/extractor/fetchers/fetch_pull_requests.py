@@ -55,3 +55,5 @@ def fetch_pull_requests(
 
     if skipped:
         logger.info(f"  [fetch_pull_requests] {skipped} PRs skipped (outside time window)")
+
+    logger.info(f"--- [Fetcher] PullRequest done — {count} total. {skipped} PullRequest skipped ---")

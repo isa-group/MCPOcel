@@ -3,7 +3,6 @@ class Activities:
     """Registry of all Activity names used in the log."""
     ISSUE_OPENED = "IssueOpened"
     ISSUE_CLOSED = "IssueClosed"
-    ISSUE_COMMENT_CREATED = "IssueCommentCreated"
     ISSUE_ASSIGNED = "IssueAssigned"
     ISSUE_UNASSIGNED = "IssueUnassigned"
     ISSUE_REOPENED='IssueReopened'
@@ -61,9 +60,10 @@ class Activities:
 
     CROSS_REFERENCED = 'CrossReferenced'
 
-    BRANCH_CREATED = "BranchCreated"
+    BRANCH_CREATED = "BranchCreated" # 
     BRANCH_MERGED = "BranchMerged"
     BRANCH_DELETED = "BranchDeleted"
+    BRANCH_RESTORED = "BranchRestored"
     BRANCH_OBSERVED = "BranchSnapshot"
 
     TAG_CREATED = "TagCreated"

@@ -124,27 +124,26 @@ def process_review_thread(
     if not builder.object_exists(pr_id):
         return
 
-    resolver_login = (thread.get("resolvedBy") or {}).get("login")
-
-    # Use first comment's timestamp as proxy — threads have no own timestamp
     thread_comments = (thread.get("comments") or {}).get("nodes") or []
-    first_comment = thread_comments[0] if thread_comments else {}
-    ts_start_raw = first_comment.get("createdAt")
+    first_comment   = thread_comments[0] if thread_comments else {}
 
+    # ts_resolution: best proxy = last comment's createdAt.
+    # GitHub does not expose resolvedAt on PullRequestReviewThread.
     last_comment_ts = None
     for tc in thread_comments:
         if tc and tc.get("createdAt"):
             last_comment_ts = tc.get("createdAt")
-
-    ts_resolution = safe_timestamp(last_comment_ts or ts_start_raw)
+    ts_resolution = safe_timestamp(last_comment_ts or first_comment.get("createdAt"))
 
     resolver_login = (thread.get("resolvedBy") or {}).get("login")
     resolver_id = ensure_user(builder, repo_id, resolver_login, timestamp=ts_resolution) if resolver_login else None
 
-    # Enrich each thread comment with replyTo O2O and thread-specific fields
-    # No CommentCreated event — already generated from PR_REVIEWS_QUERY
+    # first_path extracted before the loop so the event attribute is consistent
+    # with the comments being enriched below.
     first_path = first_comment.get("path", "")
 
+    # Enrich each thread comment with replyTo O2O and thread-specific fields.
+    # No CommentCreated event — already generated from PR_REVIEWS_QUERY.
     for tc in thread_comments:
         if not tc:
             continue
