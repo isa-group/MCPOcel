@@ -315,7 +315,7 @@ class MCPClient:
     async def search_ocel(
         self,
         query: str,
-        top_k: int = 5,
+        limit: int = 5,
         chunk_types: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
@@ -323,13 +323,13 @@ class MCPClient:
 
         Args:
             query: Natural language query to search for.
-            top_k: Number of results to return (default: 5).
+            limit: Number of results to return (default: 5).
             chunk_types: Optional filter for chunk types.
 
         Returns:
             Dict with search results.
         """
-        args = {"query": query, "top_k": top_k}
+        args = {"query": query, "limit": limit}
         if chunk_types:
             args["chunk_types"] = chunk_types
         return await self.call_tool("search_ocel", args)
@@ -407,13 +407,13 @@ class SyncMCPClient:
     def search_ocel(
         self,
         query: str,
-        top_k: int = 5,
+        limit: int = 5,
         chunk_types: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         if not self._async_client or not self._loop:
             raise MCPClientError("Not connected")
         return self._loop.run_until_complete(
-            self._async_client.search_ocel(query, top_k, chunk_types)
+            self._async_client.search_ocel(query, limit, chunk_types)
         )
 
     def __enter__(self) -> "SyncMCPClient":

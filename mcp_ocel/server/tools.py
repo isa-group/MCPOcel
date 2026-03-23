@@ -466,7 +466,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
     @mcp.tool()
     @debug_log_tool
     def search_ocel(
-        query: str, top_k: int = 5, chunk_types: Optional[List[str]] = None
+        query: str, limit: int = 5, chunk_types: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Full-text search across all OCEL content: attribute values, object IDs, activity names, and schema definitions.
@@ -482,17 +482,51 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
           - "objects"      — actual object instances with attribute values
           - "schema"       — event/object type definitions and their declared attributes
           - "data"         — all events + objects with attribute values
-        Omit chunk_types to search across all content.
+        Omit chunk_types to search across all content. Pass only one of "schema" or "data"
+        if you want the dedicated schema-only or data-only search paths.
 
         Args:
             query: Free-text search query.
-            top_k: Maximum number of results to return (default: 5).
+            limit: Maximum number of results to return (default: 5). Must be a positive integer.
             chunk_types: Optional list of chunk type strings to restrict the search scope.
 
         Returns:
-            Dict with query, total_results, and results list each containing {content, chunk_type, path, score, metadata}.
+            Dict with query, total_results, and results list each containing
+            {content, chunk_type, path, score, metadata}.
         """
         try:
+            if limit < 1:
+                return {"error": "limit must be greater than 0"}
+
+            valid_chunk_types = {
+                "event_types",
+                "object_types",
+                "events",
+                "objects",
+                "schema",
+                "data",
+            }
+
+            normalized_chunk_types = None
+            if chunk_types is not None:
+                invalid_chunk_types = [
+                    chunk_type for chunk_type in chunk_types if chunk_type not in valid_chunk_types
+                ]
+                if invalid_chunk_types:
+                    return {
+                        "error": (
+                            "Invalid chunk_types value(s): "
+                            + ", ".join(repr(chunk_type) for chunk_type in invalid_chunk_types)
+                            + ". Allowed values are event_types, object_types, events, objects, schema, data."
+                        )
+                    }
+
+                normalized_chunk_types = list(dict.fromkeys(chunk_types))
+                if "schema" in normalized_chunk_types and len(normalized_chunk_types) > 1:
+                    return {"error": "chunk_types=['schema'] must be used by itself"}
+                if "data" in normalized_chunk_types and len(normalized_chunk_types) > 1:
+                    return {"error": "chunk_types=['data'] must be used by itself"}
+
             with ocel_lock:
                 retrieval_engine = ocel_state.get("retrieval_engine")
                 if not retrieval_engine:
@@ -500,12 +534,16 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
                         "error": "Retrieval engine not available - search not supported"
                     }
 
-                if chunk_types and "schema" in chunk_types:
-                    results = retrieval_engine.search_schema(query, top_k=top_k)
-                elif chunk_types and "data" in chunk_types:
-                    results = retrieval_engine.search_data(query, top_k=top_k)
+                if normalized_chunk_types and "schema" in normalized_chunk_types:
+                    results = retrieval_engine.search_schema(query, top_k=limit)
+                elif normalized_chunk_types and "data" in normalized_chunk_types:
+                    results = retrieval_engine.search_data(query, top_k=limit)
                 else:
-                    results = retrieval_engine.search(query, top_k=top_k)
+                    results = retrieval_engine.search(
+                        query,
+                        top_k=limit,
+                        chunk_types=normalized_chunk_types,
+                    )
 
             formatted_results = []
             for result in results:
