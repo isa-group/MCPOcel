@@ -209,6 +209,9 @@ query GetPullRequests(
         comments { totalCount }
         reviews { totalCount }
 
+        # totalCount only — threads fetched in Phase 3 (fetch_pr_threads) when withThreads=True
+        reviewThreads { totalCount }
+
 
         timelineItems(itemTypes: [
           ASSIGNED_EVENT, UNASSIGNED_EVENT,
@@ -587,6 +590,8 @@ query GetTimeline(
           REOPENED_EVENT
           MERGED_EVENT
           HEAD_REF_FORCE_PUSHED_EVENT
+          HEAD_REF_DELETED_EVENT
+          HEAD_REF_RESTORED_EVENT
           DEPLOYED_EVENT
           CROSS_REFERENCED_EVENT
           CONNECTED_EVENT
@@ -690,6 +695,17 @@ query GetTimeline(
             actor { login }
             beforeCommit { oid }
             afterCommit { oid }
+          }
+
+          ... on HeadRefDeletedEvent {
+            createdAt
+            actor { login ... on User { id } }
+            headRefName
+          }
+
+          ... on HeadRefRestoredEvent {
+            createdAt
+            actor { login ... on User { id } }
           }
 
           ... on DeployedEvent {

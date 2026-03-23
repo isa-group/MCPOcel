@@ -270,11 +270,39 @@ def _handle_merged(item, builder, repo_id, parent_id, is_pr):
         builder=builder, event_type=Activities.PR_MERGED, ts=ts,
         attributes={"merge_ref": item.get("mergeRefName", ""), "source": "timeline"},
         relationships=[
-            (parent_id,      "subject"),
-            (actor_id,       "actor")        if actor_id        else None,
+            (parent_id,       "subject"),
+            (actor_id,        "actor")        if actor_id        else None,
             (merge_commit_id, "merge_commit") if merge_commit_id and builder.object_exists(merge_commit_id) else None,
         ]
     )
+
+    # BranchMerged — the head branch of the PR was merged into mergeRefName.
+    # __pr_head_ref is injected by fetch_pr_timeline from the orchestrator map.
+    head_ref_name = item.get("__pr_head_ref", "")
+    if head_ref_name:
+        branch_id     = make_id(repo_id, "branch", head_ref_name)
+        branch_exists = builder.object_exists(branch_id)
+
+        # Resolve target (base) branch — the branch that received the merge
+        merge_ref_name  = item.get("mergeRefName", "")
+        target_branch_id = make_id(repo_id, "branch", merge_ref_name) if merge_ref_name else None
+        target_exists    = target_branch_id and builder.object_exists(target_branch_id)
+
+        create_event(
+            builder=builder, event_type=Activities.BRANCH_MERGED, ts=ts,
+            attributes={
+                "branch_name":  head_ref_name,
+                "merged_into":  merge_ref_name,
+                "source":       "timeline",
+            },
+            relationships=[
+                (parent_id,       "context"),
+                (actor_id,        "actor")          if actor_id      else None,
+                (branch_id,       "merged_branch")  if branch_exists else None,
+                (target_branch_id, "merged_into")   if target_exists else None,
+                (merge_commit_id,  "merge_commit")  if merge_commit_id and builder.object_exists(merge_commit_id) else None,
+            ]
+        )
 
 
 def _handle_force_pushed(item, builder, repo_id, parent_id, is_pr):
@@ -395,6 +423,61 @@ def _handle_disconnected(item, builder, repo_id, parent_id, is_pr):
     )
 
 
+def _handle_head_ref_deleted(item, builder, repo_id, parent_id, is_pr):
+    """
+    HeadRefDeletedEvent — fires when the head branch of a PR is deleted.
+    headRefName is preserved as a string even after the ref is gone,
+    so we can always log which branch was deleted.
+    """
+    ts           = safe_timestamp(item["createdAt"])
+    actor_id     = _resolve_user(builder, repo_id, item.get("actor"), ts)
+    head_ref_name = item.get("headRefName", "")
+
+    # O2O: resolve the Branch object if it still exists in the builder
+    branch_id = make_id(repo_id, "branch", head_ref_name) if head_ref_name else None
+    branch_exists = branch_id and builder.object_exists(branch_id)
+
+    # Enrich Branch object with a deleted_at snapshot if it exists
+    if branch_exists:
+        from shared.ocel.model.models import ObjectInstance
+        proxy = ObjectInstance(object_id=branch_id, object_type="Branch")
+        proxy.add_snapshot(time=ts, attributes={"deleted_at": ts})
+        builder.insert_object(proxy)
+
+    create_event(
+        builder=builder, event_type=Activities.BRANCH_DELETED, ts=ts,
+        attributes={
+            "branch_name": head_ref_name,
+            "source": "timeline",
+        },
+        relationships=[
+            (parent_id, "subject"),
+            (actor_id,  "actor")          if actor_id    else None,
+            (branch_id, "deleted_branch") if branch_exists else None,
+        ]
+    )
+
+
+def _handle_head_ref_restored(item, builder, repo_id, parent_id, is_pr):
+    """
+    HeadRefRestoredEvent — fires when a deleted head branch is restored
+    (GitHub allows restoring the branch of a merged/closed PR).
+    """
+    ts       = safe_timestamp(item["createdAt"])
+    actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
+
+    # We don't have headRefName here — GitHub doesn't expose it on this event.
+    # parent_id (the PR) carries the context.
+    create_event(
+        builder=builder, event_type=Activities.BRANCH_RESTORED, ts=ts,
+        attributes={"source": "timeline"},
+        relationships=[
+            (parent_id, "subject"),
+            (actor_id,  "actor") if actor_id else None,
+        ]
+    )
+
+
 # Dispatch table
 _HANDLERS = {
     "AssignedEvent":              _handle_assigned,
@@ -411,6 +494,8 @@ _HANDLERS = {
     "ReopenedEvent":              _handle_reopened,
     "MergedEvent":                _handle_merged,
     "HeadRefForcePushedEvent":    _handle_force_pushed,
+    "HeadRefDeletedEvent":        _handle_head_ref_deleted,
+    "HeadRefRestoredEvent":       _handle_head_ref_restored,
     "DeployedEvent":              _handle_deployed,
     "CrossReferencedEvent":       _handle_cross_referenced,
     "ConnectedEvent":             _handle_connected,

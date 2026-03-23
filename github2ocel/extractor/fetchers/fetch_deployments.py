@@ -22,7 +22,7 @@ def fetch_deployments(
     since_iso, until_iso = client.ctx.time_window_iso
 
     count = 0
-    skipped_future = 0
+    skipped = 0
     for node in paginate_nodes(
         client=client,
         query=DEPLOYMENTS_QUERY,
@@ -34,7 +34,7 @@ def fetch_deployments(
         # Nodes arrive newest-first. Skip those after until (recent deployments
         # outside the window) and continue — there may be more in-window nodes ahead.
         if created_at > until_iso:
-            skipped_future += 1
+            skipped += 1
             continue
 
         # Early-exit: once we see a node older than since, all following nodes
@@ -47,6 +47,7 @@ def fetch_deployments(
         yield node
         count += 1
 
-    if skipped_future:
-        logger.debug(f"[fetch_deployments] {skipped_future} deployments skipped (createdAt > until)")
-    logger.info(f"--- [Fetcher] Deployments done — {count} ---")
+    if skipped:
+        logger.debug(f"[fetch_deployments] {skipped} deployments skipped (createdAt > until)")
+
+    logger.info(f"--- [Fetcher] Deployments done — {count} total, {skipped} Issues skipped ---")

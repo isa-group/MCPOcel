@@ -31,6 +31,8 @@ def fetch_issues(
         variables["since"] = since
 
     skipped = 0
+    count = 0
+
     for node in paginate_nodes(
         client=client,
         query=ISSUES_QUERY,
@@ -47,6 +49,9 @@ def fetch_issues(
 
         node["__type"] = "Issue"
         yield node
+        count += 1
 
     if skipped:
         logger.info(f"  [fetch_issues] {skipped} issues skipped (updatedAt > {until_iso[:10]})")
+
+    logger.info(f"--- [Fetcher] Issue done — {count} toral. {skipped} Issues skipped---")

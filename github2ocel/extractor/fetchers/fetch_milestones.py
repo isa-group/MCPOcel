@@ -6,7 +6,6 @@ from shared.logger import get_logger
 
 logger = get_logger(__name__)
 
-
 def fetch_milestones(
     client: GitHubClient,
     page_size: int = 100,
@@ -17,6 +16,7 @@ def fetch_milestones(
     logger.info(f"--- [Fetcher] Milestones (pageSize={page_size}) ---")
 
     variables = {"pageSize": page_size}
+    count = 0
 
     for node in paginate_nodes(
         client=client,
@@ -28,3 +28,6 @@ def fetch_milestones(
     ):
         node["__type"] = "Milestone"
         yield node
+        count += 1
+
+    logger.info(f"--- [Fetcher] Milestone done — {count} ---")

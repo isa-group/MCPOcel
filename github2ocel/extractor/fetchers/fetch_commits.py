@@ -30,7 +30,7 @@ def fetch_commits(
         "cursor": None,
         "since": effective_since,
     }
-
+    count = 0
     for node in paginate_commit_history(
         client=client,
         query=COMMITS_QUERY,
@@ -38,3 +38,6 @@ def fetch_commits(
     ):
         node["__type"] = "Commit"
         yield node
+        count =+ 1
+
+    logger.info(f"--- [Fetcher] Deployments done — {count} ---")

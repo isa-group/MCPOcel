@@ -26,7 +26,8 @@ class GitHubClient:
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"Bearer {ctx.token}",
-            "Accept": "application/vnd.github+json"
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": self.config.api_version
         })
 
         self.rate_limiter = RateLimiter()

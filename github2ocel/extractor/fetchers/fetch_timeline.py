@@ -11,7 +11,9 @@ def fetch_pr_timeline(
     client: GitHubClient,
     pr_numbers: List[int],
     page_size: int = 100,
+    pr_head_ref_map: Dict[int, str] = None,
 ) -> Generator[Dict[str, Any], None, None]:
+
     logger.info(f"--- [Fetcher] PR Timelines for {len(pr_numbers)} PRs ---")
     total = 0
 
@@ -33,6 +35,9 @@ def fetch_pr_timeline(
                     continue
                 item["__pr_number"] = pr_number
                 item["__parent_type"] = "PullRequest"
+                # Inject head branch name for BranchMerged O2O resolution
+                if pr_head_ref_map:
+                    item["__pr_head_ref"] = pr_head_ref_map.get(pr_number, "")
                 yield item
                 total += 1
 
@@ -41,7 +46,6 @@ def fetch_pr_timeline(
             continue
 
     logger.info(f"--- [Fetcher] PR Timelines done — {total} events ---")
-
 
 def fetch_issue_timeline(
     client: GitHubClient,

@@ -47,13 +47,8 @@ def fetch_workflow_runs(
                 run["extracted_jobs"] = []
 
                 if fetch_jobs and run_id:
-                    try:
-                        jobs_url = f"/repos/{client.owner}/{client.repo}/actions/runs/{run_id}/jobs"
-                        jobs_data = client.rest(jobs_url, params={"per_page": 100})
-                        run["extracted_jobs"] = jobs_data.get("jobs", [])
-                        count_jobs += len(run["extracted_jobs"])
-                    except Exception as e:
-                        logger.warning(f"[fetch_workflow_runs] Jobs failed for run {run_id}: {e}")
+                    run["extracted_jobs"] = _fetch_all_jobs(client, run_id)
+                    count_jobs += len(run["extracted_jobs"])
 
                 run["__type"] = "WorkflowRun"
                 yield run
@@ -64,7 +59,7 @@ def fetch_workflow_runs(
 
             params["page"] += 1
 
-            if count_runs % 50 == 0:
+            if count_runs % 100 == 0:
                 logger.info(f"[fetch_workflow_runs] {count_runs} runs, {count_jobs} jobs…")
 
         except Exception as e:
@@ -72,3 +67,29 @@ def fetch_workflow_runs(
             break
 
     logger.info(f"--- [Fetcher] Workflow Runs done — {count_runs} runs, {count_jobs} jobs ---")
+
+
+def _fetch_all_jobs(client: GitHubClient, run_id: int) -> list:
+    """
+    Fetch all jobs for a workflow run, fully paginated.
+    Most runs have <100 jobs, but large matrix builds can exceed the limit.
+    """
+    jobs = []
+    jobs_url = f"/repos/{client.owner}/{client.repo}/actions/runs/{run_id}/jobs"
+    page = 1
+
+    while True:
+        try:
+            data = client.rest(jobs_url, params={"per_page": 100, "page": page})
+            batch = data.get("jobs", [])
+            jobs.extend(batch)
+
+            if len(batch) < 100:
+                break
+            page += 1
+
+        except Exception as e:
+            log.fetcher_warning(f"Jobs pagination failed for Run#{run_id} at page {page}: {e}")
+            break
+
+    return jobs

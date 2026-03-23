@@ -9,6 +9,7 @@ class APIConfig:
 
     graphql_url: str
     rest_url: str
+    api_version: str
     timeout: int
 
     max_retries: int
@@ -41,6 +42,10 @@ class APIConfig:
             rest_url=Env.str(
                 "GITHUB_API_URL",
                 default="https://api.github.com",
+            ),
+            api_version=Env.str(
+                "GITHUB_API_VERSION",
+                default="2022-11-28",
             ),
             timeout=Env.int("API_TIMEOUT", default=30),
             max_retries=Env.int("MAX_RETRIES", default=3),
