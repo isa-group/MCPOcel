@@ -488,7 +488,7 @@ def register_tools(mcp: FastMCP, ocel_state: Dict[str, Any], ocel_lock: Any) -> 
         Args:
             query: Free-text search query.
             limit: Maximum number of results to return (default: 5). Must be a positive integer.
-            chunk_types: Optional list of chunk type strings to restrict the search scope.
+            chunk_types: Optional ARRAY of chunk type strings to restrict the search scope.
 
         Returns:
             Dict with query, total_results, and results list each containing

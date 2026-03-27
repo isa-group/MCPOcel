@@ -23,29 +23,9 @@ from .process_mining import ProcessMiningEngine
 from .visualization_engine import VisualizationEngine
 from .cursor import CursorStore
 from .tools import register_tools
-
-# Lazy import for retrieval engine (optional dependency)
-_retrieval_engine = None
+from .retrieval import OCELRetrievalEngine
 
 logger = get_logger(__name__)
-
-
-def _get_retrieval_engine() -> Optional[Type[Any]]:
-    """Load the adaptive retrieval engine (SQLite FTS5 + BM25).
-    
-    Returns:
-        The OCELRetrievalEngine class if available, False if import failed.
-    """
-    global _retrieval_engine
-    if _retrieval_engine is None:
-        try:
-            from .retrieval import OCELRetrievalEngine
-            _retrieval_engine = OCELRetrievalEngine
-            logger.info("Adaptive retrieval engine loaded (SQLite FTS5 + BM25)")
-        except ImportError as e:
-            logger.warning(f"Retrieval engine not available: {e}")
-            _retrieval_engine = False
-    return _retrieval_engine
 
 
 # Global state for OCEL data (initialized once at server startup, shared across all client sessions)
@@ -132,21 +112,18 @@ def _initialize_ocel_state(ocel_path: str, debug: bool = False) -> None:
     viz_engine = VisualizationEngine(ocel_data, mining_engine)
     
     # Initialize retrieval engine (adaptive: SQLite FTS5 / Hybrid / BM25)
-    retrieval_engine = None
-    RetrievalClass = _get_retrieval_engine()
-    if RetrievalClass and RetrievalClass is not False:
-        try:
-            with _ocel_lock:
-                retrieval_engine = RetrievalClass()
-                ocel_dict = ocel_to_dict(ocel_data, ocel_config)
-                num_chunks = retrieval_engine.index_ocel(ocel_dict)
-                info = retrieval_engine.get_info()
-                logger.info(
-                    f"OCEL indexed with {info['strategy'].upper()} strategy - "
-                    f"{num_chunks} chunks - {info['ocel_size_mb']}MB"
-                )
-        except Exception as e:
-            logger.warning(f"Failed to initialize retrieval engine: {e}")
+    retrieval_engine = OCELRetrievalEngine()
+    try:
+        with _ocel_lock:
+            ocel_dict = ocel_to_dict(ocel_data, ocel_config)
+            num_chunks = retrieval_engine.index_ocel(ocel_dict)
+            info = retrieval_engine.get_info()
+            logger.info(
+                f"OCEL indexed with {info['strategy'].upper()} strategy - "
+                f"{num_chunks} chunks - {info['ocel_size_mb']}MB"
+            )
+    except Exception as e:
+        logger.warning(f"Failed to initialize retrieval engine: {e}")
     
     # Initialize cursor store — lives for the lifespan of the client session
     cursor_store = CursorStore()
