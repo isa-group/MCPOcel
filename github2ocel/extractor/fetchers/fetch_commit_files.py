@@ -64,9 +64,11 @@ def fetch_commit_files(
 
             commit_meta = data.get("commit") or {}
             verification = commit_meta.get("verification") or {}
+            committer    = commit_meta.get("committer") or {}
 
             yield {
                 "sha":                 sha,
+                "committed_date":      committer.get("date", ""),
                 "files":               files,
                 "verified":            verification.get("verified", False),
                 "verification_reason": verification.get("reason", ""),

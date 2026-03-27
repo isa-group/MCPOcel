@@ -3,6 +3,7 @@ from shared.ocel.builder import OCELBuilder
 from shared.ocel.model.models import ObjectInstance
 from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
 from github2ocel.transform.utils.ensure import ensure_user, ensure_label
+from github2ocel.transform.utils.reactions import parse_reaction_groups
 from github2ocel.transform.utils.activity import Activities
 from github2ocel.transform.mappers.process_comment import map_issue_comment
 from shared.logger import get_logger
@@ -21,17 +22,7 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
 
     body_text = node.get("bodyText") or ""
 
-    positive_votes = 0
-    negative_votes = 0
-
-    for group in node.get("reactionGroups", []):
-        content = group.get("content", "")
-        count = (group.get("reactors") or {}).get("totalCount", 0)
-
-        if content in ("THUMBS_UP", "HEART", "HOORAY", "ROCKET"):
-            positive_votes += count
-        elif content in ("THUMBS_DOWN", "CONFUSED"):
-            negative_votes += count
+    reactions = parse_reaction_groups(node.get("reactionGroups", []))
 
     # Object: Issue
     obj = ObjectInstance(object_id=obj_id, object_type="Issue")
@@ -43,6 +34,7 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
             "state":              node.get("state", "OPEN"),
             "state_reason":       node.get("stateReason") or "",
             "url":                node.get("url", ""),
+            "github_node_id":     node.get("id", ""),
             "updated_at":         safe_timestamp(node.get("updatedAt")),
             "closed_at":          safe_timestamp(node.get("closedAt")) if node.get("closedAt") else None,
             "body_length":        len(body_text),
@@ -52,10 +44,9 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
             "is_pinned":          1 if node.get("isPinned") else 0,
             "author_association": node.get("authorAssociation", ""),
             "reactions_count":    (node.get("reactions") or {}).get("totalCount", 0),
-            "reactions_positive": positive_votes,
-            "reactions_negative": negative_votes,
             "participants_count": (node.get("participants") or {}).get("totalCount", 0),
             "comments_count":     (node.get("comments") or {}).get("totalCount", 0),
+            **reactions,
         }
     )
 
@@ -106,20 +97,3 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
     # NOTE: IssueCommentCreated events are NOT mapped here.
     # All comments are fetched and mapped in Phase 2 (fetch_issue_comments)
     # to avoid duplicate events and ensure full pagination coverage.
-
-
-def process_issue_comment(comment: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
-    """
-    Map a single Issue comment to a Comment object + CommentCreated event.
-    Called from Phase 2 with fully paginated comment nodes.
-    The comment dict must have "__issue_number" injected by the fetcher.
-    """
-    issue_number = comment.get("__issue_number")
-    if not issue_number:
-        return
-
-    issue_id = make_id(repo_id, "issue", issue_number)
-    if not builder.object_exists(issue_id):
-        return
-
-    map_issue_comment(comment, builder, repo_id, issue_id)

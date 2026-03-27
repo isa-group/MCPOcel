@@ -25,7 +25,7 @@ def run_extractor(
         "reviews": 0, "timeline_events": 0,
         "commits": 0,
         "deployments": 0, "workflow_runs": 0, "workflow_jobs": 0,
-        "releases": 0, "discussions": 0,
+        "releases": 0, "discussions": 0, "discussion_comments": 0,
         "overflow_prs": 0,  # PRs truncated by max_pages limit — incremented by orchestrator
     }
 

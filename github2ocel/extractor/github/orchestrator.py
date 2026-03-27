@@ -31,6 +31,7 @@ from github2ocel.extractor.fetchers import (
     fetch_workflow_runs,
     fetch_releases,
     fetch_discussions,
+    fetch_discussion_comments,
     fetch_commit_files
 )
 
@@ -53,30 +54,13 @@ from github2ocel.transform.mappers import (
     apply_retry_links,
     process_release,
     process_discussion_node,
+    process_discussion_comment,
     process_commit_files
 )
 
 logger = get_logger(__name__)
 
 # Orchestrator
-
-def log_phase_start(logger, name: str, width: int = 60):
-    line = "=" * width
-    logger.info(f"{line}")
-    logger.info(f"▶ {name}")
-    logger.info(f"{line}")
-
-def log_phase_end(logger, name: str, ok: bool, elapsed: float, width: int = 60):
-    line = "=" * width
-    symbol = "✔" if ok else "✖"
-    status = "OK" if ok else "FAILED"
-
-    if ok:
-        logger.info(f"{symbol} {name} [{status}] ({elapsed:.1f}s)")
-    else:
-        logger.error(f"{symbol} {name} [{status}] ({elapsed:.1f}s)")
-
-    logger.info(f"{line}\n")
 class Orchestrator:
 
     def __init__(
@@ -108,14 +92,15 @@ class Orchestrator:
         # Allows _handle_merged to resolve the Branch O2O without extra API calls.
         self._pr_head_ref_map: Dict[int, str] = {}
 
-        # PRs/Issues that exceeded embedded limits → need overflow pagination
-        self._overflow_pr_reviews:     List[int] = []
-        self._overflow_pr_threads:     List[int] = []
-        self._overflow_pr_comments:    List[int] = []
-        self._overflow_pr_commits:     List[int] = []
-        self._overflow_pr_timeline:    List[int] = []
-        self._overflow_issue_comments: List[int] = []
-        self._overflow_issue_timeline: List[int] = []
+        # PRs/Issues/Discussions that exceeded embedded limits → need overflow pagination
+        self._overflow_pr_reviews:          List[int] = []
+        self._overflow_pr_threads:          List[int] = []
+        self._overflow_pr_comments:         List[int] = []
+        self._overflow_pr_commits:          List[int] = []
+        self._overflow_pr_timeline:         List[int] = []
+        self._overflow_issue_comments:      List[int] = []
+        self._overflow_issue_timeline:      List[int] = []
+        self._overflow_discussion_comments: List[int] = []
 
         # Adaptive page sizes
         self._ps: PageSizes = PageSizes()
@@ -123,12 +108,7 @@ class Orchestrator:
         # Active profile flags
         self._profile = client.ctx.profile
         self._flags = PROFILES[self._profile]
-        """
-        separate = "=" * 60
-        line = "—" *30
-        logger.info(f"\n{separate} Extraction profile: {self._profile.value} {separate}\n")
-        logger.info(f"{line}  Flags {line}  \n {self._flags}\n {separate}{separate}\n")
-        """
+        logger.info(f"Extraction profile: {self._profile.value} — {self._flags}")
 
     # Runner
     def run(self) -> bool:
@@ -142,7 +122,8 @@ class Orchestrator:
             ("Phase 4b    — Commit files",        self._phase4b_commit_files, self._flags.get("withFileObjects", False)),
             ("Phase 5     — Releases",            self._phase5_releases,      True),
             ("Phase 6     — DevOps",              self._phase6_devops,        True),
-            ("Phase 7     — Knowledge base",      self._phase7_knowledge,     self._flags["withDiscussions"]),
+            ("Phase 7     — Knowledge base",      self._phase7_knowledge,           self._flags["withDiscussions"]),
+            ("Phase 7b    — Discussion comments", self._phase7b_discussion_comments, self._flags["withDiscussions"]),
         ]
 
         for name, fn, enabled in phases:
@@ -155,13 +136,11 @@ class Orchestrator:
                 logger.info(f" - {name} [SKIPPED — no commits extracted in Phase 4]")
                 continue
 
-            #logger.info(f" - {name}")
-            log_phase_start(logger, name)
+            logger.info(f" - {name}")
             t0 = time.time()
             ok = self._run_phase(name, fn)
             elapsed = time.time() - t0
-            log_phase_end(logger, name, ok, elapsed)
-            # logger.info(f" * {name} [{'OK' if ok else 'FAILED'}] ({elapsed:.1f}s)")
+            logger.info(f" * {name} [{'OK' if ok else 'FAILED'}] ({elapsed:.1f}s)")
 
             if not ok:
                 logger.error(f"Pipeline aborted at '{name}'")
@@ -295,12 +274,15 @@ class Orchestrator:
     # Phase 2: per-node detail (requires Phase 1 objects)
     def _phase2_detail(self):
         """
-        Fully paginated comments and commit O2O links.
+        Fully paginated comments and commit O2O links for issues and PRs.
         Kept separate from Phase 1 so the base pass runs at full pageSize
         without being slowed down by nested pagination.
 
         Uses overflow lists populated in Phase 1 from totalCount fields:
         only issues/PRs that actually have nested data generate API calls.
+
+        Discussion comments are NOT here — their overflow list is populated
+        in Phase 7 (after discussions are extracted), so they run in Phase 7b.
         """
         # Issue comments — only issues with comments (overflow_issue_comments)
         if self._overflow_issue_comments:
@@ -471,7 +453,39 @@ class Orchestrator:
 
     # Phase 7: knowledge base
     def _phase7_knowledge(self):
+        """
+        Extract Discussion objects and map embedded comments (up to 50 per discussion).
+        Discussions with more comments populate _overflow_discussion_comments,
+        which Phase 7b consumes immediately after.
+        """
         for node in fetch_discussions(self.client, page_size=self._ps.discussions):
-            process_discussion_node(node, self.builder, self.repo_id)
+            has_overflow = process_discussion_node(node, self.builder, self.repo_id)
             self.stats["discussions"] += 1
-        logger.info(f"  discussions={self.stats['discussions']}")
+            if has_overflow:
+                self._overflow_discussion_comments.append(int(node["number"]))
+        logger.info(
+            f"  discussions={self.stats['discussions']} "
+            f"(overflow_comments={len(self._overflow_discussion_comments)})"
+        )
+
+    # Phase 7b: discussion comment overflow pagination
+    def _phase7b_discussion_comments(self):
+        """
+        Fully paginate comments for discussions that exceeded the embedded limit.
+        Runs immediately after Phase 7 so discussion objects are guaranteed to exist.
+        Skipped automatically when no discussions had overflow (list is empty).
+        """
+        if not self._overflow_discussion_comments:
+            logger.info("  discussion_comments=SKIPPED (no overflow)")
+            return
+        for comment in fetch_discussion_comments(
+            self.client,
+            self._overflow_discussion_comments,
+            page_size=self._ps.issue_comments,
+        ):
+            process_discussion_comment(comment, self.builder, self.repo_id)
+            self.stats["discussion_comments"] += 1
+        logger.info(
+            f"  discussion_comments={self.stats['discussion_comments']} "
+            f"(from {len(self._overflow_discussion_comments)}/{self.stats['discussions']} discussions)"
+        )

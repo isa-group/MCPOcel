@@ -70,35 +70,31 @@ class OCEL2JsonExporter:
         return "string"
 
     def _build_types(self, kind: str) -> List[Dict[str, Any]]:
-        """Build type definitions by reading the “map” tables and the SQL structure."""
+        # Also returns ocel_type_map so it can be reused in _export_*
+        # Avoids the extra SELECT by type within the export loop
         types_list = []
         map_table = f"{kind}_map_type"
-
-        # Read type catalogue
-        rows = self.cursor.execute(f"SELECT ocel_type, ocel_type_map FROM {map_table}").fetchall()
+        rows = self.cursor.execute(
+            f"SELECT ocel_type, ocel_type_map FROM {map_table}"
+        ).fetchall()
 
         for row in rows:
-            type_name = row["ocel_type"]
-            table_name = f"{kind}_{row['ocel_type_map']}"
+            type_name  = row["ocel_type"]
+            type_map   = row["ocel_type_map"]
+            table_name = f"{kind}_{type_map}"
+            columns    = self.cursor.execute(
+                f"PRAGMA table_info({table_name})"
+            ).fetchall()
 
-            # Inspect columns in the specific table
-            columns = self.cursor.execute(f"PRAGMA table_info({table_name})").fetchall()
-
-            attributes = []
-            for col in columns:
-                col_name = col["name"]
-                # Ignore system columns
-                if col_name in ["ocel_id", "ocel_time", "ocel_changed_field"]:
-                    continue
-
-                attributes.append({
-                    "name": col_name,
-                    "type": self._get_json_type(col["type"])
-                })
-
+            attributes = [
+                {"name": col["name"], "type": self._get_json_type(col["type"])}
+                for col in columns
+                if col["name"] not in ("ocel_id", "ocel_time", "ocel_changed_field")
+            ]
             types_list.append({
-                "name": type_name,
-                "attributes": attributes
+                "name":       type_name,
+                "table_map":  type_map,
+                "attributes": attributes,
             })
         return types_list
 
@@ -113,14 +109,11 @@ class OCEL2JsonExporter:
             })
         return rels
 
-    def _export_events(self, event_types: List[Dict], rel_map: Dict) -> List[Dict]:
+    def _export_events(self, event_types, rel_map):
         events = []
         for et in event_types:
+            table_name = f"event_{et['table_map']}"
             type_name = et["name"]
-
-            # Sanitised table name
-            map_row = self.cursor.execute("SELECT ocel_type_map FROM event_map_type WHERE ocel_type = ?", (type_name,)).fetchone()
-            table_name = f"event_{map_row['ocel_type_map']}"
 
             attr_names = [a["name"] for a in et["attributes"]]
 
@@ -153,33 +146,37 @@ class OCEL2JsonExporter:
         objects_dict = {}
 
         for ot in object_types:
-            type_name = ot["name"]
-            map_row = self.cursor.execute("SELECT ocel_type_map FROM object_map_type WHERE ocel_type = ?", (type_name,)).fetchone()
-            table_name = f"object_{map_row['ocel_type_map']}"
+            table_name = f"object_{ot['table_map']}"
+            type_name  = ot["name"]
             attr_names = [a["name"] for a in ot["attributes"]]
 
             rows = self.cursor.execute(f"SELECT * FROM {table_name}").fetchall()
             for row in rows:
                 oid = row["ocel_id"]
-                ts = row["ocel_time"]
+                ts  = row["ocel_time"]
 
-                # Initialise object
                 if oid not in objects_dict:
                     objects_dict[oid] = {
-                        "id": oid,
-                        "type": type_name,
+                        "id":         oid,
+                        "type":       type_name,
                         "attributes": []
                     }
 
-                # Add attributes with their timestamp
                 for name in attr_names:
                     if row[name] is not None:
                         objects_dict[oid]["attributes"].append({
-                            "name": name,
-                            "time": ts,
+                            "name":  name,
+                            "time":  ts,
                             "value": row[name]
                         })
 
+        # Sort each object's attribute snapshots chronologically.
+        # Ensures stub snapshots (1970-01-01) appear before enriched ones,
+        # consistent with OCEL 2.0 semantics and readable in tooling.
+        """
+        for obj in objects_dict.values():
+            obj["attributes"].sort(key=lambda a: a["time"])
+        """
         return list(objects_dict.values())
 
     def _export_o2o(self) -> List[Dict]:

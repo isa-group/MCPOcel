@@ -2,7 +2,7 @@ from typing import Dict, Any
 from shared.ocel.builder import OCELBuilder
 from shared.ocel.model.models import ObjectInstance
 from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
-from github2ocel.transform.utils.ensure import ensure_user
+from github2ocel.transform.utils.ensure import ensure_user, ensure_commit
 from github2ocel.transform.utils.activity import Activities
 from github2ocel.transform.mappers.process_comment import map_review_comment, enrich_review_comment_from_thread
 from shared.logger import get_logger
@@ -47,7 +47,12 @@ def process_review(
     author_login = (node.get("author") or {}).get("login")
     author_id = ensure_user(builder, repo_id, author_login, timestamp=submitted) if author_login else None
 
-    body_text = node.get("bodyText") or ""
+    body_text   = node.get("bodyText") or ""
+    author_role = node.get("authorAssociation", "")
+
+    # O2O: Review → Commit (the commit on which this review was submitted)
+    commit_oid = (node.get("commit") or {}).get("oid")
+    commit_id  = ensure_commit(builder, repo_id, commit_oid, timestamp=submitted) if commit_oid else None
 
     # Object: Review
     obj = ObjectInstance(object_id=review_id, object_type="Review")
@@ -58,6 +63,7 @@ def process_review(
             "body_length":    len(body_text),
             "comments_count": (node.get("comments") or {}).get("totalCount", 0),
             "submitted_at":   submitted,
+            "author_role":    author_role,
         }
     )
 
@@ -68,6 +74,10 @@ def process_review(
     # O2O: Review -> Reviewer
     if author_id:
         obj.add_rel(author_id, "submitted_by")
+
+    # O2O: Review -> Commit
+    if commit_id:
+        obj.add_rel(commit_id, "reviewed_at_commit")
 
     builder.insert_object(obj)
 
@@ -81,12 +91,14 @@ def process_review(
         attributes={
             "review_state": state,
             "body_length":  len(body_text),
+            "author_role":  author_role,
             "source":       "graphql",
         },
         relationships=[
             (review_id, "subject"),
             (pr_id,     "context"),
-            (author_id, "reviewer") if author_id else None,
+            (author_id, "reviewer")         if author_id else None,
+            (commit_id, "reviewed_at_commit") if commit_id else None,
             (repo_id,   "repository"),
         ]
     )
@@ -124,26 +136,34 @@ def process_review_thread(
     if not builder.object_exists(pr_id):
         return
 
-    thread_comments = (thread.get("comments") or {}).get("nodes") or []
-    first_comment   = thread_comments[0] if thread_comments else {}
-
-    # ts_resolution: best proxy = last comment's createdAt.
-    # GitHub does not expose resolvedAt on PullRequestReviewThread.
-    last_comment_ts = None
-    for tc in thread_comments:
-        if tc and tc.get("createdAt"):
-            last_comment_ts = tc.get("createdAt")
-    ts_resolution = safe_timestamp(last_comment_ts or first_comment.get("createdAt"))
-
     resolver_login = (thread.get("resolvedBy") or {}).get("login")
-    resolver_id = ensure_user(builder, repo_id, resolver_login, timestamp=ts_resolution) if resolver_login else None
 
-    # first_path extracted before the loop so the event attribute is consistent
-    # with the comments being enriched below.
-    first_path = first_comment.get("path", "")
+    # Timestamp resolution strategy (best to worst):
+    # 1. resolvedAt — exact moment the thread was resolved (added to PR_THREADS_QUERY)
+    # 2. Last comment's createdAt — thread was resolved after the last comment
+    # 3. First comment's createdAt — conservative lower bound
+    # Never fall back to epoch (1970) — that breaks process mining timelines in Celonis
+    comment_nodes = (thread.get("comments") or {}).get("nodes") or []
+    first_comment = comment_nodes[0] if comment_nodes else None
+    last_comment  = comment_nodes[-1] if comment_nodes else None
 
-    # Enrich each thread comment with replyTo O2O and thread-specific fields.
-    # No CommentCreated event — already generated from PR_REVIEWS_QUERY.
+    ts = (
+        safe_timestamp(thread.get("resolvedAt"))
+        or safe_timestamp((last_comment  or {}).get("createdAt"))
+        or safe_timestamp((first_comment or {}).get("createdAt"))
+    )
+    if not ts:
+        logger.warning(f"[process_review_thread] No timestamp for thread {thread.get('id')} — skipping")
+        return
+
+    resolver_id = ensure_user(builder, repo_id, resolver_login, timestamp=ts) if resolver_login else None
+
+    thread_comments = comment_nodes
+    first_path = (first_comment or {}).get("path", "") if first_comment else ""
+
+    # Enrich each thread comment with replyTo O2O and thread-specific fields
+    # No CommentCreated event — already generated from PR_REVIEWS_QUERY
+    prev_id = None
     for tc in thread_comments:
         if not tc:
             continue
@@ -156,11 +176,12 @@ def process_review_thread(
             thread_id=thread["id"],
             reply_to_id=reply_to,
         )
+        prev_id = tc.get("id")
 
     create_event(
         builder=builder,
         event_type=Activities.THREAD_RESOLVED,
-        ts=ts_resolution,
+        ts=ts,
         attributes={
             "thread_id":      thread["id"],
             "is_outdated":    int(thread.get("isOutdated", False)),

@@ -1,4 +1,4 @@
-from typing import Generator, Dict, Any, Optional
+from typing import Generator, Dict, Any
 from github2ocel.client.github_client import GitHubClient
 from github2ocel.client.paginator import paginate_nodes
 from github2ocel.extractor.graphql.queries import ISSUES_QUERY
@@ -54,4 +54,4 @@ def fetch_issues(
     if skipped:
         logger.info(f"  [fetch_issues] {skipped} issues skipped (updatedAt > {until_iso[:10]})")
 
-    logger.info(f"--- [Fetcher] Issue done — {count} toral. {skipped} Issues skipped---")
+    logger.info(f"--- [Fetcher] Issue done — {count} total. {skipped} Issues skipped---")

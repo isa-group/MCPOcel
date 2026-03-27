@@ -129,7 +129,7 @@ def _handle_ready_for_review(item, builder, repo_id, parent_id, is_pr):
     actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
 
     create_event(
-        builder=builder, event_type="PRReadyForReview", ts=ts,
+        builder=builder, event_type=Activities.PR_FOR_REVIEW, ts=ts,
         attributes={"source": "timeline"},
         relationships=[
             (parent_id, "subject"),
@@ -143,7 +143,7 @@ def _handle_convert_to_draft(item, builder, repo_id, parent_id, is_pr):
     actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
 
     create_event(
-        builder=builder, event_type="PRConvertedToDraft", ts=ts,
+        builder=builder, event_type=Activities.PR_CONVERT_DRAFT, ts=ts,
         attributes={"source": "timeline"},
         relationships=[
             (parent_id, "subject"),
@@ -178,7 +178,7 @@ def _handle_unlabeled(item, builder, repo_id, parent_id, is_pr):
     lbl = item.get("label") or {}
 
     create_event(
-        builder=builder, event_type="LabelRemoved", ts=ts,
+        builder=builder, event_type=Activities.LABEL_REMOVED, ts=ts,
         attributes={"label_name": lbl.get("name", ""), "source": "timeline"},
         relationships=[
             (parent_id, "target"),
@@ -206,7 +206,7 @@ def _handle_demilestoned(item, builder, repo_id, parent_id, is_pr):
     actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
 
     create_event(
-        builder=builder, event_type="MilestoneRemoved", ts=ts,
+        builder=builder, event_type=Activities.MILESTONE_REMOVED, ts=ts,
         attributes={"milestone_title": item.get("milestoneTitle", ""), "source": "timeline"},
         relationships=[
             (parent_id, "target"),

@@ -14,12 +14,12 @@ def process_deployment(node: Dict[str, Any], builder: OCELBuilder, repo_id: str)
     """
     Map a GraphQL deployment node to OCEL 2.0.
 
-    Objects:    Deployment
-    Events:     DeploymentCreated, DeploymentSucceeded, DeploymentFailed
-    O2O:        Deployment -> Repo       (deployed_to)           - via ensure_deployment
-                Deployment -> Commit     (deploys_commit)
-                Deployment -> User       (created_by)
-                Deployment -> Branch     (deployed_from_branch)  - from ref.name
+    Objects:   Deployment
+    Events:    DeploymentCreated, DeploymentSucceeded, DeploymentFailed
+    O2O:       Deployment → Repo    (deployed_to)             — via ensure_deployment
+               Deployment → Commit  (deploys_commit)
+               Deployment → User    (created_by)
+               Deployment → Branch  (deployed_from_branch)   — from ref.name
     """
     dep_id = ensure_deployment(builder, repo_id, node)
     if not dep_id:
@@ -29,7 +29,7 @@ def process_deployment(node: Dict[str, Any], builder: OCELBuilder, repo_id: str)
     ts_created = safe_timestamp(node.get("createdAt"))
     env_name   = node.get("environment", "unknown")
 
-    # O2O -> Commit
+    # O2O → Commit
     commit_oid = (node.get("commit") or {}).get("oid")
     commit_id  = None
     if commit_oid:
@@ -39,7 +39,7 @@ def process_deployment(node: Dict[str, Any], builder: OCELBuilder, repo_id: str)
             proxy.add_rel(commit_id, "deploys_commit")
             builder.insert_object(proxy)
 
-    # O2O -> User (creator)
+    # O2O → User (creator)
     creator_login = (node.get("creator") or {}).get("login")
     user_id = ensure_user(builder, repo_id, creator_login, timestamp=ts_created) if creator_login else None
     if user_id:
@@ -47,7 +47,8 @@ def process_deployment(node: Dict[str, Any], builder: OCELBuilder, repo_id: str)
         proxy.add_rel(user_id, "created_by")
         builder.insert_object(proxy)
 
-    # O2O -> Branch (ref.name - Branch objects seeded in Phase 0)
+    # O2O → Branch (ref.name — Branch objects seeded in Phase 0)
+    branch_id = None  # initialised here — used in create_event relationships below
     ref_name = (node.get("ref") or {}).get("name") if isinstance(node.get("ref"), dict) else None
     if ref_name:
         branch_id = make_id(repo_id, "branch", ref_name)
@@ -69,8 +70,9 @@ def process_deployment(node: Dict[str, Any], builder: OCELBuilder, repo_id: str)
         relationships=[
             (dep_id,    "subject"),
             (repo_id,   "context"),
-            (user_id,   "actor")       if user_id   else None,
-            (commit_id, "on_commit")   if commit_id else None,
+            (user_id,   "actor")     if user_id   else None,
+            (commit_id, "on_commit") if commit_id else None,
+            (branch_id, "on_branch")  if branch_id else None,
         ]
     )
 
@@ -81,13 +83,16 @@ def process_deployment(node: Dict[str, Any], builder: OCELBuilder, repo_id: str)
 
         state     = (status.get("state") or "").upper()
         status_ts = safe_timestamp(status.get("createdAt"))
+
         if not status_ts:
             continue
 
         if state == "SUCCESS":
             event_type = Activities.DEPLOYMENT_SUCCEEDED
-        elif state in ("FAILURE", "ERROR"):
+        elif state == "FAILURE":
             event_type = Activities.DEPLOYMENT_FAILED
+        elif state == "ERROR":
+            event_type = Activities.DEPLOYMENT_ERROR
         else:
             continue
 
