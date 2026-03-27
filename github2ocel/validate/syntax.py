@@ -1,5 +1,5 @@
-from typing import Dict, List, Any
-from .common import validate_required_keys, validate_type
+from typing import Dict, List
+from .common import validate_required_keys
 
 def validate_ocel_structure(ocel: Dict) -> List[str]:
     """

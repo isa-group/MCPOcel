@@ -3,6 +3,7 @@ from shared.ocel.builder import OCELBuilder
 from shared.ocel.model.models import ObjectInstance
 from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
 from github2ocel.transform.utils.ensure import ensure_user, ensure_label, ensure_commit
+from github2ocel.transform.utils.reactions import parse_reaction_groups
 from github2ocel.transform.utils.activity import Activities
 from github2ocel.transform.mappers.process_comment import map_pr_comment
 from shared.logger import get_logger
@@ -16,12 +17,23 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
         logger.warning("[process_pull_request] Missing number. Skipping.")
         return
 
-    obj_id     = make_id(repo_id, "pr", number)
+    obj_id = make_id(repo_id, "pr", number)
     created_at = safe_timestamp(node.get("createdAt"))
-    merged_at  = safe_timestamp(node.get("mergedAt"))  if node.get("mergedAt")  else None
-    closed_at  = safe_timestamp(node.get("closedAt"))  if node.get("closedAt")  else None
+    merged_at = safe_timestamp(node.get("mergedAt"))  if node.get("mergedAt")  else None
+    closed_at = safe_timestamp(node.get("closedAt"))  if node.get("closedAt")  else None
 
     body_text = node.get("bodyText") or ""
+
+    reactions = parse_reaction_groups(node.get("reactionGroups", []))
+
+    # Extract Auto-Merge
+    auto_merge = node.get("autoMergeRequest") or {}
+    am_enabled = 1 if auto_merge else 0
+    am_method = auto_merge.get("mergeMethod") or ""
+    am_author = (auto_merge.get("enabledBy") or {}).get("login") or ""
+
+    head_repo = (node.get("headRepository") or {}).get("nameWithOwner", "")
+    base_repo = (node.get("baseRepository") or {}).get("nameWithOwner", "")
 
     # Object: PullRequest
     obj = ObjectInstance(object_id=obj_id, object_type="PullRequest")
@@ -44,6 +56,14 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
             "total_changes":      node.get("additions", 0) + node.get("deletions", 0),
             "review_decision":    node.get("reviewDecision") or "",
             "author_association": node.get("authorAssociation", ""),
+            "github_node_id":     node.get("id", ""),
+            "head_sha":           node.get("headRefOid", ""),
+            "head_repo":          head_repo,
+            "is_fork_pr":         1 if   head_repo and head_repo != base_repo else 0,
+            "merged_by":          (node.get("mergedBy") or {}).get("login", ""),
+            "am_enabled":         am_enabled,
+            "am_method":          am_method,
+            "am_enabled_by":      am_author,
             "commits_count":      (node.get("commits")      or {}).get("totalCount", 0),
             "comments_count":     (node.get("comments")     or {}).get("totalCount", 0),
             "participants_count": (node.get("participants")  or {}).get("totalCount", 0),
@@ -52,6 +72,7 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
             "updated_at":         safe_timestamp(node.get("updatedAt")),
             "merged_at":          merged_at,
             "closed_at":          closed_at,
+            **reactions,
         }
     )
 

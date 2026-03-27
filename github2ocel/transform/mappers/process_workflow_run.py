@@ -1,6 +1,5 @@
-import json
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple
 
 from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.utils.activity import Activities
@@ -22,7 +21,7 @@ def process_workflow_run(
     Objects:   WorkflowRun, WorkflowJob
     Events:    WorkflowRunStarted, WorkflowRunCompleted,
                WorkflowJobStarted, WorkflowJobCompleted
-    O2O:       WorkflowRun → Repo         (run_on_repo)
+    O2O:       WorkflowRun → Repo         (contained_in)
                WorkflowRun → User         (triggered_by)
                WorkflowRun → Commit       (tests_commit)
                WorkflowRun → Branch       (ran_on_branch)    — from head_branch
@@ -38,8 +37,8 @@ def process_workflow_run(
         logger.warning(f"Skipping workflow run without ID (name: {workflow_name})")
         return None
 
-    run_id    = make_id(repo_id, "workflow", run_raw_id)
-    ts_start  = safe_timestamp(run.get("run_started_at") or run.get("created_at"))
+    run_id = make_id(repo_id, "workflow", run_raw_id)
+    ts_start = safe_timestamp(run.get("run_started_at") or run.get("created_at"))
     ts_update = safe_timestamp(run.get("updated_at"))
 
     duration_seconds = (
@@ -65,7 +64,7 @@ def process_workflow_run(
             "html_url":      run.get("html_url", ""),
         }
     )
-    run_obj.add_rel(repo_id, "run_on_repo")
+    run_obj.add_rel(repo_id, "contained_in")
 
     # O2O → User (triggering_actor takes precedence over actor)
     actor_login = (
@@ -217,7 +216,7 @@ def _process_job(
             attributes={"source": "rest_api"},
             relationships=[
                 (job_obj_id, "job_execution"),
-                (run_id,     "belongs_to_run"),
+                (run_id,     "job_of_run"),
             ]
         )
 
@@ -233,6 +232,6 @@ def _process_job(
             },
             relationships=[
                 (job_obj_id, "job_completed"),
-                (run_id,     "belongs_to_run"),
+                (run_id,     "job_of_run"),
             ]
         )

@@ -1,4 +1,3 @@
-import time
 import requests
 from typing import Dict, Any, Optional, Generator, NoReturn
 

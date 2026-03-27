@@ -191,6 +191,10 @@ query GetPullRequests(
         }
         participants(first: 0) { totalCount }
         reactions(first: 1) { totalCount }
+        reactionGroups {
+          content
+          reactors(first: 0) { totalCount }
+        }
 
         labels(first: 20) {
           nodes { id name color }
@@ -395,7 +399,14 @@ query GetIssueComments(
           createdAt
           lastEditedAt
           bodyText
-          author { login }
+          url
+          isMinimized
+          minimizedReason
+          authorAssociation
+          author {
+            login
+            __typename
+          }
           reactions(first: 1) { totalCount }
         }
       }
@@ -424,7 +435,14 @@ query GetPRComments(
           createdAt
           lastEditedAt
           bodyText
-          author { login }
+          url
+          isMinimized
+          minimizedReason
+          authorAssociation
+          author {
+            login
+            __typename
+          }
           reactions(first: 1) { totalCount }
         }
       }
@@ -485,15 +503,19 @@ query GetPRReviews(
           state          # APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING
           submittedAt
           bodyText
+          authorAssociation
           author {
             login
             __typename
             ... on User { id }
           }
 
+          # Commit on which this review was submitted (→ O2O Review → Commit)
+          commit { oid }
+
           # Inline code comments — only fetched when withReviewComments=True (STANDARD/COMPLETE)
           # diffHunk included for code review context analysis (truncated at mapper level)
-          comments(first: 25) {
+          comments(first: 50) {
             pageInfo { hasNextPage endCursor }
             totalCount
             nodes {
@@ -516,7 +538,6 @@ query GetPRReviews(
       }
     }
   }
-
   rateLimit { cost remaining resetAt }
 }
 """
@@ -540,10 +561,10 @@ query GetPRThreads(
           isResolved
           isOutdated
           resolvedBy { login }
-          # Only IDs — full comment data already in builder from PR_REVIEWS_QUERY.
-          # IDs used to stamp thread_id onto existing Comment objects.
-          # There is no exact date for “Resolved”,
-          # as it must be set to the same second as the last comment in that thread, or the second after it.
+          # resolvedAt: not in GitHub GraphQL schema as of 2025 — kept commented so the
+          # mapper picks it up automatically if GitHub exposes it in the future.
+          # When resolvedAt is present, process_review_thread sets resolution_source="resolvedAt";
+          # without it, it falls back to last_comment_ts with resolution_source="inferred".
           comments(first: 50) {
             nodes {
               id
@@ -1173,7 +1194,14 @@ query GetDiscussions(
         }
 
         reactions(first: 1) { totalCount }
+        reactionGroups {
+          content
+          reactors(first: 0) { totalCount }
+        }
 
+        # Embedded comments (first 50) — totalCount drives overflow list.
+        # Discussions with >50 comments are fully paginated in Phase 7b
+        # via DISCUSSIONS_COMMENTS_QUERY + fetch_discussion_comments.
         comments(first: 50) {
           pageInfo { hasNextPage endCursor }
           totalCount
@@ -1181,19 +1209,34 @@ query GetDiscussions(
             id
             createdAt
             updatedAt
-            body
+            lastEditedAt
             bodyText
+            url
             isAnswer
-            author { login }
+            isMinimized
+            minimizedReason
+            authorAssociation
+            author {
+              login
+              __typename
+            }
             reactions(first: 1) { totalCount }
-            replies(first: 10) {
+            replies(first: 15) {
               pageInfo { hasNextPage endCursor }
               totalCount
               nodes {
                 id
-                body
                 createdAt
-                author { login }
+                lastEditedAt
+                bodyText
+                url
+                isMinimized
+                minimizedReason
+                authorAssociation
+                author {
+                  login
+                  __typename
+                }
               }
             }
           }
@@ -1202,6 +1245,61 @@ query GetDiscussions(
     }
   }
 
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+DISCUSSIONS_COMMENTS_QUERY = """
+query GetDiscussionComments(
+  $owner:            String!
+  $repo:             String!
+  $discussionNumber: Int!
+  $cursor:           String
+  $pageSize:         Int!
+) {
+  repository(owner: $owner, name: $repo) {
+    discussion(number: $discussionNumber) {
+      number
+      comments(first: $pageSize, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          createdAt
+          updatedAt
+          lastEditedAt
+          bodyText
+          url
+          isAnswer
+          isMinimized
+          minimizedReason
+          authorAssociation
+          author {
+            login
+            __typename
+          }
+          reactions(first: 1) { totalCount }
+          replies(first: 15) {
+            pageInfo { hasNextPage endCursor }
+            totalCount
+            nodes {
+              id
+              createdAt
+              lastEditedAt
+              bodyText
+              url
+              isMinimized
+              minimizedReason
+              authorAssociation
+              author {
+                login
+                __typename
+              }
+            }
+          }
+        }
+      }
+    }
+  }
   rateLimit { cost remaining resetAt }
 }
 """

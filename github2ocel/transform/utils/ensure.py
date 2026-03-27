@@ -106,7 +106,7 @@ def ensure_commit(
         obj_type="Commit",
         raw_id=sha,
         timestamp=ts,
-        attributes={"sha": sha},
+        attributes={},
         relationships=[(repo_id, "belongs_to")]
     )
 
@@ -237,8 +237,13 @@ def ensure_comment(
         allow_update=True,  # upsert — multiple sources enrich the same object
     )
 
-def ensure_deployment(builder: OCELBuilder, repo_id: str, deployment: Dict[str, Any]) -> Optional[str]:
-    if not deployment or not deployment.get("id"):
+
+def ensure_deployment(builder, repo_id: str, deployment: Dict[str, Any]) -> Optional[str]:
+    # Key on databaseId (integer) — consistent with process_timeline which resolves
+    # DeployedEvent.deployment.databaseId via make_id(repo_id, "deployment", databaseId).
+    # The GraphQL node id is opaque and not available in timeline events.
+    raw_id = deployment.get("databaseId") or deployment.get("database_id") or deployment.get("id")
+    if not deployment or not raw_id:
         logger.warning(f"Deployment missing id, skipping. Deployment data: {deployment}")
         return None
 
@@ -248,10 +253,12 @@ def ensure_deployment(builder: OCELBuilder, repo_id: str, deployment: Dict[str, 
         builder=builder,
         repo_id=repo_id,
         obj_type="Deployment",
-        raw_id=deployment["id"],
+        raw_id=raw_id,
         timestamp=created_at,
         attributes={
             "environment": deployment.get("environment", "unknown"),
+            "state":       deployment.get("state", ""),
+            "task":        deployment.get("task", ""),
             # ref can be a dict {"name": "..."} from GraphQL or a plain string from REST
             "ref": (deployment.get("ref") or {}).get("name", "")
                    if isinstance(deployment.get("ref"), dict)
@@ -262,7 +269,6 @@ def ensure_deployment(builder: OCELBuilder, repo_id: str, deployment: Dict[str, 
         },
         relationships=[(repo_id, "deployed_to")]
     )
-
 
 def ensure_team(builder: OCELBuilder, repo_id: str, team: Dict[str, Any]) -> Optional[str]:
     if not team or not team.get("name"):
@@ -279,24 +285,6 @@ def ensure_team(builder: OCELBuilder, repo_id: str, team: Dict[str, Any]) -> Opt
         attributes={"name": team["name"]}
     )
 
-def _infer_qualifier_from_type(builder: OCELBuilder, obj_id: str) -> Optional[str]:
-    """
-    Infers the O2O qualifier from the object type.
-    Uses the builder's in-memory object_registry — no SQL needed.
-    Returns None if the object is not yet known (safe: relationship is skipped).
-    """
-    obj_type = builder.object_registry.get(obj_id)
-    if not obj_type:
-        logger.debug(f"[infer_qualifier] Object {obj_id} not in registry yet — skipping rel")
-        return None
-
-    qualifier_map = {
-        "PullRequest": "review_comment_of",
-        "Issue":       "review_comment_of",
-        "File":        "review_comment_on_file",
-        "Repository":  "belongs_to",
-    }
-    return qualifier_map.get(obj_type)
 
 def ensure_tagger(
     builder: OCELBuilder,

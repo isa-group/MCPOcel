@@ -16,8 +16,6 @@ def fetch_tags(
 
     logger.info(f"--- [Fetcher] Tags (pageSize={page_size}) ---")
 
-    counts = {"lightweight": 0, "annotated": 0}
-
     for node in paginate_nodes(
         client=client,
         query=TAGS_QUERY,
@@ -33,7 +31,6 @@ def fetch_tags(
             # Lightweight tag — points directly to a commit
             author = target.get("author") or {}
             user   = author.get("user") or {}
-            counts["lightweight"] += 1
             yield {
                 "__type":       "Tag",
                 "id":           node.get("id"),
@@ -44,9 +41,12 @@ def fetch_tags(
                     "name":  author.get("name"),
                     "email": author.get("email"),
                 },
-                "commit":       {"sha": target.get("oid")},
-                "message":      "",
-                "is_annotated": 0,
+                "commit":            {"sha": target.get("oid")},
+                "message":           "",
+                "is_annotated":      0,
+                "ci_state":          (target.get("statusCheckRollup") or {}).get("state", ""),
+                "is_signed":         1 if (target.get("signature") or {}).get("isValid") else 0,
+                "release_pr_count":  (target.get("associatedPullRequests") or {}).get("totalCount", 0),
             }
 
         elif typename == "Tag":
@@ -54,7 +54,6 @@ def fetch_tags(
             tagger = target.get("tagger") or {}
             user   = tagger.get("user") or {}
             commit = target.get("target") or {}
-            counts["annotated"] += 1
             yield {
                 "__type":       "Tag",
                 "id":           node.get("id"),
@@ -65,9 +64,13 @@ def fetch_tags(
                     "name":  tagger.get("name"),
                     "email": tagger.get("email"),
                 },
-                "commit":       {"sha": commit.get("oid")},
-                "message":      target.get("message", ""),
-                "is_annotated": 1,
+                "commit":            {"sha": commit.get("oid")},
+                "message":           target.get("message", ""),
+                "is_annotated":      1,
+                "ci_state":          (commit.get("statusCheckRollup") or {}).get("state", ""),
+                "is_signed":         0,   # annotated tags: signature lives on the Tag object,
+                                          # not exposed in this query fragment
+                "release_pr_count":  (commit.get("associatedPullRequests") or {}).get("totalCount", 0),
             }
 
         else:
@@ -76,7 +79,3 @@ def fetch_tags(
                 f"unknown target type '{typename}'"
             )
             continue
-
-    # Resumen detallado en el footer
-    summary = f"{sum(counts.values())} tags ({counts['lightweight']} light, {counts['annotated']} annotated)"
-    logger.info(f"--- [Fetcher] Tags done — {summary} ---")

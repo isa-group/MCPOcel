@@ -1,7 +1,7 @@
 from typing import Dict, Any
 from shared.ocel.builder import OCELBuilder
 from shared.ocel.model.models import ObjectInstance
-from github2ocel.transform.utils.helper import make_id
+from github2ocel.transform.utils.helper import make_id, safe_timestamp
 from github2ocel.transform.utils.ensure import ensure_file
 from shared.logger import get_logger
 
@@ -16,7 +16,7 @@ def process_commit_files(payload: Dict[str, Any], builder: OCELBuilder, repo_id:
     payload: from fetch_commit_files — { sha, files, verified, verification_reason, stats }
     Returns (links, new_files): O2O relationships added, new File objects created.
     """
-    sha   = payload.get("sha")
+    sha = payload.get("sha")
     files = payload.get("files") or []
 
     if not sha:
@@ -28,11 +28,12 @@ def process_commit_files(payload: Dict[str, Any], builder: OCELBuilder, repo_id:
         return 0, 0
 
     proxy = ObjectInstance(object_id=commit_id, object_type="Commit")
+    commit_ts = safe_timestamp(payload.get("committed_date")) or None
 
     # Enrich snapshot with REST-only fields (upserted onto existing object)
     stats = payload.get("stats") or {}
     proxy.add_snapshot(
-        time=None,   # no new timestamp — just attribute enrichment
+        time=commit_ts,
         attributes={
             "verification_reason": payload.get("verification_reason", ""),
             "diff_total":          stats.get("total", 0),
@@ -48,7 +49,7 @@ def process_commit_files(payload: Dict[str, Any], builder: OCELBuilder, repo_id:
 
         status = f.get("status", "modified")
         existed = builder.object_exists(make_id(repo_id, "file", path))
-        fid = ensure_file(builder, repo_id, path, timestamp=None)
+        fid = ensure_file(builder, repo_id, path, timestamp=commit_ts)
         if not fid:
             continue
         if not existed:
@@ -62,7 +63,7 @@ def process_commit_files(payload: Dict[str, Any], builder: OCELBuilder, repo_id:
         prev_path = f.get("previous_path")
         if status == "renamed" and prev_path:
             prev_existed = builder.object_exists(make_id(repo_id, "file", prev_path))
-            prev_fid = ensure_file(builder, repo_id, prev_path, timestamp=None)
+            prev_fid = ensure_file(builder, repo_id, prev_path, timestamp=commit_ts)
             if prev_fid:
                 if not prev_existed:
                     new_files += 1

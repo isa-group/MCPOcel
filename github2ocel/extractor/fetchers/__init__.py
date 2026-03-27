@@ -16,6 +16,7 @@ from .fetch_workflow_runs import fetch_workflow_runs
 from .fetch_releases import fetch_releases
 from .fetch_discussions import fetch_discussions
 from .fetch_commit_files import fetch_commit_files
+from .fetch_discussion_comments import fetch_discussion_comments
 
 __all__ = [
     "fetch_repo_stats",
@@ -37,5 +38,6 @@ __all__ = [
     "fetch_releases",
     "fetch_discussions",
     "fetch_commit_files",
+    "fetch_discussion_comments"
 
 ]

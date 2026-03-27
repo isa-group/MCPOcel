@@ -1,6 +1,5 @@
 import sys
 from datetime import datetime
-from pathlib import Path
 # shared
 from shared.logger import setup_logging, get_logger
 from shared.config.env import Env
