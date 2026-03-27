@@ -9,22 +9,25 @@ class Activities:
     ISSUE_LINKED = "IssueLinked"
     ISSUE_UNLINKED = "IssueUnlinked"
 
+    CROSS_REFERENCED = 'CrossReferenced'
+
     PR_OPENED = "PROpened"
     PR_MERGED = "PRMerged"
     PR_CLOSED = "PRClosed"
-    PR_REVIEW = "PRReviewSubmitted"
-    PR_COMMENT_CREATED = "PRCommentCreated"
-    PR_REVIEW_APPROVED = "PRReviewApproved"
-    PR_REVIEW_CHANGES_REQUESTED = "PRReviewChangesRequested"
-    PR_REVIEW_COMMENTED = "PRReviewCommented"
-    PR_REVIEW_DISMISSED = "PRReviewDismissed"
     PR_ASSIGNED = "PRAssigned"
     PR_UNASSIGNED = "PRUnassigned"
-    PR_REVIEW_REQUESTED = "PRReviewRequested"
-    PR_REVIEW_REQUEST_REMOVED = "PRReviewRequestRemoved"
+    PR_REOPENED = "PRReopened"
     PR_FORCE_PUSHED='PRForcePushed'
     PR_CI_STATE = "PRCIState"
-    PR_REOPENED = "PRReopened"
+    PR_CONVERT_DRAFT = "PRConvertedToDraft"
+    PR_FOR_REVIEW = "PRReadyForReview"
+
+    PR_REVIEW_APPROVED = "PRReviewApproved"
+    PR_REVIEW_COMMENTED = "PRReviewCommented"
+    PR_REVIEW_DISMISSED = "PRReviewDismissed"
+    PR_REVIEW_REQUESTED = "PRReviewRequested"
+    PR_REVIEW_CHANGES_REQUESTED = "PRReviewChangesRequested"
+    PR_REVIEW_REQUEST_REMOVED = "PRReviewRequestRemoved"
 
     # Comments
     COMMENT_CREATED = "CommentCreated"
@@ -32,16 +35,12 @@ class Activities:
 
     # Labels
     LABEL_ADDED = "LabelAdded"
+    LABEL_REMOVED = "LabelRemoved"
 
     # Dev & DevOps
     COMMIT_CREATED = "CommitCreated"
-    WORKFLOW_STARTED = "WorkflowRunStarted"
-    WORKFLOW_COMPLETED = "WorkflowRunCompleted"
     RELEASE_CREATED = "ReleaseCreated"
-
-    REVIEW_COMMENT_CREATED = "ReviewCommentCreated"
-    REVIEW_COMMENT_EDITED = "ReviewCommentEdited"
-    REVIEW_COMMENT_DELETED = "ReviewCommentDeleted"
+    RELEASE_PUBLISHED = "ReleasePublished"
 
     DEPLOYMENT_CREATED = "DeploymentCreated"
     DEPLOYMENT_SUCCEEDED = "DeploymentSucceeded"
@@ -50,17 +49,18 @@ class Activities:
 
     THREAD_RESOLVED = "ReviewThreadResolved"
 
-    MILESTONE_ASSIGNED = "MilestoneAssigned"
     MILESTONE_CREATED = "MilestoneCreated"
+    MILESTONE_ASSIGNED = "MilestoneAssigned"
     MILESTONE_CLOSED = "MilestoneClosed"
     MILESTONE_UPDATED = "MilestoneUpdated"
+    MILESTONE_REMOVED = "MilestoneRemoved"
 
     JOB_STARTED = "WorkflowJobStarted"
     JOB_COMPLETED = "WorkflowJobCompleted"
+    WORKFLOW_STARTED = "WorkflowRunStarted"
+    WORKFLOW_COMPLETED = "WorkflowRunCompleted"
 
-    CROSS_REFERENCED = 'CrossReferenced'
-
-    BRANCH_CREATED = "BranchCreated" # 
+    BRANCH_CREATED = "BranchCreated" # GitHub not provide a `createdAt` field for branches
     BRANCH_MERGED = "BranchMerged"
     BRANCH_DELETED = "BranchDeleted"
     BRANCH_RESTORED = "BranchRestored"
@@ -71,5 +71,3 @@ class Activities:
     # Discussions
     DISCUSSION_CREATED = "DiscussionCreated"
     DISCUSSION_ANSWERED = "DiscussionAnswered"
-    DISCUSSION_COMMENT_CREATED = "DiscussionCommentCreated"
-    DISCUSSION_OBSERVED = "DiscussionObserved"
