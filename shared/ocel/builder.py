@@ -88,7 +88,7 @@ class OCELBuilder:
         if isinstance(value, int): return "INTEGER"
         if isinstance(value, float): return "REAL"
         # OCEL 2.0 uses TEXT for strings and dates, and INTEGER (0/1) or TEXT for booleans.
-        if isinstance(value, bool): return "INTEGER"
+        if isinstance(value, bool): return "BOOLEAN"
         return "TEXT"
 
     def _ensure_type_table(self, type_name: str, attributes: Dict[str, Any], is_event: bool) -> str:

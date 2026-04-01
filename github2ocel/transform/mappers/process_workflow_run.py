@@ -49,7 +49,7 @@ def process_workflow_run(
     # WorkflowRun object
     run_obj = ObjectInstance(object_id=run_id, object_type="WorkflowRun")
     run_obj.add_snapshot(
-        time=ts_start,
+        time=safe_timestamp(None), # unix epoch OCEL2.0 standard
         attributes={
             "run_id":        str(run_raw_id),
             "name":          workflow_name,
@@ -187,15 +187,25 @@ def _process_job(
     start_raw = job.get("started_at")
     end_raw   = job.get("completed_at")
 
+    # Explicitly override the ‘Year 1’ setting in GitHub Actions
+    if start_raw and start_raw.startswith("0001-01-01"):
+        start_raw = None
+
+    ts_job_start = safe_timestamp(start_raw)
+    ts_job_end   = safe_timestamp(end_raw)
+
     # Queued-then-cancelled jobs have completed_at but no started_at
-    effective_start_raw = start_raw or end_raw
-    ts_job_start = safe_timestamp(effective_start_raw) or run_ts_start
-    ts_job_end   = safe_timestamp(end_raw) or run_ts_update
-    duration     = calculate_duration(start_raw, end_raw)
+    # Skip the STARTED event but still create the job object and COMPLETED event with null duration.
+    if ts_job_start and ts_job_end and ts_job_start > ts_job_end:
+        logger.debug(f"Job {job_raw_id} completed before starting (skew/cancelled). Dropping STARTED event.")
+        ts_job_start = None  #
+        duration = None
+    else:
+        duration = calculate_duration(ts_job_start, ts_job_end) if (ts_job_start and ts_job_end) else None
 
     job_obj = ObjectInstance(object_id=job_obj_id, object_type="WorkflowJob")
     job_obj.add_snapshot(
-        time=ts_job_start,
+        time=safe_timestamp(None), # unix epoch OCEL2.0 standard
         attributes={
             "name":             job.get("name") or "",
             "runner_name":      job.get("runner_name") or "",
@@ -208,7 +218,7 @@ def _process_job(
     builder.insert_object(job_obj)
 
     # Event: WorkflowJobStarted
-    if effective_start_raw:
+    if ts_job_start:
         create_event(
             builder=builder,
             event_type=Activities.JOB_STARTED,
@@ -221,7 +231,7 @@ def _process_job(
         )
 
     # Event: WorkflowJobCompleted
-    if end_raw:
+    if ts_job_end:
         create_event(
             builder=builder,
             event_type=Activities.JOB_COMPLETED,

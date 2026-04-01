@@ -54,7 +54,7 @@ def process_branch(branch: Dict[str, Any], builder: OCELBuilder, repo_id: str) -
     # Object: Branch
     branch_obj = ObjectInstance(object_id=branch_id, object_type="Branch")
     branch_obj.add_snapshot(
-        time=ts,
+        time=safe_timestamp(None), # unix epoch OCEL2.0 standard
         attributes={
             "name":                             branch_name,
             "github_node_id":                   branch.get("id", ""),

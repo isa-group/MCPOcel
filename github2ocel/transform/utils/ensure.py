@@ -34,9 +34,12 @@ def _ensure_object(
     obj_instance = ObjectInstance(object_id=object_id, object_type=obj_type)
 
     # 2. Snapshot — only on first insert, or when explicitly allowed
-    if allow_update or not builder.object_exists(object_id):
-        ts = safe_timestamp(timestamp, fallback="1970-01-01T00:00:00Z")
-        obj_instance.add_snapshot(time=ts, attributes=attributes or {})
+    if allow_update and timestamp:
+        ts = safe_timestamp(timestamp)
+    else:
+        ts = safe_timestamp(None) # Fuerza 1970
+
+    obj_instance.add_snapshot(time=ts, attributes=attributes or {})
 
     # 3. Optional O2O relationships
     if relationships:
@@ -329,3 +332,32 @@ def ensure_tagger(
         )
 
     return None
+
+def ensure_branch(builder, repo_id: str, branch_name: str, timestamp: str = None) -> Optional[str]:
+    """
+    Creates a stub for a branch if it hasn't been extracted.
+    Crucial for historic branches that were deleted but are referenced
+    in PR merges, Workflow runs, or Deployments.
+    """
+    if not branch_name:
+        return None
+
+    # Usamos make_id para garantizar el mismo determinismo
+    from github2ocel.transform.utils.helper import make_id
+    try:
+        # Usa exactamente la misma lógica de ID que process_branch
+        raw_id = branch_name.replace("refs/heads/", "") 
+        branch_id = make_id(repo_id, "branch", raw_id)
+    except ValueError:
+        return None
+
+    return _ensure_object(
+        builder=builder,
+        repo_id=repo_id,
+        obj_type="Branch",
+        raw_id=raw_id,
+        timestamp=timestamp,
+        attributes={"name": raw_id},  # Atributo mínimo
+        relationships=[(repo_id, "contained_in")],
+        allow_update=False # Si process_branch ya la extrajo, no la sobrescribimos
+    )

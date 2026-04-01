@@ -33,7 +33,7 @@ def process_commit_files(payload: Dict[str, Any], builder: OCELBuilder, repo_id:
     # Enrich snapshot with REST-only fields (upserted onto existing object)
     stats = payload.get("stats") or {}
     proxy.add_snapshot(
-        time=commit_ts,
+        time=safe_timestamp(None), # unix epoch OCEL2.0 standard
         attributes={
             "verification_reason": payload.get("verification_reason", ""),
             "diff_total":          stats.get("total", 0),

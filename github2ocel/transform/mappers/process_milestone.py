@@ -37,7 +37,7 @@ def process_milestone(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) 
     # Object: Milestone — initial snapshot at createdAt
     obj = ObjectInstance(object_id=ms_id, object_type="Milestone")
     obj.add_snapshot(
-        time=created_at,
+        time=safe_timestamp(None), # unix epoch OCEL2.0 standard
         attributes={
             "number":              node.get("number"),
             "title":               (node.get("title") or "")[:255],

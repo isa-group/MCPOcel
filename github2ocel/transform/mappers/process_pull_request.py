@@ -38,7 +38,7 @@ def process_pull_request(node: Dict[str, Any], builder: OCELBuilder, repo_id: st
     # Object: PullRequest
     obj = ObjectInstance(object_id=obj_id, object_type="PullRequest")
     obj.add_snapshot(
-        time=created_at,
+        time=safe_timestamp(None), # unix epoch OCEL2.0 standard
         attributes={
             "number":             int(number),
             "title":              (node.get("title") or "")[:255],
