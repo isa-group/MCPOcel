@@ -73,15 +73,14 @@ def validate_ocel_semantics(ocel: Dict) -> List[str]:
             if "time" not in attr:
                 errors.append(f"Object {oid}, attribute '{attr.get('name')}': Missing required 'time' field")
 
-    # Object -> Object Relationships (If they exist in the log)
-    # Note: The standard allows O2O relationships within objects or in a separate collection
-    # If you have them in a root collection “objectRelationships”:
-    for i, rel in enumerate(ocel.get("objectRelationships", [])):
-        source = rel.get("sourceId")
-        target = rel.get("targetId")
-        if source and source not in object_ids:
-            errors.append(f"Object Relationship {i}: Source '{source}' not found")
-        if target and target not in object_ids:
-            errors.append(f"Object Relationship {i}: Target '{target}' not found")
+    # Validate nested object-to-object (O2O) relationships
+        for rel in obj.get("relationships", []):
+            target_id = rel.get("objectId")
+            if not target_id:
+                errors.append(f"Object {oid} has a relationship missing 'objectId'")
+                continue
+
+            if target_id not in object_ids:
+                errors.append(f"Object {oid} references non-existent object: {target_id}")
 
     return errors

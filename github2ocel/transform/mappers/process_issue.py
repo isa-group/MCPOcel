@@ -27,7 +27,7 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
     # Object: Issue
     obj = ObjectInstance(object_id=obj_id, object_type="Issue")
     obj.add_snapshot(
-        time=created_at,
+        time=safe_timestamp(None), # unix epoch OCEL2.0 standard
         attributes={
             "number":             int(number),
             "title":              (node.get("title") or "")[:255],
@@ -97,3 +97,20 @@ def process_issue(node: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> N
     # NOTE: IssueCommentCreated events are NOT mapped here.
     # All comments are fetched and mapped in Phase 2 (fetch_issue_comments)
     # to avoid duplicate events and ensure full pagination coverage.
+
+
+def process_issue_comment(comment: Dict[str, Any], builder: OCELBuilder, repo_id: str) -> None:
+    """
+    Map a single Issue comment to a Comment object + CommentCreated event.
+    Called from Phase 2 with fully paginated comment nodes.
+    The comment dict must have "__issue_number" injected by the fetcher.
+    """
+    issue_number = comment.get("__issue_number")
+    if not issue_number:
+        return
+
+    issue_id = make_id(repo_id, "issue", issue_number)
+    if not builder.object_exists(issue_id):
+        return
+
+    map_issue_comment(comment, builder, repo_id, issue_id)

@@ -36,7 +36,7 @@ def process_discussion(
         object_type="Discussion",
     )
     discussion_obj.add_snapshot(
-        time=ts_created,
+        time=safe_timestamp(None), # unix epoch OCEL2.0 standard
         attributes={
             "number":          discussion_number,
             "title":           (discussion.get("title") or "")[:255],

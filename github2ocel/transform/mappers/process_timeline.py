@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional
 from shared.ocel.builder import OCELBuilder
 from github2ocel.transform.utils.helper import make_id, safe_timestamp, create_event
-from github2ocel.transform.utils.ensure import ensure_user, ensure_team, ensure_label
+from github2ocel.transform.utils.ensure import ensure_user, ensure_team, ensure_label, ensure_branch
 from github2ocel.transform.utils.activity import Activities
 from shared.ocel.model.models import ObjectInstance
 from shared.logger import get_logger
@@ -264,7 +264,15 @@ def _handle_merged(item, builder, repo_id, parent_id, is_pr):
     ts = safe_timestamp(item["createdAt"])
     actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
     merge_commit_oid = (item.get("commit") or {}).get("oid")
-    merge_commit_id = make_id(repo_id, "commit", merge_commit_oid) if merge_commit_oid else None
+    
+    # IMPORTANTE: Aseguramos el commit (Stub) en caso de que aún no exista (Fase 4 pendiente)
+    merge_commit_id = None
+    if merge_commit_oid:
+        merge_commit_id = make_id(repo_id, "commit", merge_commit_oid)
+        if not builder.object_exists(merge_commit_id):
+            stub_commit = ObjectInstance(object_id=merge_commit_id, object_type="Commit")
+            stub_commit.add_snapshot(time=ts, attributes={"sha": merge_commit_oid})
+            builder.insert_object(stub_commit)
 
     create_event(
         builder=builder, event_type=Activities.PR_MERGED, ts=ts,
@@ -272,21 +280,17 @@ def _handle_merged(item, builder, repo_id, parent_id, is_pr):
         relationships=[
             (parent_id,       "subject"),
             (actor_id,        "actor")        if actor_id        else None,
-            (merge_commit_id, "merge_commit") if merge_commit_id and builder.object_exists(merge_commit_id) else None,
+            (merge_commit_id, "merge_commit") if merge_commit_id else None,
         ]
     )
 
-    # BranchMerged — the head branch of the PR was merged into mergeRefName.
-    # __pr_head_ref is injected by fetch_pr_timeline from the orchestrator map.
     head_ref_name = item.get("__pr_head_ref", "")
     if head_ref_name:
-        branch_id     = make_id(repo_id, "branch", head_ref_name)
-        branch_exists = builder.object_exists(branch_id)
-
-        # Resolve target (base) branch — the branch that received the merge
+        # AQUI LA MAGIA: Aseguramos la rama, exista en GitHub o no
+        branch_id = ensure_branch(builder, repo_id, head_ref_name, timestamp=ts)
+        
         merge_ref_name  = item.get("mergeRefName", "")
-        target_branch_id = make_id(repo_id, "branch", merge_ref_name) if merge_ref_name else None
-        target_exists    = target_branch_id and builder.object_exists(target_branch_id)
+        target_branch_id = ensure_branch(builder, repo_id, merge_ref_name, timestamp=ts)
 
         create_event(
             builder=builder, event_type=Activities.BRANCH_MERGED, ts=ts,
@@ -296,14 +300,13 @@ def _handle_merged(item, builder, repo_id, parent_id, is_pr):
                 "source":       "timeline",
             },
             relationships=[
-                (parent_id,       "context"),
-                (actor_id,        "actor")          if actor_id      else None,
-                (branch_id,       "merged_branch")  if branch_exists else None,
-                (target_branch_id, "merged_into")   if target_exists else None,
-                (merge_commit_id,  "merge_commit")  if merge_commit_id and builder.object_exists(merge_commit_id) else None,
+                (parent_id,        "context"),
+                (actor_id,         "actor")         if actor_id         else None,
+                (branch_id,        "merged_branch") if branch_id        else None,
+                (target_branch_id, "merged_into")   if target_branch_id else None,
+                (merge_commit_id,  "merge_commit")  if merge_commit_id  else None,
             ]
         )
-
 
 def _handle_force_pushed(item, builder, repo_id, parent_id, is_pr):
     ts = safe_timestamp(item["createdAt"])
@@ -326,11 +329,19 @@ def _handle_deployed(item, builder, repo_id, parent_id, is_pr):
     dep = item.get("deployment") or {}
     dep_db_id = dep.get("databaseId")
 
+    dep_rel = None
     if dep_db_id:
+        # Los deployments se extraen en la Fase 6, así que creamos un stub aquí (Fase 3)
         dep_id = make_id(repo_id, "deployment", dep_db_id)
-        dep_rel = (dep_id, "deployment") if builder.object_exists(dep_id) else None
-    else:
-        dep_rel = None
+        if not builder.object_exists(dep_id):
+            stub_dep = ObjectInstance(object_id=dep_id, object_type="Deployment")
+            stub_dep.add_snapshot(
+                time=safe_timestamp(None), # unix epoch OCEL2.0 standard
+                attributes={"environment": dep.get("environment", "unknown")}
+            )
+            builder.insert_object(stub_dep)
+
+        dep_rel = (dep_id, "deployment")
 
     create_event(
         builder=builder, event_type=Activities.DEPLOYMENT_CREATED, ts=ts,
@@ -345,37 +356,51 @@ def _handle_deployed(item, builder, repo_id, parent_id, is_pr):
         ]
     )
 
-
 def _handle_cross_referenced(item, builder, repo_id, parent_id, is_pr):
     ts = safe_timestamp(item["createdAt"])
     source = item.get("source") or {}
     source_type = source.get("__typename", "")
     source_num  = source.get("number")
 
+    source_id = None
     if source_num:
-        if source_type == "PullRequest":
-            source_id = make_id(repo_id, "pr", source_num)
-        elif source_type == "Issue":
-            source_id = make_id(repo_id, "issue", source_num)
-        else:
-            source_id = None
-    else:
-        source_id = None
+        obj_type_str = "PullRequest" if source_type == "PullRequest" else "Issue"
+        potential_id = make_id(repo_id, obj_type_str.lower() if source_type == "PullRequest" else "issue", source_num)
 
-    # O2O: target ← source via "references" (mention in body/comment)
-    # Distinct from "linked_issue" (ConnectedEvent = explicit link action)
-    if source_id and builder.object_exists(source_id):
-        _add_o2o(
-            builder, parent_id, "PullRequest" if is_pr else "Issue",
-            source_id, "references"
-        )
+        # SOLO creamos la relación si el objeto ya existe (extraído en la Fase 1)
+        if builder.object_exists(potential_id):
+            source_id = potential_id
+            _add_o2o(builder, parent_id, "PullRequest" if is_pr else "Issue", source_id, "references")
 
     create_event(
         builder=builder, event_type=Activities.CROSS_REFERENCED, ts=ts,
         attributes={"source_type": source_type, "source": "timeline"},
         relationships=[
             (parent_id, "target"),
-            (source_id, "referenced_by") if source_id and builder.object_exists(source_id) else None,
+            (source_id, "referenced_by") if source_id else None,
+        ]
+    )
+
+def _handle_head_ref_deleted(item, builder, repo_id, parent_id, is_pr):
+    ts           = safe_timestamp(item["createdAt"])
+    actor_id     = _resolve_user(builder, repo_id, item.get("actor"), ts)
+    head_ref_name = item.get("headRefName", "")
+
+    # Asegurar la rama antes de borrarla
+    branch_id = ensure_branch(builder, repo_id, head_ref_name, timestamp=ts)
+
+    if branch_id:
+        proxy = ObjectInstance(object_id=branch_id, object_type="Branch")
+        proxy.add_snapshot(time=ts, attributes={"deleted_at": ts})
+        builder.insert_object(proxy)
+
+    create_event(
+        builder=builder, event_type=Activities.BRANCH_DELETED, ts=ts,
+        attributes={"branch_name": head_ref_name, "source": "timeline"},
+        relationships=[
+            (parent_id, "subject"),
+            (actor_id,  "actor")          if actor_id  else None,
+            (branch_id, "deleted_branch") if branch_id else None,
         ]
     )
 
@@ -386,29 +411,22 @@ def _handle_connected(item, builder, repo_id, parent_id, is_pr):
     subject_type = subject.get("__typename", "")
     subject_num  = subject.get("number")
 
+    linked_id = None
     if subject_num:
-        if subject_type == "Issue":
-            linked_id = make_id(repo_id, "issue", subject_num)
-        elif subject_type == "PullRequest":
-            linked_id = make_id(repo_id, "pr", subject_num)
-        else:
-            linked_id = None
-    else:
-        linked_id = None
+        obj_type_str = "PullRequest" if subject_type == "PullRequest" else "Issue"
+        potential_id = make_id(repo_id, obj_type_str.lower() if subject_type == "PullRequest" else "issue", subject_num)
 
-    # O2O: PR -> Issue (or vice versa)
-    if linked_id and builder.object_exists(linked_id):
-        _add_o2o(
-            builder, parent_id, "PullRequest" if is_pr else "Issue",
-            linked_id, "linked_issue"
-        )
+        # SOLO creamos la relación si el objeto ya existe (extraído en la Fase 1)
+        if builder.object_exists(potential_id):
+            linked_id = potential_id
+            _add_o2o(builder, parent_id, "PullRequest" if is_pr else "Issue", linked_id, "linked_issue")
 
     create_event(
         builder=builder, event_type=Activities.ISSUE_LINKED, ts=ts,
         attributes={"linked_type": subject_type, "source": "timeline"},
         relationships=[
             (parent_id, "subject"),
-            (linked_id, "linked_to") if linked_id and builder.object_exists(linked_id) else None,
+            (linked_id, "linked_to") if linked_id else None,
         ]
     )
 
@@ -439,7 +457,6 @@ def _handle_head_ref_deleted(item, builder, repo_id, parent_id, is_pr):
 
     # Enrich Branch object with a deleted_at snapshot if it exists
     if branch_exists:
-        from shared.ocel.model.models import ObjectInstance
         proxy = ObjectInstance(object_id=branch_id, object_type="Branch")
         proxy.add_snapshot(time=ts, attributes={"deleted_at": ts})
         builder.insert_object(proxy)

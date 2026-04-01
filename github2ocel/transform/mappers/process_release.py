@@ -50,7 +50,7 @@ def process_release(release: Dict[str, Any], builder: OCELBuilder, repo_id: str)
     # Object: Release
     obj = ObjectInstance(object_id=rel_id, object_type="Release")
     obj.add_snapshot(
-        time=obj_ts,
+        time=safe_timestamp(None), # unix epoch OCEL2.0 standard
         attributes={
             "github_node_id":  release_id_raw or "",
             "database_id":     release_db_id or 0,

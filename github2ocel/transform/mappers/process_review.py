@@ -57,7 +57,7 @@ def process_review(
     # Object: Review
     obj = ObjectInstance(object_id=review_id, object_type="Review")
     obj.add_snapshot(
-        time=submitted,
+        time=safe_timestamp(None), # unix epoch OCEL2.0 standard
         attributes={
             "state":          state,
             "body_length":    len(body_text),
@@ -147,11 +147,14 @@ def process_review_thread(
     first_comment = comment_nodes[0] if comment_nodes else None
     last_comment  = comment_nodes[-1] if comment_nodes else None
 
-    ts = (
-        safe_timestamp(thread.get("resolvedAt"))
-        or safe_timestamp((last_comment  or {}).get("createdAt"))
-        or safe_timestamp((first_comment or {}).get("createdAt"))
+    raw_ts = (
+        thread.get("resolvedAt")
+        or (last_comment or {}).get("createdAt")
+        or (first_comment or {}).get("createdAt")
     )
+
+    ts = safe_timestamp(raw_ts)
+
     if not ts:
         logger.warning(f"[process_review_thread] No timestamp for thread {thread.get('id')} — skipping")
         return
@@ -163,7 +166,6 @@ def process_review_thread(
 
     # Enrich each thread comment with replyTo O2O and thread-specific fields
     # No CommentCreated event — already generated from PR_REVIEWS_QUERY
-    prev_id = None
     for tc in thread_comments:
         if not tc:
             continue
@@ -176,7 +178,6 @@ def process_review_thread(
             thread_id=thread["id"],
             reply_to_id=reply_to,
         )
-        prev_id = tc.get("id")
 
     create_event(
         builder=builder,

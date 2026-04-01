@@ -48,7 +48,7 @@ def process_tag(tag_node: Dict[str, Any], builder: OCELBuilder, repo_id: str) ->
     # Object: Tag
     tag_obj = ObjectInstance(object_id=tag_id, object_type="Tag")
     tag_obj.add_snapshot(
-        time=ts,
+        time=safe_timestamp(None), # unix epoch OCEL2.0 standard
         attributes={
             "name":             tag_name,
             "github_node_id":   raw_id if tag_node.get("id") else "",

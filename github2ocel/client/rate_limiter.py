@@ -10,7 +10,7 @@ logger = get_logger(__name__)
 
 class RateLimiter:
 
-    GRAPHQL_LOW_WATER = 200  # Proactive sleep threshold
+    GRAPHQL_LOW_WATER = 100  # Proactive sleep threshold
 
     def __init__(self):
 

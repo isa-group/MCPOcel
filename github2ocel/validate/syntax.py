@@ -68,4 +68,12 @@ def validate_ocel_structure(ocel: Dict) -> List[str]:
                     if "name" not in at or "value" not in at or "time" not in at:
                         errors.append(f"objects[{i}].attributes[{j}]: Missing name, value, or time")
 
+            # Object Relationships (List of {objectId, qualifier})
+            rels = obj.get("relationships", [])
+            if not isinstance(rels, list):
+                errors.append(f"objects[{i}].relationships: Expected list")
+            else:
+                for j, rel in enumerate(rels):
+                    if "objectId" not in rel or "qualifier" not in rel:
+                        errors.append(f"objects[{i}].relationships[{j}]: Malformed relationship")
     return errors
