@@ -265,7 +265,7 @@ def _handle_merged(item, builder, repo_id, parent_id, is_pr):
     actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
     merge_commit_oid = (item.get("commit") or {}).get("oid")
     
-    # IMPORTANTE: Aseguramos el commit (Stub) en caso de que aún no exista (Fase 4 pendiente)
+    # IPORTANT: Ensure the merge commit (Stub) in case it doesn't exist yet (Phase 4 pending)
     merge_commit_id = None
     if merge_commit_oid:
         merge_commit_id = make_id(repo_id, "commit", merge_commit_oid)
@@ -286,7 +286,7 @@ def _handle_merged(item, builder, repo_id, parent_id, is_pr):
 
     head_ref_name = item.get("__pr_head_ref", "")
     if head_ref_name:
-        # AQUI LA MAGIA: Aseguramos la rama, exista en GitHub o no
+
         branch_id = ensure_branch(builder, repo_id, head_ref_name, timestamp=ts)
         
         merge_ref_name  = item.get("mergeRefName", "")
@@ -331,7 +331,7 @@ def _handle_deployed(item, builder, repo_id, parent_id, is_pr):
 
     dep_rel = None
     if dep_db_id:
-        # Los deployments se extraen en la Fase 6, así que creamos un stub aquí (Fase 3)
+        # Deployments are extracted in Phase 6, so we’ll create a stub here (Phase 3)
         dep_id = make_id(repo_id, "deployment", dep_db_id)
         if not builder.object_exists(dep_id):
             stub_dep = ObjectInstance(object_id=dep_id, object_type="Deployment")
@@ -367,7 +367,6 @@ def _handle_cross_referenced(item, builder, repo_id, parent_id, is_pr):
         obj_type_str = "PullRequest" if source_type == "PullRequest" else "Issue"
         potential_id = make_id(repo_id, obj_type_str.lower() if source_type == "PullRequest" else "issue", source_num)
 
-        # SOLO creamos la relación si el objeto ya existe (extraído en la Fase 1)
         if builder.object_exists(potential_id):
             source_id = potential_id
             _add_o2o(builder, parent_id, "PullRequest" if is_pr else "Issue", source_id, "references")
@@ -386,7 +385,6 @@ def _handle_head_ref_deleted(item, builder, repo_id, parent_id, is_pr):
     actor_id     = _resolve_user(builder, repo_id, item.get("actor"), ts)
     head_ref_name = item.get("headRefName", "")
 
-    # Asegurar la rama antes de borrarla
     branch_id = ensure_branch(builder, repo_id, head_ref_name, timestamp=ts)
 
     if branch_id:
@@ -416,7 +414,6 @@ def _handle_connected(item, builder, repo_id, parent_id, is_pr):
         obj_type_str = "PullRequest" if subject_type == "PullRequest" else "Issue"
         potential_id = make_id(repo_id, obj_type_str.lower() if subject_type == "PullRequest" else "issue", subject_num)
 
-        # SOLO creamos la relación si el objeto ya existe (extraído en la Fase 1)
         if builder.object_exists(potential_id):
             linked_id = potential_id
             _add_o2o(builder, parent_id, "PullRequest" if is_pr else "Issue", linked_id, "linked_issue")
@@ -483,7 +480,7 @@ def _handle_head_ref_restored(item, builder, repo_id, parent_id, is_pr):
     ts       = safe_timestamp(item["createdAt"])
     actor_id = _resolve_user(builder, repo_id, item.get("actor"), ts)
 
-    # We don't have headRefName here — GitHub doesn't expose it on this event.
+    # GitHub doesn't expose headRefName on this event.
     # parent_id (the PR) carries the context.
     create_event(
         builder=builder, event_type=Activities.BRANCH_RESTORED, ts=ts,
@@ -493,7 +490,6 @@ def _handle_head_ref_restored(item, builder, repo_id, parent_id, is_pr):
             (actor_id,  "actor") if actor_id else None,
         ]
     )
-
 
 # Dispatch table
 _HANDLERS = {

@@ -76,7 +76,7 @@ class Orchestrator:
         self.stats    = stats
 
         # Collected
-        self.repo_metrics: RepoStats = RepoStats() # Los contadores del repo
+        self.repo_metrics: RepoStats = RepoStats()
         self._pr_numbers:    List[int] = []
         self._issue_numbers: List[int] = []
 
