@@ -73,7 +73,7 @@ def process_release(release: Dict[str, Any], builder: OCELBuilder, repo_id: str)
     if commit_id:
         obj.add_rel(commit_id, "points_to_commit")
 
-    builder.insert_object(obj)  # una sola vez, con todas las rels ya resueltas
+    builder.insert_object(obj)
 
     # Base relationships for events — built once, reused
     base_rels = [(rel_id, "subject"), (repo_id, "context")]
