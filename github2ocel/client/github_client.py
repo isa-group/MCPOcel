@@ -2,6 +2,7 @@ import requests
 from typing import Dict, Any, Optional, Generator, NoReturn
 
 from github2ocel.config.context import RepoContext
+from shared.telemetry.session_factory import SessionFactory
 
 from .rate_limiter import RateLimiter
 from .retry import RetryStrategy
@@ -15,14 +16,19 @@ logger = get_logger(__name__)
 
 class GitHubClient:
 
-    def __init__(self, ctx: RepoContext):
+    def __init__(self, ctx: RepoContext, extractor: Optional[str] = None):
 
         self.ctx    = ctx
         self.config = ctx.api
         self.owner  = ctx.owner
         self.repo   = ctx.repo
 
-        self.session = requests.Session()
+        self.session = SessionFactory.create(
+            token     = ctx.token,
+            owner     = ctx.owner,
+            repo      = ctx.repo,
+            extractor = extractor,
+        )
         self.session.headers.update({
             "Authorization": f"Bearer {ctx.token}",
             "Accept": "application/vnd.github+json",
@@ -31,14 +37,15 @@ class GitHubClient:
 
         self.rate_limiter = RateLimiter()
         self.retry        = RetryStrategy(self.config)
+
     @classmethod
-    def from_context(cls, ctx: RepoContext) -> "GitHubClient":
+    def from_context(cls, ctx: RepoContext, extractor: Optional[str] = None) -> "GitHubClient":
         """
         Factory method — constructs a client from a RepoContext.
         Preferred over direct instantiation: allows pre-construction
         validation and is easier to mock in tests.
         """
-        return cls(ctx)
+        return cls(ctx, extractor=extractor)
 
 
     def _check_status_code(self, response: requests.Response) -> None:
