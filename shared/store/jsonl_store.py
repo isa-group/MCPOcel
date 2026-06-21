@@ -1,49 +1,68 @@
 """
-store/jsonl_store.py
---------------------
-Telemetry persistence layer: JSONL append-log + DuckDB query engine.
+shared/store/jsonl_store.py
+----------------------------
+Telemetry persistence: JSONL append-log + DuckDB query engine.
 
-Architecture (Option 1 from the design document)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-* Every ``ApiCallEvent`` is serialised as one JSON line and appended to a
-  ``.jsonl`` file.  This is the write path: O(1), no locking issues.
-* DuckDB reads the JSONL file on-demand using ``read_json_auto()``.
-  Negligible latency for the call volumes expected in a research project.
-* On restart, the store re-opens the existing file — no rebuild needed.
+Write architecture — asynchronous queue
+----------------------------------------
+The caller (InstrumentedSession) never accesses the disk directly.
+`append()` queues the event in memory and returns immediately.
+A dedicated writer thread drains the queue and writes to JSONL.
 
-Why JSONL and not Parquet?
-  Parquet is immutable: appending requires rewriting the file.  JSONL is
-  append-only and human-readable, which simplifies debugging.  DuckDB can
-  still query it with full SQL.  A periodic compaction job (Phase 2) will
-  convert accumulated JSONL to Parquet for long-term storage efficiency.
+    HTTP request
+         ↓
+    append(event)          ← O(1), non-blocking
+         ↓
+    queue.Queue()
+         ↓                 ← separate thread
+    _writer_thread
+         ↓
+    JSONL file
 
-DuckDB view strategy
-~~~~~~~~~~~~~~~~~~~~
-  DuckDB cannot infer schema from an empty JSONL file, so the typed views
-  (github_rate_limit, latest_quota, etc.) are created LAZILY on first
-  access rather than at open time.  ``_ensure_typed_views()`` is idempotent
-  and called before every query that needs the typed views.
+This ensures that the gem never impacts the latency of instrumented
+HTTP calls, even when 100k+ events are generated.
 
-DuckDB struct field access
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Pydantic serialises nested models as JSON objects; DuckDB infers them as
-  STRUCT types.  The correct access syntax is dot-notation:
-      github_rate_limit.remaining
-  NOT bracket notation, because ``limit`` is a reserved word in DuckDB SQL
-  and bracket notation (`github_rate_limit['limit']`) triggers a parser error.
-  Dot notation bypasses the reserved-word ambiguity correctly.
+Read architecture — DuckDB on-demand
+-------------------------------------
+DuckDB views are created lazily on first access following the first
+write. DuckDB reads the JSONL directly from disk — there is no
+external process or server.
+
+`run_id` in queries
+---------------------
+All views expose `run_id`, allowing filtering by run:
+
+    SELECT COUNT(*), AVG(latency_ms)
+    FROM raw_events
+    WHERE run_id = '3f1a9c'
+
+Implementation notes
+---------------------
+* `_SENTINEL` is the object that the writer thread uses to detect
+  clean closure — it is queued in `close()` and the thread terminates upon seeing it.
+* `_ensure_typed_views()` is idempotent and safe to call multiple
+  times — it resets the flag on every `append()` to re-infer the schema
+  if new fields are added.
+* Dot notation for DuckDB structs (`github_rate_limit.limit`) — the
+  bracket notation `[“limit”]` fails because `limit` is a
+  reserved word in DuckDB SQL.
 """
 
 from __future__ import annotations
 
+import queue
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import duckdb
 
 from shared.telemetry.schema import ApiCallEvent, ApiTarget, BucketQuotaSnapshot
+
+
+# Sentinel para señalizar al writer thread que debe terminar
+_SENTINEL = object()
 
 
 class TelemetryStore:
@@ -52,8 +71,8 @@ class TelemetryStore:
 
     Typical lifecycle
     -----------------
-    >>> store = TelemetryStore.open("telemetry.jsonl")
-    >>> store.append(event)                              # called by middleware
+    >>> store = TelemetryStore.open("data/telemetry.jsonl")
+    >>> store.append(event)                             # called by middleware
     >>> snap = store.quota_snapshot("github", "core")   # called by analyse loop
     >>> store.close()
     """
@@ -61,10 +80,17 @@ class TelemetryStore:
     def __init__(self, path: Path, conn: duckdb.DuckDBPyConnection) -> None:
         self._path = path
         self._conn = conn
-        self._lock = threading.Lock()
-        self._fh = path.open("a", encoding="utf-8")
         self._jsonl_path = str(path.resolve())
         self._typed_views_created = False
+
+        # Asynchronous queue — non-blocking write for the caller
+        self._queue: queue.Queue = queue.Queue()
+        self._writer = threading.Thread(
+            target = self._writer_loop,
+            name   = "telemetry-writer",
+            daemon = True,   # does not prevent the proceedings from being concluded
+        )
+        self._writer.start()
 
     # ------------------------------------------------------------------
     # Factory
@@ -72,7 +98,7 @@ class TelemetryStore:
 
     @classmethod
     def open(cls, path: str | Path) -> "TelemetryStore":
-        """Open (or create) a telemetry store at ``path``."""
+        """Abre (o crea) un store en `path`."""
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         if not p.exists():
@@ -81,44 +107,70 @@ class TelemetryStore:
         return cls(p, conn)
 
     # ------------------------------------------------------------------
-    # Write
+    # Writer thread
     # ------------------------------------------------------------------
 
-    def append(self, event: ApiCallEvent) -> None:
-        """Serialise ``event`` and append it to the JSONL file."""
-        line = event.model_dump_json(exclude_none=False) + "\n"
-        with self._lock:
-            self._fh.write(line)
-            self._fh.flush()
-        # Mark views stale so the next read picks up the new schema if needed
+    def _writer_loop(self) -> None:
+        """
+        Hilo dedicado a escritura en disco.
+        Drena la queue continuamente hasta recibir el sentinel de cierre.
+        """
+        with self._path.open("a", encoding="utf-8") as fh:
+            while True:
+                item = self._queue.get()
+                if item is _SENTINEL:
+                    fh.flush()
+                    self._queue.task_done()
+                    break
+                try:
+                    fh.write(item + "\n")
+                    fh.flush()
+                except Exception:
+                    pass  # log en P2; nunca detener el writer por un evento corrupto
+                finally:
+                    self._queue.task_done()
+
+    # ------------------------------------------------------------------
+    # Flush helper
+    # ------------------------------------------------------------------
+
+    def _flush(self) -> None:
+        """Espera a que todos los eventos encolados lleguen a disco."""
+        self._queue.join()
+        # Invalidar views para que DuckDB relea el fichero actualizado
         self._typed_views_created = False
 
     # ------------------------------------------------------------------
-    # Lazy view management
+    # Public deed — O(1), does not block
+    # ------------------------------------------------------------------
+
+    def append(self, event: ApiCallEvent) -> None:
+        """
+        Serialises `event` and queues it for asynchronous writing.
+        Returns immediately — the caller never waits for the write to disk.
+        """
+        self._queue.put(event.model_dump_json(exclude_none=False))
+        # Disable views so that the next read infers the current schema
+        self._typed_views_created = False
+
+    # ------------------------------------------------------------------
+    # Views DuckDB — creación lazy
     # ------------------------------------------------------------------
 
     def _ensure_typed_views(self) -> bool:
         """
-        Create (or refresh) DuckDB views over the JSONL file.
-
-        Returns True if views are ready to query, False if the file is still
-        empty (no events persisted yet).  Idempotent.
-
-        Struct field access uses dot notation (``github_rate_limit.remaining``)
-        rather than bracket notation because ``limit`` is a reserved word in
-        DuckDB and ``['limit']`` causes a parser error.
+        Creates the DuckDB views if the file contains data.
+        Returns True if the views are ready, False if the file is empty.
+        Idempotent.
         """
         if self._typed_views_created:
             return True
-
-        # DuckDB cannot infer schema from an empty file — skip until data arrives
         if self._path.stat().st_size == 0:
             return False
 
         jp = self._jsonl_path
 
         try:
-            # raw_events: full event stream, schema inferred from JSONL
             self._conn.execute(
                 f"CREATE OR REPLACE VIEW raw_events AS "
                 f"SELECT * FROM read_json_auto('{jp}', ignore_errors=true)"
@@ -135,6 +187,7 @@ class TelemetryStore:
                     timestamp_utc,
                     api_target,
                     consumer_id,
+                    run_id,
                     bucket_id,
                     status_code,
                     latency_ms,
@@ -165,6 +218,26 @@ class TelemetryStore:
                 GROUP BY api_target, bucket_id, consumer_id
             """)
 
+            # run_stats: cost per execution — the query that run_id enables
+            self._conn.execute("""
+                CREATE OR REPLACE VIEW run_stats AS
+                SELECT
+                    run_id,
+                    consumer_id,
+                    owner,
+                    repo,
+                    MIN(timestamp_utc)  AS started_at,
+                    MAX(timestamp_utc)  AS ended_at,
+                    COUNT(*)            AS total_calls,
+                    AVG(latency_ms)     AS avg_latency_ms,
+                    MAX(latency_ms)     AS max_latency_ms,
+                    SUM(CASE WHEN throttle_signal.was_throttled THEN 1 ELSE 0 END)
+                                        AS throttled_calls,
+                    COUNT(DISTINCT extractor) AS extractors_used
+                FROM raw_events
+                GROUP BY run_id, consumer_id, owner, repo
+            """)
+
             # recent_call_rate: calls/min per (bucket, consumer) over last 10 min
             self._conn.execute("""
                 CREATE OR REPLACE VIEW recent_call_rate AS
@@ -172,11 +245,12 @@ class TelemetryStore:
                     api_target,
                     bucket_id,
                     consumer_id,
+                    run_id,
                     COUNT(*)        AS calls_last_10min,
                     COUNT(*) / 10.0 AS calls_per_minute
                 FROM raw_events
                 WHERE TRY_CAST(timestamp_utc AS TIMESTAMPTZ) >= NOW() - INTERVAL 10 MINUTE
-                GROUP BY api_target, bucket_id, consumer_id
+                GROUP BY api_target, bucket_id, consumer_id, run_id
             """)
 
             # throttle_events: all calls that were rate-limited
@@ -187,6 +261,7 @@ class TelemetryStore:
                     api_target,
                     bucket_id,
                     consumer_id,
+                    run_id,
                     status_code,
                     throttle_signal.retry_after_seconds AS retry_after
                 FROM raw_events
@@ -206,38 +281,31 @@ class TelemetryStore:
 
     def quota_snapshot(
         self,
-        api_target: str,
-        bucket_id: str,
-        consumer_id: str | None = None,
-    ) -> BucketQuotaSnapshot | None:
-        """
-        Return the latest known quota state for (api_target, bucket_id).
-        Returns None if no data exists yet for this bucket.
-        """
+        api_target:  str,
+        bucket_id:   str,
+        consumer_id: Optional[str] = None,
+    ) -> Optional[BucketQuotaSnapshot]:
+        """Return the latest known quota state for (api_target, bucket_id, consumer_id)."""
+        self._flush()
         if not self._ensure_typed_views():
             return None
 
         try:
             if consumer_id:
                 rows = self._conn.execute(
-                    """
-                    SELECT api_target, bucket_id, consumer_id,
-                           rl_limit, rl_remaining, rl_used, rl_reset_unix, last_seen
-                    FROM latest_quota
-                    WHERE api_target = ? AND bucket_id = ? AND consumer_id = ?
-                    """,
+                    """SELECT api_target, bucket_id, consumer_id,
+                              rl_limit, rl_remaining, rl_used, rl_reset_unix, last_seen
+                       FROM latest_quota
+                       WHERE api_target = ? AND bucket_id = ? AND consumer_id = ?""",
                     [api_target, bucket_id, consumer_id],
                 ).fetchall()
             else:
                 rows = self._conn.execute(
-                    """
-                    SELECT api_target, bucket_id, consumer_id,
-                           rl_limit, rl_remaining, rl_used, rl_reset_unix, last_seen
-                    FROM latest_quota
-                    WHERE api_target = ? AND bucket_id = ?
-                    ORDER BY last_seen DESC
-                    LIMIT 1
-                    """,
+                    """SELECT api_target, bucket_id, consumer_id,
+                              rl_limit, rl_remaining, rl_used, rl_reset_unix, last_seen
+                       FROM latest_quota
+                       WHERE api_target = ? AND bucket_id = ?
+                       ORDER BY last_seen DESC LIMIT 1""",
                     [api_target, bucket_id],
                 ).fetchall()
         except Exception:
@@ -270,17 +338,14 @@ class TelemetryStore:
 
     def all_bucket_snapshots(self) -> list[BucketQuotaSnapshot]:
         """Return the latest quota state for every known bucket."""
+        self._flush()
         if not self._ensure_typed_views():
             return []
-
         try:
             rows = self._conn.execute(
-                """
-                SELECT api_target, bucket_id, consumer_id,
-                       rl_limit, rl_remaining, rl_used, rl_reset_unix, last_seen
-                FROM latest_quota
-                ORDER BY api_target, bucket_id
-                """
+                """SELECT api_target, bucket_id, consumer_id,
+                          rl_limit, rl_remaining, rl_used, rl_reset_unix, last_seen
+                   FROM latest_quota ORDER BY api_target, bucket_id"""
             ).fetchall()
         except Exception:
             return []
@@ -309,12 +374,34 @@ class TelemetryStore:
             )
         return result
 
+    def run_summary(self, run_id: str) -> Optional[dict[str, Any]]:
+        """
+        Resumen de coste de una ejecución concreta.
+
+        Responde: "¿cuántas llamadas hizo esta ejecución?
+                   ¿cuánto tardó de media? ¿cuántos throttles tuvo?"
+        """
+        self._flush()
+        if not self._ensure_typed_views():
+            return None
+        try:
+            rows = self._conn.execute(
+                "SELECT * FROM run_stats WHERE run_id = ?", [run_id]
+            ).fetchall()
+            if not rows:
+                return None
+            cols = [d[0] for d in self._conn.description]
+            return dict(zip(cols, rows[0]))
+        except Exception:
+            return None
+
     # ------------------------------------------------------------------
     # Diagnostics & raw SQL access
     # ------------------------------------------------------------------
 
     def count(self) -> int:
-        """Return total number of events persisted."""
+        """Return total number of events persisted"""
+        self._flush()
         if not self._ensure_typed_views():
             return 0
         try:
@@ -323,7 +410,8 @@ class TelemetryStore:
             return 0
 
     def tail(self, n: int = 10) -> list[dict[str, Any]]:
-        """Return the last ``n`` events as dicts (useful for debugging)."""
+        """Return the last `n` events as dicts (useful for debugging)."""
+        self._flush()
         if not self._ensure_typed_views():
             return []
         try:
@@ -336,7 +424,8 @@ class TelemetryStore:
             return []
 
     def sql(self, query: str) -> list[tuple]:
-        """Execute an arbitrary SQL query against the telemetry views."""
+        """xecute an arbitrary SQL query against the telemetry views."""
+        self._flush()
         self._ensure_typed_views()
         return self._conn.execute(query).fetchall()
 
@@ -345,9 +434,15 @@ class TelemetryStore:
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        with self._lock:
-            self._fh.close()
-        self._conn.close()
+        """Drain the queue, wait for the writer thread, and close the DuckDB connection."""
+        if not self._writer.is_alive():
+            return
+        self._queue.put(_SENTINEL)
+        self._writer.join(timeout=10)
+        try:
+            self._conn.close()
+        except Exception:
+            pass
 
     def __enter__(self) -> "TelemetryStore":
         return self

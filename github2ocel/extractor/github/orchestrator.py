@@ -57,6 +57,7 @@ from github2ocel.transform.mappers import (
     process_discussion_comment,
     process_commit_files
 )
+from shared.telemetry.session_factory import telemetry_context
 
 logger = get_logger(__name__)
 
@@ -113,7 +114,7 @@ class Orchestrator:
     # Runner
     def run(self) -> bool:
         phases = [
-            ("Setup       — Repo stats",         self._phase_stats,          True),
+            ("Setup       — Repo stats",          self._phase_stats,          True),
             ("Init        — Seed objects",        self._initialization,       True),
             ("Phase 1     — Core objects",        self._phase1_core,          True),
             ("Phase 2     — Per-node detail",     self._phase2_detail,        True),
@@ -163,43 +164,48 @@ class Orchestrator:
             return False
 
     def _phase_stats(self):
-        self.repo_metrics, repo_obj = fetch_repo_stats(self.client, self.repo_id)
+        with telemetry_context("repo_stats"):
+            self.repo_metrics, repo_obj = fetch_repo_stats(self.client, self.repo_id)
         self.builder.insert_object(repo_obj)
         remaining = self.client.rate_limiter.resources["graphql"].get("remaining")
         self._ps = compute_page_sizes(self.repo_metrics, remaining_points=remaining)
 
     # Initialization
     def _initialization(self):
-        for node in fetch_milestones(self.client, page_size=self._ps.milestones, total=self.repo_metrics.milestones):
-            process_milestone(node, self.builder, self.repo_id)
-            self.stats["milestones"] += 1
+        with telemetry_context("milestones"):
+            for node in fetch_milestones(self.client, page_size=self._ps.milestones, total=self.repo_metrics.milestones):
+                process_milestone(node, self.builder, self.repo_id)
+                self.stats["milestones"] += 1
         logger.info(f"  milestones={self.stats['milestones']}")
 
-        for node in fetch_branches(self.client): # REST
-            process_branch(node, self.builder, self.repo_id)
-            self.stats["branches"] += 1
+        with telemetry_context("branches"):
+            for node in fetch_branches(self.client): # REST
+                process_branch(node, self.builder, self.repo_id)
+                self.stats["branches"] += 1
         logger.info(f"  branches={self.stats['branches']}")
 
-        for node in fetch_tags(self.client, page_size=self._ps.tags, total=self.repo_metrics.tags):
-            process_tag(node, self.builder, self.repo_id)
-            self.stats["tags"] += 1
+        with telemetry_context("tags"):
+            for node in fetch_tags(self.client, page_size=self._ps.tags, total=self.repo_metrics.tags):
+                process_tag(node, self.builder, self.repo_id)
+                self.stats["tags"] += 1
         logger.info(f"  tags={self.stats['tags']}")
 
     # Phase 1: core objects
     def _phase1_core(self):
-        for node in fetch_issues(self.client, page_size=self._ps.issues, total=self.repo_metrics.issues):
-            process_issue(node, self.builder, self.repo_id)
-            issue_number = int(node["number"])
-            self._issue_numbers.append(issue_number)
-            self.stats["issues"] += 1
+        with telemetry_context("issues"):
+            for node in fetch_issues(self.client, page_size=self._ps.issues, total=self.repo_metrics.issues):
+                process_issue(node, self.builder, self.repo_id)
+                issue_number = int(node["number"])
+                self._issue_numbers.append(issue_number)
+                self.stats["issues"] += 1
 
-            # Populate overflow list: any issue with comments needs phase 2
-            if (node.get("comments") or {}).get("totalCount", 0) > 0:
-                self._overflow_issue_comments.append(issue_number)
+                # Populate overflow list: any issue with comments needs phase 2
+                if (node.get("comments") or {}).get("totalCount", 0) > 0:
+                    self._overflow_issue_comments.append(issue_number)
 
-            # Populate overflow list: any issue with relevant timeline events needs phase 3
-            if (node.get("timelineItems") or {}).get("totalCount", 0) > 0:
-                self._overflow_issue_timeline.append(issue_number)
+                # Populate overflow list: any issue with relevant timeline events needs phase 3
+                if (node.get("timelineItems") or {}).get("totalCount", 0) > 0:
+                    self._overflow_issue_timeline.append(issue_number)
 
         logger.info(
             f"  issues={self.stats['issues']} "
@@ -208,32 +214,33 @@ class Orchestrator:
         )
 
         real_reviews = 0
-        for node in fetch_pull_requests(self.client, page_size=self._ps.pull_requests, total=self.repo_metrics.pull_requests):
-            process_pull_request(node, self.builder, self.repo_id)
-            pr_number = int(node["number"])
-            self._pr_numbers.append(pr_number)
-            self.stats["prs"] += 1
-            real_reviews += (node.get("reviews") or {}).get("totalCount", 0)
+        with telemetry_context("pull_requests"):
+            for node in fetch_pull_requests(self.client, page_size=self._ps.pull_requests, total=self.repo_metrics.pull_requests):
+                process_pull_request(node, self.builder, self.repo_id)
+                pr_number = int(node["number"])
+                self._pr_numbers.append(pr_number)
+                self.stats["prs"] += 1
+                real_reviews += (node.get("reviews") or {}).get("totalCount", 0)
 
-            # Track head branch name for BranchMerged O2O in Phase 3 (MergedEvent handler)
-            head_ref = node.get("headRefName", "")
-            if head_ref:
-                self._pr_head_ref_map[pr_number] = head_ref
+                # Track head branch name for BranchMerged O2O in Phase 3 (MergedEvent handler)
+                head_ref = node.get("headRefName", "")
+                if head_ref:
+                    self._pr_head_ref_map[pr_number] = head_ref
 
-            # Populate overflow lists: only PRs that actually have nested data
-            # need phase 2/3 fetcher calls. Threshold is > 0 because phase 1
-            # does not embed any nodes yet (totalCount only) — when pageInfo
-            # is added to the queries, this switches to hasNextPage.
-            if (node.get("comments") or {}).get("totalCount", 0) > 0:
-                self._overflow_pr_comments.append(pr_number)
-            if (node.get("commits") or {}).get("totalCount", 0) > 0:
-                self._overflow_pr_commits.append(pr_number)
-            if (node.get("reviews") or {}).get("totalCount", 0) > 0:
-                self._overflow_pr_reviews.append(pr_number)
-            if (node.get("reviewThreads") or {}).get("totalCount", 0) > 0:
-                self._overflow_pr_threads.append(pr_number)
-            if (node.get("timelineItems") or {}).get("totalCount", 0) > 0:
-                self._overflow_pr_timeline.append(pr_number)
+                # Populate overflow lists: only PRs that actually have nested data
+                # need phase 2/3 fetcher calls. Threshold is > 0 because phase 1
+                # does not embed any nodes yet (totalCount only) — when pageInfo
+                # is added to the queries, this switches to hasNextPage.
+                if (node.get("comments") or {}).get("totalCount", 0) > 0:
+                    self._overflow_pr_comments.append(pr_number)
+                if (node.get("commits") or {}).get("totalCount", 0) > 0:
+                    self._overflow_pr_commits.append(pr_number)
+                if (node.get("reviews") or {}).get("totalCount", 0) > 0:
+                    self._overflow_pr_reviews.append(pr_number)
+                if (node.get("reviewThreads") or {}).get("totalCount", 0) > 0:
+                    self._overflow_pr_threads.append(pr_number)
+                if (node.get("timelineItems") or {}).get("totalCount", 0) > 0:
+                    self._overflow_pr_timeline.append(pr_number)
 
         logger.info(
             f"  prs={self.stats['prs']} "
@@ -284,29 +291,32 @@ class Orchestrator:
         Discussion comments are NOT here — their overflow list is populated
         in Phase 7 (after discussions are extracted), so they run in Phase 7b.
         """
-        # Issue comments — only issues with comments (overflow_issue_comments)
-        if self._overflow_issue_comments:
-            for comment in fetch_issue_comments(self.client, self._overflow_issue_comments, page_size=self._ps.issue_comments):
-                process_issue_comment(comment, self.builder, self.repo_id)
-                self.stats["issue_comments"] += 1
+        with telemetry_context("issue_comments"):
+            # Issue comments — only issues with comments (overflow_issue_comments)
+            if self._overflow_issue_comments:
+                for comment in fetch_issue_comments(self.client, self._overflow_issue_comments, page_size=self._ps.issue_comments):
+                    process_issue_comment(comment, self.builder, self.repo_id)
+                    self.stats["issue_comments"] += 1
         logger.info(
             f"  issue_comments={self.stats['issue_comments']} "
             f"(from {len(self._overflow_issue_comments)}/{self.stats['issues']} issues)"
         )
 
+
         # PR commit OIDs — only PRs with commits (overflow_pr_commits)
         # process_pr_commit_link is intentionally not called here: Commit objects
         # don't exist yet (Phase 4), so object_exists() checks would all fail.
         # The map is passed to process_commit_graphql in Phase 4 instead.
-        if self._overflow_pr_commits:
-            for link in fetch_pr_commits(self.client, self._overflow_pr_commits, page_size=self._ps.pr_commits):
-                oid = link.get("oid")
-                pr_number = link.get("__pr_number")
-                if oid and pr_number:
-                    self._commit_pr_map.setdefault(oid, [])
-                    if pr_number not in self._commit_pr_map[oid]:
-                        self._commit_pr_map[oid].append(pr_number)
-                self.stats["pr_commit_links"] += 1
+        with telemetry_context("pr_commit_links"):
+            if self._overflow_pr_commits:
+                for link in fetch_pr_commits(self.client, self._overflow_pr_commits, page_size=self._ps.pr_commits):
+                    oid = link.get("oid")
+                    pr_number = link.get("__pr_number")
+                    if oid and pr_number:
+                        self._commit_pr_map.setdefault(oid, [])
+                        if pr_number not in self._commit_pr_map[oid]:
+                            self._commit_pr_map[oid].append(pr_number)
+                    self.stats["pr_commit_links"] += 1
         logger.info(
             f"  pr_commit_links={self.stats['pr_commit_links']} "
             f"({len(self._commit_pr_map)} unique OIDs mapped, "
@@ -314,25 +324,26 @@ class Orchestrator:
         )
 
         # PR comments — only PRs with comments (overflow_pr_comments)
-        if self._overflow_pr_comments:
-            for comment in fetch_pr_comments(self.client, self._overflow_pr_comments, page_size=self._ps.pr_comments):
-                process_pr_comment(comment, self.builder, self.repo_id)
-                self.stats["pr_comments"] += 1
+        with telemetry_context("pr_comments"):
+            if self._overflow_pr_comments:
+                for comment in fetch_pr_comments(self.client, self._overflow_pr_comments, page_size=self._ps.pr_comments):
+                    process_pr_comment(comment, self.builder, self.repo_id)
+                    self.stats["pr_comments"] += 1
         logger.info(
             f"  pr_comments={self.stats['pr_comments']} "
             f"(from {len(self._overflow_pr_comments)}/{self.stats['prs']} PRs)"
         )
-
 
     # Phase 3: dependent objects
     def _phase3_dependent(self):
 
         if self._flags["withReviews"]:
             with_rc = self._flags.get("withReviewComments", False)
-            if self._overflow_pr_reviews:
-                for review in fetch_pr_reviews(self.client, self._overflow_pr_reviews, page_size=self._ps.pr_reviews):
-                    process_review(review, self.builder, self.repo_id, with_review_comments=with_rc)
-                    self.stats["reviews"] += 1
+            with telemetry_context("pr_reviews"):
+                if self._overflow_pr_reviews:
+                    for review in fetch_pr_reviews(self.client, self._overflow_pr_reviews, page_size=self._ps.pr_reviews):
+                        process_review(review, self.builder, self.repo_id, with_review_comments=with_rc)
+                        self.stats["reviews"] += 1
             logger.info(
                 f"  reviews={self.stats['reviews']} "
                 f"(from {len(self._overflow_pr_reviews)}/{self.stats['prs']} PRs)"
@@ -341,20 +352,22 @@ class Orchestrator:
             logger.info("  reviews=SKIPPED (profile)")
 
         if self._flags["withTimeline"]:
-            if self._overflow_pr_timeline:
-                for event in fetch_pr_timeline(self.client, self._overflow_pr_timeline, page_size=self._ps.pr_timeline, pr_head_ref_map=self._pr_head_ref_map):
-                    process_timeline_event(event, self.builder, self.repo_id)
-                    self.stats["timeline_events"] += 1
+            with telemetry_context("pr_timeline"):
+                if self._overflow_pr_timeline:
+                    for event in fetch_pr_timeline(self.client, self._overflow_pr_timeline, page_size=self._ps.pr_timeline, pr_head_ref_map=self._pr_head_ref_map):
+                        process_timeline_event(event, self.builder, self.repo_id)
+                        self.stats["timeline_events"] += 1
             logger.info(
                 f"  pr_timeline_events={self.stats['timeline_events']} "
                 f"(from {len(self._overflow_pr_timeline)}/{self.stats['prs']} PRs)"
             )
 
             issue_tl_before = self.stats["timeline_events"]
-            if self._overflow_issue_timeline:
-                for event in fetch_issue_timeline(self.client, self._overflow_issue_timeline, page_size=self._ps.issue_timeline):
-                    process_timeline_event(event, self.builder, self.repo_id)
-                    self.stats["timeline_events"] += 1
+            with telemetry_context("issue_timeline"):
+                if self._overflow_issue_timeline:
+                    for event in fetch_issue_timeline(self.client, self._overflow_issue_timeline, page_size=self._ps.issue_timeline):
+                        process_timeline_event(event, self.builder, self.repo_id)
+                        self.stats["timeline_events"] += 1
             logger.info(
                 f"  issue_timeline_events={self.stats['timeline_events'] - issue_tl_before} "
                 f"(from {len(self._overflow_issue_timeline)}/{self.stats['issues']} issues)"
@@ -364,10 +377,11 @@ class Orchestrator:
 
         if self._flags.get("withThreads", False):
             threads_resolved = 0
-            if self._overflow_pr_threads:
-                for thread in fetch_pr_threads(self.client, self._overflow_pr_threads):
-                    process_review_thread(thread, self.builder, self.repo_id)
-                    threads_resolved += 1
+            with telemetry_context("pr_review_threads"):
+                if self._overflow_pr_threads:
+                    for thread in fetch_pr_threads(self.client, self._overflow_pr_threads):
+                        process_review_thread(thread, self.builder, self.repo_id)
+                        threads_resolved += 1
             logger.info(
                 f"  review_threads={threads_resolved} "
                 f"(from {len(self._overflow_pr_threads)}/{self.stats['prs']} PRs)"
@@ -377,11 +391,12 @@ class Orchestrator:
 
     # Phase 4: commits
     def _phase4_commits(self):
-        for node in fetch_commits(self.client, page_size=self._ps.commits):
-            process_commit_graphql(node, self.builder, self.repo_id, self._commit_pr_map)
-            self.stats["commits"] += 1
-            if node.get("oid"):
-                self._commit_shas.append(node["oid"])
+        with telemetry_context("commits"):
+            for node in fetch_commits(self.client, page_size=self._ps.commits):
+                process_commit_graphql(node, self.builder, self.repo_id, self._commit_pr_map)
+                self.stats["commits"] += 1
+                if node.get("oid"):
+                    self._commit_shas.append(node["oid"])
         logger.info(f"  commits={self.stats['commits']} (SHAs queued for Phase 4b: {len(self._commit_shas)})")
 
         # Feature-branch commits in commit_pr_map were never processed by
@@ -401,10 +416,11 @@ class Orchestrator:
     def _phase4b_commit_files(self):
         file_links = 0
         new_files  = 0
-        for payload in fetch_commit_files(self.client, self._commit_shas, max_commits=self.client.config.max_commits_for_files):
-            links, files = process_commit_files(payload, self.builder, self.repo_id)
-            file_links += links
-            new_files  += files
+        with telemetry_context("commit_files"):
+            for payload in fetch_commit_files(self.client, self._commit_shas, max_commits=self.client.config.max_commits_for_files):
+                links, files = process_commit_files(payload, self.builder, self.repo_id)
+                file_links += links
+                new_files  += files
         self.stats["file_links"] = file_links
         self.stats["files"]      = new_files
         if file_links == 0 and new_files == 0:
@@ -414,16 +430,18 @@ class Orchestrator:
 
     # Phase 5: releases (after commits so O2O to tags/commits resolves correctly)
     def _phase5_releases(self):
-        for node in fetch_releases(self.client, page_size=self._ps.releases):
-            process_release(node, self.builder, self.repo_id)
-            self.stats["releases"] += 1
+        with telemetry_context("releases"):
+            for node in fetch_releases(self.client, page_size=self._ps.releases):
+                process_release(node, self.builder, self.repo_id)
+                self.stats["releases"] += 1
         logger.info(f"  releases={self.stats['releases']}")
 
     # Phase 6: DevOps
     def _phase6_devops(self):
-        for node in fetch_deployments(self.client, page_size=self._ps.deployments):
-            process_deployment(node, self.builder, self.repo_id)
-            self.stats["deployments"] += 1
+        with telemetry_context("deployments"):
+            for node in fetch_deployments(self.client, page_size=self._ps.deployments):
+                process_deployment(node, self.builder, self.repo_id)
+                self.stats["deployments"] += 1
         logger.info(f"  deployments={self.stats['deployments']}")
 
         # Accumulate (run_number, run_attempt) → run_id while iterating.
@@ -431,15 +449,16 @@ class Orchestrator:
         # predecessor may not exist yet when the re-run node is first processed.
         run_attempt_map: Dict[Tuple[int, int], str] = {}
 
-        for node in fetch_workflow_runs(self.client, page_size=self._ps.workflow_runs):
-            run_id = process_workflow_run(node, self.builder, self.repo_id)
-            self.stats["workflow_runs"] += 1
-            self.stats["workflow_jobs"] += len(node.get("extracted_jobs", []))
+        with telemetry_context("workflow_runs"):
+            for node in fetch_workflow_runs(self.client, page_size=self._ps.workflow_runs):
+                run_id = process_workflow_run(node, self.builder, self.repo_id)
+                self.stats["workflow_runs"] += 1
+                self.stats["workflow_jobs"] += len(node.get("extracted_jobs", []))
 
-            run_number  = int(node.get("run_number") or 0)
-            run_attempt = int(node.get("run_attempt") or 1)
-            if run_id and run_number:
-                run_attempt_map[(run_number, run_attempt)] = run_id
+                run_number  = int(node.get("run_number") or 0)
+                run_attempt = int(node.get("run_attempt") or 1)
+                if run_id and run_number:
+                    run_attempt_map[(run_number, run_attempt)] = run_id
 
         logger.info(
             f"  workflow_runs={self.stats['workflow_runs']} "
@@ -458,11 +477,12 @@ class Orchestrator:
         Discussions with more comments populate _overflow_discussion_comments,
         which Phase 7b consumes immediately after.
         """
-        for node in fetch_discussions(self.client, page_size=self._ps.discussions):
-            has_overflow = process_discussion_node(node, self.builder, self.repo_id)
-            self.stats["discussions"] += 1
-            if has_overflow:
-                self._overflow_discussion_comments.append(int(node["number"]))
+        with telemetry_context("discussions"):
+            for node in fetch_discussions(self.client, page_size=self._ps.discussions):
+                has_overflow = process_discussion_node(node, self.builder, self.repo_id)
+                self.stats["discussions"] += 1
+                if has_overflow:
+                    self._overflow_discussion_comments.append(int(node["number"]))
         logger.info(
             f"  discussions={self.stats['discussions']} "
             f"(overflow_comments={len(self._overflow_discussion_comments)})"
@@ -478,13 +498,14 @@ class Orchestrator:
         if not self._overflow_discussion_comments:
             logger.info("  discussion_comments=SKIPPED (no overflow)")
             return
-        for comment in fetch_discussion_comments(
-            self.client,
-            self._overflow_discussion_comments,
-            page_size=self._ps.issue_comments,
-        ):
-            process_discussion_comment(comment, self.builder, self.repo_id)
-            self.stats["discussion_comments"] += 1
+        with telemetry_context("discussion_comments"):
+            for comment in fetch_discussion_comments(
+                self.client,
+                self._overflow_discussion_comments,
+                page_size=self._ps.issue_comments,
+            ):
+                process_discussion_comment(comment, self.builder, self.repo_id)
+                self.stats["discussion_comments"] += 1
         logger.info(
             f"  discussion_comments={self.stats['discussion_comments']} "
             f"(from {len(self._overflow_discussion_comments)}/{self.stats['discussions']} discussions)"

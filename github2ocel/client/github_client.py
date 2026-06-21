@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 
 class GitHubClient:
 
-    def __init__(self, ctx: RepoContext, extractor: Optional[str] = None):
+    def __init__(self, ctx: RepoContext):
 
         self.ctx    = ctx
         self.config = ctx.api
@@ -27,7 +27,6 @@ class GitHubClient:
             token     = ctx.token,
             owner     = ctx.owner,
             repo      = ctx.repo,
-            extractor = extractor,
         )
         self.session.headers.update({
             "Authorization": f"Bearer {ctx.token}",
@@ -39,13 +38,13 @@ class GitHubClient:
         self.retry        = RetryStrategy(self.config)
 
     @classmethod
-    def from_context(cls, ctx: RepoContext, extractor: Optional[str] = None) -> "GitHubClient":
+    def from_context(cls, ctx: RepoContext) -> "GitHubClient":
         """
         Factory method — constructs a client from a RepoContext.
         Preferred over direct instantiation: allows pre-construction
         validation and is easier to mock in tests.
         """
-        return cls(ctx, extractor=extractor)
+        return cls(ctx)
 
 
     def _check_status_code(self, response: requests.Response) -> None:
